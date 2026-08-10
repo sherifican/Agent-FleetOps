@@ -23,8 +23,19 @@ SECRET_PATTERNS = [
     ("aws-key",            re.compile(r"AKIA[0-9A-Z]{16}")),
     ("private-key-block",  re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
 ]
+def _identity_terms():
+    """Identity terms live in a GITIGNORED file — the public scan tool must not itself
+    reveal what it redacts. Falls back to a refuse-to-run error if the file is absent,
+    because a personal-data scan with no identity list is a check that cannot fail."""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "identity_terms.txt")
+    if not os.path.isfile(p):
+        sys.stderr.write("scan_gate: _tools/identity_terms.txt missing — refusing to run a toothless scan\n")
+        sys.exit(2)
+    terms = [t.strip() for t in open(p, encoding="utf8") if t.strip() and not t.startswith("#")]
+    return re.compile("(?i)" + "|".join(re.escape(t) for t in terms))
+
 PERSONAL_PATTERNS = [
-    ("owner-identity",     re.compile(r"(?i)micah|palmerg")),
+    ("owner-identity",     _identity_terms()),
     ("email",              re.compile(r"[a-zA-Z0-9._%+-]+@(gmail|proton|outlook|yahoo)\.[a-z]{2,}")),
     ("rfc1918-ip",         re.compile(r"\b(192\.168|10\.\d{1,3}|172\.(1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b")),
     ("home-user-path",     re.compile(r"/home/(?!<user>|USER|\$)[a-z][a-z0-9]*")),
