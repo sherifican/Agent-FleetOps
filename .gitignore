@@ -3,3 +3,4 @@ __pycache__/
 .pytest_cache/
 _reports/
 _tools/identity_terms.txt
+graphify-out/
