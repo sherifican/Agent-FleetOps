@@ -83,9 +83,12 @@ def self_test():
         # MUTATION 1: planted secret
         open(os.path.join(tmp, "skills", "m1.md"), "w").write(
             'cfg = {"api_key": "abcDEF123456789xyzKLMNO"}\n')
-        # MUTATION 2: planted identity
+        # MUTATION 2: planted identity — drawn FROM the loaded terms file, never hardcoded,
+        # so the self-test stays red-capable for any user's terms (a fresh-clone run with a
+        # different terms file exposed the hardcoded version as unable to fail)
+        first_term = PERSONAL_PATTERNS[0][1].pattern.split(")", 1)[1].split("|")[0].lstrip("(")
         open(os.path.join(tmp, "skills", "m2.md"), "w").write(
-            "ask micah about it\n")
+            f"ask {first_term} about it\n")
         hits = scan(tmp)
         classes = {(h[0], h[2]) for h in hits}
         ok_red = ("skills/m1.md", "SECRET") in classes and ("skills/m2.md", "PERSONAL") in classes \
