@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# TEMPLATE ONLY — replace every <...> placeholder before use.
+# Contract: a non-empty artifact is retained on every outcome. A nonzero worker
+# exit with an artifact produces <output>.PARTIAL and is never treated as success.
+set -eu
+
+BRIEF_FILE=${1:-}
+OUTPUT_FILE=${2:-}
+MODEL='<MODEL_ID>'
+EFFORT='<EFFORT_TIER>'
+MODEL_CLI='<MODEL_CLI>'
+DISPATCH_TIMEOUT_SECONDS=${DISPATCH_TIMEOUT_SECONDS:-600}
+
+if [ -z "$BRIEF_FILE" ] || [ -z "$OUTPUT_FILE" ]; then
+  printf '%s\n' 'usage: dispatch-wrapper.sh.template <brief-file> <output-file>' >&2
+  exit 2
+fi
+if [ "$MODEL" = '<MODEL_ID>' ] || [ "$EFFORT" = '<EFFORT_TIER>' ] || [ "$MODEL_CLI" = '<MODEL_CLI>' ]; then
+  printf '%s\n' 'Replace <MODEL_ID>, <EFFORT_TIER>, and <MODEL_CLI>; this template is not runnable.' >&2
+  exit 2
+fi
+if [ ! -f "$BRIEF_FILE" ]; then
+  printf 'FAILED — brief not found: %s\n' "$BRIEF_FILE" >&2
+  exit 2
+fi
+
+mkdir -p "$(dirname "$OUTPUT_FILE")"
+LOG_FILE="${OUTPUT_FILE}.log"
+{
+  printf 'dispatch start %s\n' "$(date -u +%FT%TZ)"
+  printf '  model=%s effort=%s brief=%s output=%s\n' "$MODEL" "$EFFORT" "$BRIEF_FILE" "$OUTPUT_FILE"
+} >> "$LOG_FILE"
+
+set +e
+timeout "$DISPATCH_TIMEOUT_SECONDS" "$MODEL_CLI" \
+  --model "$MODEL" \
+  --effort "$EFFORT" \
+  --prompt-file "$BRIEF_FILE" \
+  > "$OUTPUT_FILE" 2>> "$LOG_FILE"
+worker_rc=$?
+set -e
+
+{
+  printf 'dispatch end %s\n' "$(date -u +%FT%TZ)"
+  printf '  worker_rc=%s\n' "$worker_rc"
+} >> "$LOG_FILE"
+
+if [ ! -s "$OUTPUT_FILE" ]; then
+  printf 'FAILED — empty output (rc=%s). Inspect %s.\n' "$worker_rc" "$LOG_FILE" >&2
+  exit 1
+fi
+
+if [ "$worker_rc" -ne 0 ]; then
+  printf '{"partial":true,"worker_rc":%s,"timestamp":"%s"}\n' \
+    "$worker_rc" "$(date -u +%FT%TZ)" > "${OUTPUT_FILE}.PARTIAL"
+  printf 'PARTIAL — exists but UNVERIFIED: %s (rc=%s)\n' "$OUTPUT_FILE" "$worker_rc" >&2
+  exit 2
+fi
+
+rm -f "${OUTPUT_FILE}.PARTIAL"
+printf 'artifact captured: %s\n' "$OUTPUT_FILE"

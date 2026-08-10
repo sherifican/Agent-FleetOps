@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# TEMPLATE ONLY — replace every <...> placeholder before use.
+# The clean environment prevents caller-session tuning from changing a child dispatch.
+set -eu
+
+MODEL_CLI='<MODEL_CLI>'
+MODEL='<MODEL_ID>'
+EFFORT='<EFFORT_TIER>'
+LOG_FILE=${LOG_FILE:-dispatch.log}
+
+if [ "$MODEL_CLI" = '<MODEL_CLI>' ] || [ "$MODEL" = '<MODEL_ID>' ] || [ "$EFFORT" = '<EFFORT_TIER>' ]; then
+  printf '%s\n' 'Replace <MODEL_CLI>, <MODEL_ID>, and <EFFORT_TIER>; this template is not runnable.' >&2
+  exit 2
+fi
+
+{
+  printf 'dispatch start %s\n' "$(date -u +%FT%TZ)"
+  printf '  effective_model=%s effective_effort=%s\n' "$MODEL" "$EFFORT"
+} >> "$LOG_FILE"
+
+# env -i removes ambient model, effort, endpoint, and account-tuning variables.
+# Add only the minimal variables that the chosen CLI requires.
+env -i \
+  PATH="$PATH" \
+  HOME="${HOME:-}" \
+  TERM="${TERM:-dumb}" \
+  "$MODEL_CLI" --model "$MODEL" --effort "$EFFORT" "$@"

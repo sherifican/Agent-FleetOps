@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# TEMPLATE ONLY — replace every <...> placeholder before use.
+# Runs a model CLI in a narrow bubblewrap view: a read-only host system plus
+# one host-writable workspace. Network remains shared when the CLI needs it.
+set -eu
+
+MODEL_CLI='<MODEL_CLI>'
+WORKSPACE='<WORKSPACE>'
+SANDBOX_HOME='/sandbox-home'
+
+if [ "$MODEL_CLI" = '<MODEL_CLI>' ] || [ "$WORKSPACE" = '<WORKSPACE>' ]; then
+  printf '%s\n' 'Replace <MODEL_CLI> and <WORKSPACE>; this template is not runnable.' >&2
+  exit 2
+fi
+
+case "$WORKSPACE" in
+  /*) ;;
+  *) printf '%s\n' 'WORKSPACE must be an absolute path.' >&2; exit 2 ;;
+esac
+
+exec bwrap \
+  --ro-bind / / \
+  --dev /dev \
+  --proc /proc \
+  --tmpfs /tmp \
+  --tmpfs "$SANDBOX_HOME" \
+  --bind "$WORKSPACE" "$WORKSPACE" \
+  --chdir "$WORKSPACE" \
+  --setenv HOME "$SANDBOX_HOME" \
+  --share-net \
+  --die-with-parent \
+  -- "$MODEL_CLI" "$@"
+
+# --ro-bind / /: exposes system binaries, libraries, and configuration read-only.
+# --dev /dev: supplies a minimal device filesystem required by ordinary CLIs.
+# --proc /proc: supplies process information without binding a host directory.
+# --tmpfs /tmp: gives the child disposable temporary storage.
+# --tmpfs "$SANDBOX_HOME": gives the child an empty, non-host home directory.
+# --bind "$WORKSPACE" "$WORKSPACE": the sole host-writable bind; restrict this deliberately.
+# --chdir "$WORKSPACE": makes relative paths resolve inside the writable workspace.
+# --setenv HOME ...: prevents the child from using the caller's home configuration.
+# --share-net: preserves network access; remove only when the task permits offline execution.
+# --die-with-parent: terminates the child if the dispatching process exits.
