@@ -1,4 +1,4 @@
-name: fleet-tui tests
+name: fleet-ops checks
 on:
   push: { branches: [main] }
   pull_request: { branches: [main] }
@@ -16,3 +16,8 @@ jobs:
       - name: Run the hermetic suite
         working-directory: tui
         run: python -m pytest -q
+      - name: Guard layer — teeth-prover, contract agreement, unit gates
+        run: |
+          python3 guard/teeth_prover.py
+          python3 guard/contract_agreement.py
+          python -m pytest guard/tests/ -q

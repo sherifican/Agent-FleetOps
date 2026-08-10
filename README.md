@@ -22,7 +22,9 @@ another machine). The commit history tells that story.
 | `skills/` | Generalized agent-discipline procedures: evaluation integrity, blocked-page retrieval, dependency sequencing, actionability triage, brainstorm panels, curation auditing, file organization. Each encodes failure stories from real operation. |
 | `_tools/` | The export pipeline's own gates — provenance wall-checker and secrets/personal-data scanner, both mutation-proven (`--self-test`). |
 
-Coming in later batches: the guard-harness core (mutation-proven invariants), the multi-agent
+| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 165 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus. `2 = UNMEASURED` dominates `1 = violation` throughout. |
+
+Coming in later batches: the multi-agent
 driver-lock protocol spec, dispatch-harness templates, and the curation-loop architecture.
 
 ## Provenance & sanitization
