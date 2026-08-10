@@ -21,3 +21,18 @@ jobs:
           python3 guard/teeth_prover.py
           python3 guard/contract_agreement.py
           python -m pytest guard/tests/ -q
+
+  ref-gate:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 is load-bearing — the ref gate scans FULL reachable history.
+      # At the default depth of 1 it would scan one commit and report "clean", which is
+      # the check-that-cannot-fail failure mode this repo exists to argue against.
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Ref gate — mutation proof, then the real scan
+        run: |
+          python3 _tools/ref_gate.py --self-test
+          python3 _tools/ref_gate.py .
