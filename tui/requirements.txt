@@ -1,0 +1,5 @@
+textual>=0.60
+pyte>=0.8
+textual-serve>=1.1
+pytest>=8
+pytest-asyncio>=1

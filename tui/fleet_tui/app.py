@@ -9,7 +9,6 @@ from textual.containers import Vertical, VerticalScroll, Horizontal
 from textual.command import Provider, Hit, Hits, DiscoveryHit
 from textual import work
 from rich.markup import escape
-from textual_plotext import PlotextPlot
 from fleet_tui.sources import jobs, inbox, health, focus, modelstate, joboutput, failures, dispatch, cosmetics, targets, ratings, network, ops, cloud_legs, posture, passback, curation, actions, inflight, research_playlists, codex_link
 from fleet_tui.widgets import format as fmt
 from fleet_tui.widgets import anim
