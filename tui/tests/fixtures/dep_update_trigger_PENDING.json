@@ -1,0 +1,18 @@
+{
+  "pending": true,
+  "iso": "2026-07-02T01:41:20",
+  "updates": [
+    {
+      "name": "browser-use",
+      "local": "0.12.1",
+      "latest": "0.13.3",
+      "crit": "browser stack"
+    },
+    {
+      "name": "Hermes harness",
+      "local": "2026.6.19",
+      "latest": "2026.7.1",
+      "crit": "agent harness"
+    }
+  ]
+}

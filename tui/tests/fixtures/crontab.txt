@@ -1,0 +1,6 @@
+0 */6 * * * /usr/bin/python3 ~/fleet_monitor.py 1 > ~/pc-passback/FLEET_HEALTH_latest.txt 2>&1
+*/5 * * * * /usr/bin/python3 ~/ollama_watchdog.py
+15 4 * * * PATH=~/.local/bin:~/.bun/bin:/usr/bin:/bin ~/.local/bin/o2b brain dream >> ~/.hermes/o2b-dream.log 2>&1
+30 4 * * 0 PATH=~/.local/bin:~/.bun/bin:/usr/bin:/bin ~/.local/bin/o2b brain hygiene scan --vault ~/SecondBrain >> ~/.hermes/o2b-hygiene.log 2>&1
+41 9 3 * * ~/.local/bin/localllm-monthly-sweep.sh
+0 */4 * * * PATH=~/.local/bin:~/.kimi-code/bin:/usr/bin:/bin ~/fleet_optests/hf_watch_pass.sh >> ~/.claude/curation/hf_watch_cron.log 2>&1

@@ -1,0 +1,24 @@
+{
+  "pending": false,
+  "iso": "2026-07-02T01:41:20",
+  "updates": [
+    {
+      "name": "browser-use",
+      "local": "?",
+      "latest": "0.13.3",
+      "crit": "browser stack (local-probe best-effort)"
+    },
+    {
+      "name": "Hermes harness",
+      "local": "2026.6.19",
+      "latest": "2026.7.1",
+      "crit": "CRITICAL \u2014 the agent framework (track the date-version, not the 0.x semver)"
+    },
+    {
+      "name": "syncthing",
+      "local": "1.29.5",
+      "latest": "2.1.1",
+      "crit": "MED \u2014 Tier-2 brain sync (user service); network-facing, security/CVE fixes matter most"
+    }
+  ]
+}

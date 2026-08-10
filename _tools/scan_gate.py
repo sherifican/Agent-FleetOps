@@ -43,9 +43,27 @@ PERSONAL_PATTERNS = [
 # RFC5737 documentation ranges are the sanctioned replacements — never flagged
 DOC_IP = re.compile(r"\b(192\.0\.2|198\.51\.100|203\.0\.113)\.\d{1,3}\b")
 
+def _allowlist(staging: str):
+    """Explicit, reviewable exceptions: _tools/scan_allow.tsv lines of
+    'path-substring<TAB>pattern-name' — a hit matching both is deliberate (e.g. the owner's
+    public GitHub handle in the root README). Every entry is a human decision on record."""
+    p = os.path.join(staging, "_tools", "scan_allow.tsv")
+    if not os.path.isfile(p):
+        return []
+    out = []
+    for ln in open(p, encoding="utf8"):
+        ln = ln.rstrip("\n")
+        if not ln or ln.startswith("#"):
+            continue
+        parts = ln.split("\t")
+        if len(parts) == 2:
+            out.append((parts[0], parts[1]))
+    return out
+
 def scan(staging: str):
+    allow = _allowlist(staging)
     hits = []
-    skip_dirs = {".git", "_reports", "_tools"}
+    skip_dirs = {".git", "_reports", "_tools", "__pycache__", ".pytest_cache", ".venv", "node_modules"}
     for root, dirs, files in os.walk(staging):
         dirs[:] = [d for d in dirs if d not in skip_dirs]
         for f in files:
@@ -61,6 +79,8 @@ def scan(staging: str):
                         hits.append((rel, i, "SECRET", name))
                 for name, pat in PERSONAL_PATTERNS:
                     if pat.search(probe):
+                        if any(sub in rel and pname == name for sub, pname in allow):
+                            continue
                         hits.append((rel, i, "PERSONAL", name))
     return hits
 

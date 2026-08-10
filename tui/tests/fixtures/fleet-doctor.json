@@ -1,0 +1,71 @@
+{
+  "generated": "2026-07-02T16:15:57",
+  "capabilities": [
+    {
+      "capability": "local-inference (ollama)",
+      "kind": "CRITICAL",
+      "available": true,
+      "detail": "up (:11434, 14 models pulled)"
+    },
+    {
+      "capability": "loaded models",
+      "kind": "info",
+      "available": true,
+      "detail": "1 loaded: gemma4:12b"
+    },
+    {
+      "capability": "harness (hermes)",
+      "kind": "CRITICAL",
+      "available": true,
+      "detail": "Hermes Agent v0.17.0 (2026.6.19) \u00b7 upstream a9b55989 \u00b7 local 8ab7246c (+1 carried commit)"
+    },
+    {
+      "capability": "web-research (grok)",
+      "kind": "leg",
+      "available": true,
+      "detail": "grok-research CLI present (auth=subscription)"
+    },
+    {
+      "capability": "cloud-driver (codex)",
+      "kind": "leg",
+      "available": true,
+      "detail": "codex-fleet + codex-driver present (auth=subscription; auth.json hands-off)"
+    },
+    {
+      "capability": "video-pipeline (yt-dlp)",
+      "kind": "research",
+      "available": true,
+      "detail": "yt-dlp 2026.06.09"
+    },
+    {
+      "capability": "browser (chrome/browser-use)",
+      "kind": "research",
+      "available": true,
+      "detail": "chrome + browser_agent.py present"
+    },
+    {
+      "capability": "web-search (Hermes)",
+      "kind": "backend",
+      "available": true,
+      "detail": "ddgs (DuckDuckGo, keyless) \u2014 importable"
+    },
+    {
+      "capability": "tool-caller (GLM :8090)",
+      "kind": "on-demand",
+      "available": null,
+      "detail": "not live (:8090; on-demand via glm-local)"
+    },
+    {
+      "capability": "vision (gemma :8336)",
+      "kind": "on-demand",
+      "available": true,
+      "detail": "up (:8336 gemma4 vision)"
+    },
+    {
+      "capability": "tier-2 brain (o2b MCP)",
+      "kind": "memory",
+      "available": true,
+      "detail": "open-second-brain plugin present (Tier-2 brain, Bun/TS MCP)"
+    }
+  ]
+}

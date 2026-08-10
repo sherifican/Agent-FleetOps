@@ -50,7 +50,7 @@ def provenance(staging: str):
     return m
 
 def staged_files(staging: str):
-    skip_dirs = {".git", "_reports", "_tools"}
+    skip_dirs = {".git", "_reports", "_tools", "__pycache__", ".pytest_cache", ".venv", "node_modules"}
     for root, dirs, files in os.walk(staging):
         dirs[:] = [d for d in dirs if d not in skip_dirs]
         for f in files:

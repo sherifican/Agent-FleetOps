@@ -1,0 +1,14 @@
+{
+  "ts": 1783024756.6744437,
+  "iso": "2026-07-02T13:39:16",
+  "pending": false,
+  "reasons": [
+    "+464 transcript lines"
+  ],
+  "signal": {
+    "new_lines": 464,
+    "new_mem": false,
+    "harvest_grew": false
+  },
+  "pass_n": 30
+}
