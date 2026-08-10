@@ -40,7 +40,6 @@ another machine). The commit history tells that story.
 | `tui/` | **fleet-tui** — a Textual terminal monitor for a local/cloud model fleet. 22 headless source modules behind a 353-test hermetic suite; strict one-way pipeline (pure readers → pure formatters → app), frozen dataclass contracts, safe-default degradation. CI runs the full suite on every push. |
 | `skills/` | Generalized agent-discipline procedures: evaluation integrity, blocked-page retrieval, dependency sequencing, actionability triage, brainstorm panels, curation auditing, file organization. Each encodes failure stories from real operation. |
 | `_tools/` | The export pipeline's own gates — provenance wall-checker and secrets/personal-data scanner, both mutation-proven (`--self-test`). |
-
 | `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 165 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus. `2 = UNMEASURED` dominates `1 = violation` throughout. |
 
 Coming in later batches: the multi-agent

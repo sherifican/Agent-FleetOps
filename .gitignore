@@ -1,2 +1,5 @@
-_tools/identity_terms.txt
+*.pyc
+__pycache__/
+.pytest_cache/
 _reports/
+_tools/identity_terms.txt
