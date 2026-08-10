@@ -42,8 +42,40 @@ another machine). The commit history tells that story.
 | `_tools/` | The export pipeline's own gates — provenance wall-checker, secrets/personal-data scanner, and a **ref gate**, all mutation-proven (`--self-test`). The first two ask "is this tree safe to publish?"; the third asks the question they structurally cannot: **"what would a push actually publish?"** A history rewrite is only true of the branch you rewrote — this repo's own rewrite left a clean `main` beside two leftover refs still carrying the trailers and build artifacts the rewrite removed, one `push --all` away from being republished. Content gates scan a worktree; pushes carry refs. |
 | `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 165 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus. `2 = UNMEASURED` dominates `1 = violation` throughout. |
 
-Coming in later batches: the multi-agent
-driver-lock protocol spec, dispatch-harness templates, and the curation-loop architecture.
+| `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, and the verified-system-map pattern. |
+| `bench/` | **The throughput operating log** — 30 measurements over 14 local models, with sample sizes attached. See below. |
+
+## Measured on the box
+
+Numbers from the hardware this was built on — **2× RTX 5060 Ti**, across ollama, llama.cpp and
+llama-server. Published with sample sizes attached rather than as a benchmark, because **7 of the 14
+models were measured once and nothing exceeds four runs**. `bench/local_model_throughput.csv` carries
+an `n_runs_for_model` column so that limit travels with every row instead of living in a caption.
+These will be replaced as the sample deepens.
+
+**Peak decode per model** — weights, quantisation, architecture and run count sit under each name:
+
+![Peak throughput per model](bench/01_peak_throughput.png)
+
+**Before / after.** Six A/B pairs measured on the same box, same task. The finding that changed how
+this fleet routes work: swapping the audit lane from a 30.7B dense model to a 25.2B MoE averaged
+**+348%** across three tasks *at quality parity* — the smaller model also found **more** seeded bugs
+(5/5 vs 4/5, 18/18 vs 16/18). Speculative decoding on the same model averaged **+13%**. Routing beats
+flag-tuning here, and the gap is an order of magnitude.
+
+The two red rows stay red: a claimed MoE-offload speed-up **did not reproduce** at either offload
+level. A record that only keeps its wins is not a record.
+
+![Before and after](bench/02_before_after.png)
+
+**Weights vs VRAM actually occupied.** Runtime footprint does not scale with weight size —
+`deepseek-r1:14b` occupies **1.89×** its 9 GB of weights once loaded, while `qwen3.6:35b-a3b`
+occupies **1.09×** its 23 GB. Sizing VRAM from model size alone goes badly wrong on the small model.
+
+![Weights vs VRAM](bench/03_weights_vs_vram.png)
+
+`bench/make_charts.py` regenerates all three from the CSV, and **fails closed** if the two disagree:
+exit 1 on divergence, exit 2 when the CSV is absent — unverifiable is not the same as clean.
 
 ## The guard ladder
 
