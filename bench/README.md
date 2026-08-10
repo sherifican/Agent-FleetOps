@@ -4,8 +4,25 @@
 with its sample sizes attached so you can see exactly how much weight it carries. Read the limits
 section before quoting any number here.
 
-Hardware: one workstation, **2× RTX 5060 Ti** (Blackwell, sm_120), Ryzen 5800XT, Ubuntu.
-Serving stacks: **ollama**, **llama.cpp**, **llama-server**.
+## The hardware
+
+| | |
+|---|---|
+| **GPU** | 2 × NVIDIA RTX 5060 Ti, **16 GB GDDR7 each (32 GB total)** · Blackwell, compute capability **12.0 (sm_120)** · driver 595.71.05, CUDA 13.2 |
+| **CPU** | AMD Ryzen 7 5800XT — 8 cores / 16 threads, boost ~4.97 GHz |
+| **RAM** | 32 GB (30 GB usable) + 8 GB swap |
+| **Storage** | 2 TB internal NVMe (BIWIN NV7400), ~700 GB of it models and working state; 1 TB USB-attached NVMe SSD for backups |
+| **OS** | Ubuntu 26.04 LTS, kernel 7.0 |
+| **Serving stacks** | ollama · llama.cpp · llama-server |
+
+Every figure below was produced on that machine. Nothing here is a vendor number or a projection.
+
+**Minimum to reproduce.** VRAM is the binding constraint and it behaves as a cliff, not a slope —
+a model fits or it does not. **One 16 GB card** reaches the `gemma4:26b-a4b-it-qat` tier (15 GB of
+weights, 100 tok/s measured), which covers most of the useful lanes including code audit. **The
+second card buys the 30–35B tier** — qwen3.6:35b-a3b is 23 GB of weights and occupies 25.1 GB
+loaded, so it spans both cards. Budget for runtime overhead separately: it does not scale with
+weight size (see the weights-vs-VRAM table — one 9 GB model occupies 17 GB loaded).
 
 ## The limits, stated first
 

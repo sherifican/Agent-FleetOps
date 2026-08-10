@@ -47,11 +47,38 @@ another machine). The commit history tells that story.
 
 ## Measured on the box
 
-Numbers from the hardware this was built on — **2× RTX 5060 Ti**, across ollama, llama.cpp and
-llama-server. Published with sample sizes attached rather than as a benchmark, because **7 of the 14
-models were measured once and nothing exceeds four runs**. `bench/local_model_throughput.csv` carries
-an `n_runs_for_model` column so that limit travels with every row instead of living in a caption.
+Numbers from the hardware this was built on, across ollama, llama.cpp and llama-server. Published
+with sample sizes attached rather than as a benchmark, because **7 of the 14 models were measured
+once and nothing exceeds four runs**. `bench/local_model_throughput.csv` carries an
+`n_runs_for_model` column so that limit travels with every row instead of living in a caption.
 These will be replaced as the sample deepens.
+
+### The box
+
+| | |
+|---|---|
+| **GPU** | 2 × NVIDIA RTX 5060 Ti, **16 GB GDDR7 each (32 GB total)** · Blackwell, compute capability **12.0 (sm_120)** · driver 595.71.05, CUDA 13.2 |
+| **CPU** | AMD Ryzen 7 5800XT — 8 cores / 16 threads, boost ~4.97 GHz |
+| **RAM** | 32 GB (30 GB usable) + 8 GB swap |
+| **Storage** | 2 TB internal NVMe (BIWIN NV7400) for models and working state; 1 TB USB-attached NVMe SSD for backups |
+| **OS** | Ubuntu 26.04 LTS, kernel 7.0 |
+
+**What you'd actually need to reproduce this.** The tier that matters is VRAM, and it is a cliff
+rather than a slope — a model either fits or it doesn't:
+
+- **One 16 GB card** covers everything up to the `gemma4:26b-a4b-it-qat` tier (15 GB of weights,
+  **100 tok/s** measured, and the model this fleet audits code with). LFM2.5-8B (5.2 GB),
+  Ornith-9B (5.6 GB), gemma4:12b (7.6 GB) and deepseek-r1:14b (9.0 GB) all fit comfortably, with
+  room left for KV cache. **This is the honest minimum** — most of the useful lanes live here.
+- **The second card buys the 30–35B tier.** qwen3.6:35b-a3b is 23 GB of weights and occupies
+  **25.1 GB** once loaded, so it spans both cards; Ornith-35B and qwen3-coder:30b are the same
+  story. Those are the 108–200 tok/s rows.
+- **Budget for runtime overhead, not just weights** — it does not scale with model size. See the
+  third chart: one 9 GB model occupies 17 GB loaded.
+- **CPU is not the bottleneck** for GPU-resident inference; it matters for loading and for the
+  orchestration around the models. System RAM matters more than core count — 32 GB is adequate but
+  not generous once several services and a browser are running alongside.
+- Model weights are large. Roughly **700 GB** of models and working state on the internal NVMe here.
 
 **Peak decode per model** — weights, quantisation, architecture and run count sit under each name:
 
