@@ -10,7 +10,7 @@ section before quoting any number here.
 |---|---|
 | **GPU** | 2 × NVIDIA RTX 5060 Ti, **16 GB GDDR7 each (32 GB total)** · Blackwell, compute capability **12.0 (sm_120)** · driver 595.71.05, CUDA 13.2 |
 | **CPU** | AMD Ryzen 7 5800XT — 8 cores / 16 threads, boost ~4.97 GHz |
-| **RAM** | 32 GB (30 GB usable) + 8 GB swap |
+| **RAM** | 32 GB DDR4 (30 GB usable) + 8 GB swap — 4 × 8 GB running at **2933 MT/s**. Deliberately mismatched: 3 × DDR4-3200 CL16 single-rank + 1 × DDR4-3000 CL15 dual-rank, so the controller settles below both kits' ratings. See the note below. |
 | **Storage** | 2 TB internal NVMe (BIWIN NV7400), ~700 GB of it models and working state; 1 TB USB-attached NVMe SSD for backups |
 | **OS** | Ubuntu 26.04 LTS, kernel 7.0 |
 | **Serving stacks** | ollama · llama.cpp · llama-server |
@@ -23,6 +23,16 @@ weights, 100 tok/s measured), which covers most of the useful lanes including co
 second card buys the 30–35B tier** — qwen3.6:35b-a3b is 23 GB of weights and occupies 25.1 GB
 loaded, so it spans both cards. Budget for runtime overhead separately: it does not scale with
 weight size (see the weights-vs-VRAM table — one 9 GB model occupies 17 GB loaded).
+
+**A note on the RAM, since it is a real-world configuration rather than a clean one.** The four DIMMs
+are a 3:1 kit mismatch *and* a rank mismatch — three sticks from a DDR4-3200 CL16 single-rank kit plus
+one DDR4-3000 CL15 dual-rank stick — so all four negotiate down to **2933 MT/s**, under both kits'
+rated speeds. Four DIMMs are also harder on a Ryzen memory controller than two, and mixing ranks
+harder still. **It was left this way on purpose:** for GPU-resident inference the model weights and KV
+cache live in VRAM, so system DRAM speed affects model *load* time and CPU-side orchestration, not
+decode throughput. None of the tokens-per-second figures on this page would move meaningfully on a
+matched 3200 kit. If you are building for this workload, **spend the budget on VRAM before RAM
+speed.**
 
 ## The limits, stated first
 
