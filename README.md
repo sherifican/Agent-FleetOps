@@ -44,6 +44,23 @@ another machine). The commit history tells that story.
 | `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, and the verified-system-map pattern. |
 | `bench/` | **The two-box throughput operating log** — 47 measurements over 20 model tags, with sample sizes and device labels attached. See below. |
 
+### fleet-tui, running
+
+![fleet-tui monitoring a two-box fleet](docs/fleet_tui_screenshot.png)
+
+A live two-box fleet in one screen. Left column is the local box: health, the model kanban
+(in-flight / loaded / idle), lane governance, and artifact receipts. Right column is the second box
+reached over the LAN — its own GPU/thermal/memory readings, its scheduled jobs beside the local ones,
+posture alerts, inbox, and what was downloaded onto which box.
+
+Worth noticing, because it is what the tool is *for*: the second box's dGPU is at **96% / 68°C / 299 W**
+serving a 17 GB model at **60.4 tok/s** while its iGPU sits at 0% / 46°C — two devices, one box, wildly
+different states, both visible at a glance. Three cloud legs are in flight next to two resident local
+models. An automation failure is surfaced in the inbox rather than buried in a log, and the upstream
+panel shows exactly which dependencies are behind.
+
+*Hostnames, LAN addresses and box nicknames are redacted; every reading is real.*
+
 ## Set it up with your own AI
 
 Clone this repository, then point your orchestrator at `adopt/README.md`. The agent will inventory the host, propose a local configuration from those observations, show a human the plan and diffs before any service, cron entry, or shell hook, and run the available verification steps. The adoption path degrades to a single box with no GPU or cloud CLI; absent capabilities are recorded rather than guessed. The `adopt/` documents are written for an agent with shell access.
