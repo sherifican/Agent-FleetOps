@@ -1,9 +1,5 @@
 # Agent-FleetOps
 
->**hi quick update, so this was originally a private repo, or at least i thought it was. I've been using it as a backup for my operations with the intent to publish it, I just hadn't realized that it already got published. Anyway I'll keep up with it since I saw that there are some people who cloned it, I'll push more regular updates as I improve things and generalize more of my setup/processes so I can upload them safely.**
----
->Next up is an update for the TUI, because the current state of the TUI currently exists in the repo compared to the updates i've made to it locally make a big difference. includes multi-box (up to 3) support, iGPU & eGPU reading/support, general stability and improvements.
----
 Operational tooling and discipline for running a **multi-agent AI engineering fleet** — extracted
 and generalized from a working two-workstation setup that routes real engineering work across
 frontier cloud models, cheaper cloud tiers, and local GPU models.
