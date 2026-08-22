@@ -194,7 +194,7 @@ panel4 = {
                            "Different vendors and serving stacks make this an operating comparison, not a controlled benchmark."],
               "anchor": "start", "color": FG, "fontSize": 18, "subtitleColor": MUTED, "subtitleFontSize": 11.5},
     "width": 900, "height": 280, "data": {"values": p4},
-    "encoding": {"x": {"field": "model", "type": "nominal", "title": None}, "xOffset": {"field": "side"}},
+    "encoding": {"x": {"field": "model", "type": "nominal", "title": None, "axis": {"labelAngle": 0, "labelLimit": 260, "labelFontSize": 11}}, "xOffset": {"field": "side"}},
     "layer": [
         {"mark": {"type": "bar", "cornerRadiusEnd": 3},
          "encoding": {"y": {"field": "tps", "type": "quantitative", "title": "tokens per second", "scale": {"zero": True}},
@@ -215,7 +215,7 @@ panel5 = {
                            "Functional-task quality was T1 8/8 for all four displayed cells."],
               "anchor": "start", "color": FG, "fontSize": 18, "subtitleColor": MUTED, "subtitleFontSize": 11.5},
     "width": 700, "height": 270, "data": {"values": p5},
-    "encoding": {"x": {"field": "model", "type": "nominal", "title": None}, "xOffset": {"field": "device"}},
+    "encoding": {"x": {"field": "model", "type": "nominal", "title": None, "axis": {"labelAngle": 0, "labelLimit": 300, "labelFontSize": 11}}, "xOffset": {"field": "device"}},
     "layer": [
         {"mark": {"type": "bar", "cornerRadiusEnd": 3},
          "encoding": {"y": {"field": "tps", "type": "quantitative", "title": "tokens per second", "scale": {"zero": True}},
