@@ -85,9 +85,33 @@ Each bar states its sample size.
 `bench/make_charts.py` regenerates all five images from the CSV, and **fails closed** if the two disagree:
 exit 1 on divergence, exit 2 when the CSV is absent — unverifiable is not the same as clean.
 
-### Reference setup
+### The boxes
 
-The CSV identifies measurements only as `box-a` or `box-b` and includes the device, quantisation, serving stack, and run count for each row. The detailed host inventory is intentionally omitted: these measurements are operating observations, not a hardware prescription. Inventory the adopter's own host before selecting a model or runner.
+Published so a reader can size their own hardware against the numbers. **Box A is deliberately
+mismatched, mainstream, lane-starved hardware** — that is the point, not an apology.
+
+#### Box A — where the original charts were measured
+
+| | |
+|---|---|
+| **GPU** | 2 × NVIDIA RTX 5060 Ti, **16 GB GDDR7 each (32 GB total)** · Blackwell, compute capability **12.0 (sm_120)** · driver 595.71.05, CUDA 13.2 |
+| **CPU** | AMD Ryzen 7 5800XT — 8 cores / 16 threads, boost ~4.97 GHz |
+| **Motherboard** | MSI MAG B550 TOMAHAWK MAX WIFI — **AM4**, a mainstream 2020-era board. One GPU runs at **PCIe 4.0 x8**, the other at **PCIe 3.0 x4** (chipset slot). Neither gets a full x16 link. |
+| **RAM** | 32 GB DDR4 (30 GB usable) + 8 GB swap — 4 × 8 GB at **2933 MT/s**. Deliberately mismatched: 3 × DDR4-3200 CL16 single-rank + 1 × DDR4-3000 CL15 dual-rank, so the controller settles below both kits' ratings. |
+| **Storage** | 2 TB internal NVMe for models and working state; 1 TB USB-attached NVMe for backups |
+| **OS** | Ubuntu 26.04 LTS, kernel 7.0 |
+
+#### Box B — the second box (added 2026-08-22)
+
+| | |
+|---|---|
+| **APU** | AMD Ryzen AI MAX+ 395 ("Strix Halo") — 32 threads, with integrated **Radeon 8060S** graphics |
+| **Discrete GPU** | **AMD Radeon AI PRO R9700** (Navi 48, RDNA 4, `gfx1201`) — **31 GiB** usable VRAM |
+| **iGPU** | Radeon 8060S on **unified memory** — the same pool as system RAM, so "VRAM" is an allocation, not a fixed partition |
+| **Memory** | **122 GiB LPDDR5-8000**, shared between CPU and iGPU |
+| **Chassis** | GMKtec EVO-X3 mini-PC |
+| **Serving stack** | ollama 0.32.15 over **Vulkan (RADV)** — *not* CUDA, a different kernel path from Box A entirely |
+| **OS** | Ubuntu 26.04 LTS, kernel 7.0 |
 
 **Why the two boxes are not a controlled comparison.** They differ in vendor (NVIDIA/CUDA vs
 AMD/Vulkan), memory architecture (discrete VRAM vs a unified pool), and serving stack. A row that is
