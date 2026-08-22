@@ -104,10 +104,17 @@ The bars do not turn differing stacks into a controlled benchmark.
 
 ![Cross-box throughput](bench/04_cross_box.png)
 
-**Box-b device split.** The paired models show the dGPU-to-iGPU ratio from their two-rep cell means.
-Each bar states its sample size.
+**Box-b device split.** Four models, each measured on both of Box B's GPUs in one sitting by the same
+harness — same prompt, context pinned on both devices, model unloaded in between so the second
+reading cannot silently reuse the first device. Each bar states its sample size.
 
 ![Box-b device split](bench/05_device_split.png)
+
+`bench/device_split_bench.py` is the harness that produced those eight cells, so the comparison can be
+re-run rather than taken on trust. It drives one model onto each GPU through `options.main_gpu`,
+discards a warm-up so model-load time is not counted as decode rate, and **unloads between devices** —
+without that, the second request quietly reuses the copy already resident on the first device and the
+run reports that device twice, which is the exact failure the benchmark exists to detect.
 
 `bench/make_charts.py` regenerates all five images from the CSV, and **fails closed** if the two disagree:
 exit 1 on divergence, exit 2 when the CSV is absent — unverifiable is not the same as clean.
@@ -146,11 +153,31 @@ Server Edition headless setup allows for the maximum amount of resources can be 
 AMD/Vulkan), memory architecture (discrete VRAM vs a unified pool), and serving stack. A row that is
 faster on Box B is not evidence that AMD beats NVIDIA — it is evidence that *this model, at this
 quantisation, on this stack* ran at that rate. The value of publishing both is the **shape**: which
-models tolerate an iGPU, where the dGPU/iGPU gap actually lands (1.6× for a 26B MoE, 2.4× for a 31B
-dense), and which quantisations are worth keeping. Read the `device` and `serving_stack` columns
-before comparing any two rows.
+models tolerate an iGPU, where the dGPU/iGPU gap actually lands, and which quantisations are worth
+keeping. Read the `device` and `serving_stack` columns before comparing any two rows.
 
-**The iGPU is the interesting result.** A 26B MoE at **66 tok/s on integrated graphics** — using a
+**The gap splits by architecture, not by size.** Across the four models measured on both devices,
+the ratio lands in two tight groups — and they are not the groups you would guess from parameter
+count:
+
+| model | params | experts (GGUF metadata) | dGPU / iGPU |
+|---|---|---|---|
+| `qwen3-coder:30b` | 30.5B | 128, 8 used | **1.63×** |
+| `gemma4:26b-a4b-it-qat` | 25.2B | 128, 8 used | **1.63×** |
+| `qwen3.8:27b` | 27.3B | none — dense | **2.30×** |
+| `gemma4:31b-it-qat` | 30.7B | none — dense | **2.36×** |
+
+The expert counts are read from each model's GGUF metadata, not inferred from its name. The two
+sparse models carry the *same* configuration — 128 experts, 8 used — from different vendors, and
+land on the same ratio to two decimal places; both dense models sit near 2.3×.
+
+The likely mechanism is that a sparse model does less arithmetic per token, so it is less punished
+by the iGPU's weaker compute, while both architectures pay the same memory-bandwidth penalty — but
+that is the explanation the numbers *suggest*, not something this benchmark isolates. Two models
+per group is thin evidence for a rule. What it is good enough for is a routing default: **if a job
+has to run on the iGPU, prefer the sparse model.**
+
+**The iGPU is the interesting result.** A 26B MoE at **67 tok/s on integrated graphics** — using a
 slice of the same LPDDR5 the CPU is using — is the row most likely to change what someone buys, because
 it needs no discrete card at all.
 
