@@ -64,11 +64,21 @@ with its limits visible.
 
 ![Peak throughput per model](bench/01_peak_throughput.png)
 
-**Before / after.** Six same-box, same-task A/B pairs remain in the log, including the two published negatives.
+**Before / after.** Six A/B pairs measured on the same box, same task. The finding that changed how
+this fleet routes work: swapping the audit lane from a 30.7B dense model to a 25.2B MoE averaged
+**+348%** across three tasks *at quality parity* — the smaller model also found **more** seeded bugs
+(5/5 vs 4/5, 18/18 vs 16/18). Speculative decoding on the same model averaged **+13%**. Routing beats
+flag-tuning here, and the gap is an order of magnitude.
+
+The two red rows stay red: a claimed MoE-offload speed-up **did not reproduce** at either offload
+level. A record that only keeps its wins is not a record.
 
 ![Before and after](bench/02_before_after.png)
 
-**Weights vs VRAM actually occupied.** This panel is box-a-only, where those measurements exist.
+**Weights vs VRAM actually occupied.** Runtime footprint does not scale with weight size —
+`deepseek-r1:14b` occupies **1.89×** its 9 GB of weights once loaded, while `qwen3.6:35b-a3b`
+occupies **1.09×** its 23 GB. Sizing VRAM from model size alone goes badly wrong on the small model.
+This panel is box-a-only, where those measurements exist.
 
 ![Weights vs VRAM](bench/03_weights_vs_vram.png)
 
@@ -150,32 +160,6 @@ rather than a slope — a model either fits or it doesn't:
   the choked links show up as slower model *loads*, not slower *inference* — and even the models
   that span both cards hit their published rates across a 3.0 x4 link. Mismatched, mainstream,
   lane-starved hardware is sufficient; the VRAM cliff above is the only spec that gates anything.
-
-**Peak decode per model** — weights, quantisation, architecture and run count sit under each name:
-
-![Peak throughput per model](bench/01_peak_throughput.png)
-
-**Before / after.** Six A/B pairs measured on the same box, same task. The finding that changed how
-this fleet routes work: swapping the audit lane from a 30.7B dense model to a 25.2B MoE averaged
-**+348%** across three tasks *at quality parity* — the smaller model also found **more** seeded bugs
-(5/5 vs 4/5, 18/18 vs 16/18). Speculative decoding on the same model averaged **+13%**. Routing beats
-flag-tuning here, and the gap is an order of magnitude.
-
-The two red rows stay red: a claimed MoE-offload speed-up **did not reproduce** at either offload
-level. A record that only keeps its wins is not a record.
-
-![Before and after](bench/02_before_after.png)
-
-**Weights vs VRAM actually occupied.** Runtime footprint does not scale with weight size —
-`deepseek-r1:14b` occupies **1.89×** its 9 GB of weights once loaded, while `qwen3.6:35b-a3b`
-occupies **1.09×** its 23 GB. Sizing VRAM from model size alone goes badly wrong on the small model.
-
-![Weights vs VRAM](bench/03_weights_vs_vram.png)
-
-`bench/make_charts.py` regenerates all three from the CSV, and **fails closed** if the two disagree:
-exit 1 on divergence, exit 2 when the CSV is absent — unverifiable is not the same as clean.
-
-s clean.
 
 ## The guard ladder
 
