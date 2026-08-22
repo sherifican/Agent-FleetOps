@@ -42,73 +42,39 @@ another machine). The commit history tells that story.
 | `_tools/` | The export pipeline's own gates — provenance wall-checker, secrets/personal-data scanner, and a **ref gate**, all mutation-proven (`--self-test`). The first two ask "is this tree safe to publish?"; the third asks the question they structurally cannot: **"what would a push actually publish?"** A history rewrite is only true of the branch you rewrote — this repo's own rewrite left a clean `main` beside two leftover refs still carrying the trailers and build artifacts the rewrite removed, one `push --all` away from being republished. Content gates scan a worktree; pushes carry refs. |
 | `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 165 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus. `2 = UNMEASURED` dominates `1 = violation` throughout. |
 | `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, and the verified-system-map pattern. |
-| `bench/` | **The throughput operating log** — 30 measurements over 14 local models, with sample sizes attached. See below. |
+| `bench/` | **The two-box throughput operating log** — 47 measurements over 20 model tags, with sample sizes and device labels attached. See below. |
 
-## Measured on the box
+## Measured on two boxes
 
-Numbers from the hardware this was built on, across ollama, llama.cpp and llama-server. Published
-with sample sizes attached rather than as a benchmark, because **7 of the 14 models were measured
-once and nothing exceeds four runs**. `bench/local_model_throughput.csv` carries an
-`n_runs_for_model` column so that limit travels with every row instead of living in a caption.
-These will be replaced as the sample deepens.
+This operating log now records `box-a` and `box-b`: different vendors, serving stacks, and device
+paths. Every CSV row carries `box`, `device`, `quant`, `serving_stack`, `quality_score`, `verdict`,
+and `n_runs_for_model` so the sample size stays attached to the number. Some rows are single-run.
+This is not a controlled cross-vendor benchmark; it is a transparent record for operating decisions,
+with its limits visible.
 
-### The box
-
-| | |
-|---|---|
-| **GPU** | 2 × NVIDIA RTX 5060 Ti, **16 GB GDDR7 each (32 GB total)** · Blackwell, compute capability **12.0 (sm_120)** · driver 595.71.05, CUDA 13.2 |
-| **CPU** | AMD Ryzen 7 5800XT — 8 cores / 16 threads, boost ~4.97 GHz |
-| **Motherboard** | MSI MAG B550 TOMAHAWK MAX WIFI — **AM4**, a mainstream 2020-era board. One GPU runs at **PCIe 4.0 x8**, the other at **PCIe 3.0 x4** (chipset slot). Neither gets a full x16 link. |
-| **RAM** | 32 GB DDR4 (30 GB usable) + 8 GB swap — 4 × 8 GB running at **2933 MT/s**. Deliberately mismatched: 3 × DDR4-3200 CL16 single-rank + 1 × DDR4-3000 CL15 dual-rank, so the controller settles below both kits' ratings. See the note below. |
-| **Storage** | 2 TB internal NVMe (BIWIN NV7400) for models and working state; 1 TB USB-attached NVMe SSD for backups |
-| **OS** | Ubuntu 26.04 LTS, kernel 7.0 |
-
-**What you'd actually need to reproduce this.** The tier that matters is VRAM, and it is a cliff
-rather than a slope — a model either fits or it doesn't:
-
-- **One 16 GB card** covers everything up to the `gemma4:26b-a4b-it-qat` tier (15 GB of weights,
-  **100 tok/s** measured, and the model this fleet audits code with). LFM2.5-8B (5.2 GB),
-  Ornith-9B (5.6 GB), gemma4:12b (7.6 GB) and deepseek-r1:14b (9.0 GB) all fit comfortably, with
-  room left for KV cache. **This is the honest minimum** — most of the useful lanes live here.
-- **The second card buys the 30–35B tier.** qwen3.6:35b-a3b is 23 GB of weights and occupies
-  **25.1 GB** once loaded, so it spans both cards; Ornith-35B and qwen3-coder:30b are the same
-  story. Those are the 108–200 tok/s rows.
-- **Budget for runtime overhead, not just weights** — it does not scale with model size. See the
-  third chart: one 9 GB model occupies 17 GB loaded.
-- **CPU is not the bottleneck** for GPU-resident inference; it matters for loading and for the
-  orchestration around the models. System RAM matters more than core count — 32 GB is adequate but
-  not generous once several services and a browser are running alongside.
-- Model weights are large. Roughly **700 GB** of models and working state on the internal NVMe here.
-- **Neither the platform nor the PCIe links need to be top-shelf.** This is an AM4 board (MSI B550
-  Tomahawk Max) feeding one card at **PCIe 4.0 x8** and the other at **PCIe 3.0 x4**, with the
-  deliberately mismatched DRAM above settling at 2933 MT/s. Every number in the charts was measured
-  through exactly those links. Once weights are resident, decode traffic barely touches the bus —
-  the choked links show up as slower model *loads*, not slower *inference* — and even the models
-  that span both cards hit their published rates across a 3.0 x4 link. Mismatched, mainstream,
-  lane-starved hardware is sufficient; the VRAM cliff above is the only spec that gates anything.
-
-**Peak decode per model** — weights, quantisation, architecture and run count sit under each name:
+**Best recorded row per model** — box, device, quantisation, and run count sit under each name:
 
 ![Peak throughput per model](bench/01_peak_throughput.png)
 
-**Before / after.** Six A/B pairs measured on the same box, same task. The finding that changed how
-this fleet routes work: swapping the audit lane from a 30.7B dense model to a 25.2B MoE averaged
-**+348%** across three tasks *at quality parity* — the smaller model also found **more** seeded bugs
-(5/5 vs 4/5, 18/18 vs 16/18). Speculative decoding on the same model averaged **+13%**. Routing beats
-flag-tuning here, and the gap is an order of magnitude.
-
-The two red rows stay red: a claimed MoE-offload speed-up **did not reproduce** at either offload
-level. A record that only keeps its wins is not a record.
+**Before / after.** Six same-box, same-task A/B pairs remain in the log, including the two published negatives.
 
 ![Before and after](bench/02_before_after.png)
 
-**Weights vs VRAM actually occupied.** Runtime footprint does not scale with weight size —
-`deepseek-r1:14b` occupies **1.89×** its 9 GB of weights once loaded, while `qwen3.6:35b-a3b`
-occupies **1.09×** its 23 GB. Sizing VRAM from model size alone goes badly wrong on the small model.
+**Weights vs VRAM actually occupied.** This panel is box-a-only, where those measurements exist.
 
 ![Weights vs VRAM](bench/03_weights_vs_vram.png)
 
-`bench/make_charts.py` regenerates all three from the CSV, and **fails closed** if the two disagree:
+**Cross-box.** The headline comparison places identical model tags on box-a and box-b, grouped by box/device.
+The bars do not turn differing stacks into a controlled benchmark.
+
+![Cross-box throughput](bench/04_cross_box.png)
+
+**Box-b device split.** The paired models show the dGPU-to-iGPU ratio from their two-rep cell means.
+Each bar states its sample size.
+
+![Box-b device split](bench/05_device_split.png)
+
+`bench/make_charts.py` regenerates all five images from the CSV, and **fails closed** if the two disagree:
 exit 1 on divergence, exit 2 when the CSV is absent — unverifiable is not the same as clean.
 
 ## The guard ladder

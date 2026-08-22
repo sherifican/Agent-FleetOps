@@ -1,60 +1,41 @@
-# Local model throughput — an operating log
+# Local model throughput — a two-box operating log
 
-**This is not a benchmark.** It is the throughput record this lab actually operates from, published
-with its sample sizes attached so you can see exactly how much weight it carries. Read the limits
-section before quoting any number here.
+**This is not a benchmark.** It is the throughput record this lab operates from, with sample sizes,
+device labels, and serving stacks attached to the rows. The two boxes use different vendors and
+serving stacks; this is not a controlled cross-vendor comparison.
 
-## The hardware
+## The boxes
 
-| | |
-|---|---|
-| **GPU** | 2 × NVIDIA RTX 5060 Ti, **16 GB GDDR7 each (32 GB total)** · Blackwell, compute capability **12.0 (sm_120)** · driver 595.71.05, CUDA 13.2 |
-| **CPU** | AMD Ryzen 7 5800XT — 8 cores / 16 threads, boost ~4.97 GHz |
-| **RAM** | 32 GB DDR4 (30 GB usable) + 8 GB swap — 4 × 8 GB running at **2933 MT/s**. Deliberately mismatched: 3 × DDR4-3200 CL16 single-rank + 1 × DDR4-3000 CL15 dual-rank, so the controller settles below both kits' ratings. See the note below. |
-| **Storage** | 2 TB internal NVMe (BIWIN NV7400), ~700 GB of it models and working state; 1 TB USB-attached NVMe SSD for backups |
-| **OS** | Ubuntu 26.04 LTS, kernel 7.0 |
-| **Serving stacks** | ollama · llama.cpp · llama-server |
+| | box-a | box-b |
+|---|---|---|
+| Compute | two 16 GB consumer dGPUs | 32 GB workstation dGPU plus unified-memory iGPU |
+| Memory / link context | 30 GiB DDR4-2933; one dGPU on PCIe Gen4 x8 and one on Gen3 x4 | unified-memory iGPU path; Vulkan serving stack |
+| Published device labels | `dgpu-a`, `both-dgpu` | `dgpu-b`, `igpu` |
 
-Every figure below was produced on that machine. Nothing here is a vendor number or a projection.
-
-**Minimum to reproduce.** VRAM is the binding constraint and it behaves as a cliff, not a slope —
-a model fits or it does not. **One 16 GB card** reaches the `gemma4:26b-a4b-it-qat` tier (15 GB of
-weights, 100 tok/s measured), which covers most of the useful lanes including code audit. **The
-second card buys the 30–35B tier** — qwen3.6:35b-a3b is 23 GB of weights and occupies 25.1 GB
-loaded, so it spans both cards. Budget for runtime overhead separately: it does not scale with
-weight size (see the weights-vs-VRAM table — one 9 GB model occupies 17 GB loaded).
-
-**A note on the RAM, since it is a real-world configuration rather than a clean one.** The four DIMMs
-are a 3:1 kit mismatch *and* a rank mismatch — three sticks from a DDR4-3200 CL16 single-rank kit plus
-one DDR4-3000 CL15 dual-rank stick — so all four negotiate down to **2933 MT/s**, under both kits'
-rated speeds. Four DIMMs are also harder on a Ryzen memory controller than two, and mixing ranks
-harder still. **It was left this way on purpose:** for GPU-resident inference the model weights and KV
-cache live in VRAM, so system DRAM speed affects model *load* time and CPU-side orchestration, not
-decode throughput. None of the tokens-per-second figures on this page would move meaningfully on a
-matched 3200 kit. If you are building for this workload, **spend the budget on VRAM before RAM
-speed.**
+The generalized labels identify roles rather than hosts, vendors, or product names. `serving_stack`
+is blank only where the retained source record does not identify one of the three published stack
+names; blank is more honest than a reconstructed value.
 
 ## The limits, stated first
 
 | | |
 |---|---|
-| Models covered | **14** |
-| Total measurements | **30** |
-| Models with a **single** run | **7 of 14** |
+| Models covered | **20 model tags** |
+| Total measurements | **47** |
+| Cells with a **single** run | **many; every chart labels n=1** |
 | Largest sample for any model | **4** |
 | Variance / confidence intervals | **none — not computable at these sample sizes** |
 
-Seven of the fourteen models were measured **once**. Nothing here has more than four runs. That is
-enough to make routing decisions on a box you own; it is **not** enough to publish as a benchmark,
-and it is not offered as one. `n_runs_for_model` ships in the CSV so the sample size travels with
-every row instead of living in a caption.
+Some rows are single-run. Others aggregate exact replicate values in `condition` and carry their cell
+sample count in `n_runs_for_model`. The charts use the published CSV cell value, not an invented error
+bar. This is an honestly bounded operating log, not a benchmark.
 
 Three further constraints worth naming:
 
-- **Mixed serving stacks.** A llama.cpp figure and an ollama figure are not a controlled comparison.
-  The `condition` column names the stack for every row.
-- **Peak, not mean.** The charts plot the best run per model. For a model measured once, "best" and
-  "only" are the same number — which flatters the models measured more often.
+- **Mixed serving stacks and boxes.** `ollama`, `llama.cpp`, and `llama-server` are not interchangeable
+  experimental conditions. Cross-box charts state box/device and sample size so the difference stays visible.
+- **Published cell values.** For a model measured once, that value is labelled `n=1`; two-rep paired
+  device rows report the stated cell mean and preserve both reps in `condition`.
 - **Prefill and decode are separate rows.** The `metric` column distinguishes them. Sorting them
   together produces nonsense: LFM's prefill figures are ~50× its decode figures.
 
@@ -76,11 +57,13 @@ Three further constraints worth naming:
 
 | file | what it is |
 |---|---|
-| `local_model_throughput.csv` | the record — 30 measurements, each with metric, sample size, condition, and source |
-| `01_peak_throughput.png` | peak decode per model, coloured by family, with weights · quantisation · architecture · run count |
+| `local_model_throughput.csv` | the 47-row record, including box, device, quant, stack, quality, and verdict |
+| `01_peak_throughput.png` | best recorded row per model, coloured by family, with box/device and run count |
 | `02_before_after.png` | the six measured A/B pairs with deltas, including the two that went backwards |
 | `03_weights_vs_vram.png` | weights on disk vs VRAM actually occupied |
-| `make_charts.py` | regenerates all three images from the CSV |
+| `04_cross_box.png` | identical model tags on box-a and box-b, grouped by box/device |
+| `05_device_split.png` | box-b dGPU versus iGPU for the paired models, with ratios |
+| `make_charts.py` | regenerates all five images from the CSV |
 
 ## Reproducing
 
