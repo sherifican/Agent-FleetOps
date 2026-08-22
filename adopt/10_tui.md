@@ -4,6 +4,35 @@
 
 ## Step 1 — create the isolated Python environment
 
+**PREFLIGHT — Debian/Ubuntu ship `venv` without `pip`.** On Debian-family systems `python3-venv` is a
+separate package, and without it `python3 -m venv` succeeds but produces an environment with no `pip`,
+so the next command fails with `No module named pip`. Check before building the environment:
+
+**ADOPTER COMMAND:**
+
+```bash
+python3 -c 'import ensurepip; print("ensurepip-ok")'
+```
+
+**VERIFY — expected output:**
+
+```text
+ensurepip-ok
+```
+
+If instead you see `ModuleNotFoundError: No module named 'ensurepip'`, do NOT work around it by
+guessing. Show the human this remedy and let them decide:
+
+```text
+Debian/Ubuntu:  sudo apt install python3-venv
+Fedora/RHEL:    sudo dnf install python3-devel
+Alternative (no install): python3 -m venv --system-site-packages tui/.venv
+```
+
+The alternative reuses system packages instead of installing into an isolated environment; note that
+trade-off to the human rather than choosing it silently.
+
+
 Read `adopt-scratch/inventory.md`; do not choose a runner or endpoint here. From the repository root, create the environment and install the TUI's declared runtime plus development dependencies.
 
 **ADOPTER COMMAND:**
