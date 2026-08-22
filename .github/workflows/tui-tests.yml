@@ -36,3 +36,8 @@ jobs:
         run: |
           python3 _tools/ref_gate.py --self-test
           python3 _tools/ref_gate.py .
+          # readme_guard asks the INVERSE question from every other gate here: did
+          # load-bearing content DISAPPEAR? Deletion passes wall_check/scan_gate/ref_gate and
+          # even makes a naming scan greener. A delegated rewrite removed 55 lines on 2026-08-22
+          # and every gate went green. (A guard with no caller is a script, not a gate.)
+          bash _tools/readme_guard.sh
