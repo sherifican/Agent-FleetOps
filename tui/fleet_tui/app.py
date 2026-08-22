@@ -9,7 +9,7 @@ from textual.containers import Vertical, VerticalScroll, Horizontal
 from textual.command import Provider, Hit, Hits, DiscoveryHit
 from textual import work
 from rich.markup import escape
-from fleet_tui.sources import jobs, inbox, health, focus, modelstate, joboutput, failures, dispatch, cosmetics, targets, ratings, network, ops, cloud_legs, posture, passback, curation, actions, inflight, research_playlists, codex_link, boxes, receipts, throughput, lanes, bg_agents
+from fleet_tui.sources import jobs, inbox, health, focus, modelstate, joboutput, failures, dispatch, cosmetics, targets, ratings, network, ops, cloud_legs, posture, passback, curation, actions, inflight, research_playlists, codex_link, boxes, receipts, throughput, lanes, downloads, bg_agents
 from fleet_tui.widgets import format as fmt
 from fleet_tui.widgets import anim
 from fleet_tui.widgets.format import _clean_model_name, _color_model
@@ -97,6 +97,7 @@ def gather_data() -> dict:
         "receipts": receipts.from_boxes(fleet_boxes),
         "throughput": throughput.read_throughput(fleet_boxes),
         "lanes": lanes.read_lanes(fleet_boxes),
+        "downloads": downloads.from_boxes(fleet_boxes),
         "bg_agents": cloud_rows,
     }
 
@@ -1358,7 +1359,8 @@ class FleetTUI(App):
                                       fmt.format_box_models(d.get("boxes", []), d.get("models_by_box", {}), d.get("throughput", {})),
                                       fmt.format_cloud_legs(cloud, f),
                                       fmt.format_receipt_grid(d.get("receipts", []), d.get("boxes", [])),
-                                      fmt.format_lanes(d.get("lanes", []), d.get("boxes", [])))))
+                                      fmt.format_lanes(d.get("lanes", []), d.get("boxes", [])),
+                                      fmt.format_downloads(d.get("downloads", [])))))
             put("jobs", fmt.format_jobs(d["jobs"], fj))
             put("posture", fmt.format_posture(d.get("posture")))
             put("inbox", fmt.format_inbox(d["inbox"]))

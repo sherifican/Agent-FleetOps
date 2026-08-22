@@ -231,12 +231,18 @@ class TerminalPane(Widget):
                 
         if self._pid is not None:
             try:
-                # Try to terminate gracefully then kill
+                # Never block Textual's shutdown loop waiting for a child shell.  A hidden terminal
+                # may have descendants, so a blocking waitpid can prevent the entire app/test from
+                # closing even after the terminal itself is no longer usable.
                 os.kill(self._pid, signal.SIGTERM)
-                os.waitpid(self._pid, 0)
+                pid, _status = os.waitpid(self._pid, os.WNOHANG)
+                if pid == 0:
+                    os.kill(self._pid, signal.SIGKILL)
             except Exception:
                 # If it already died, just ignore
                 pass
+        self._fd = None
+        self._pid = None
 
     async def on_unmount(self) -> None:
         """Clean up when widget is unmounted."""

@@ -27,7 +27,7 @@ def test_gather_data(monkeypatch):
     # Assert the structure — gather_data now returns RAW objects (formatting happens in _paint so the
     # cosmetic animation timer can re-render without re-gathering)
     assert isinstance(result, dict)
-    assert set(result.keys()) == {"jobs", "inbox", "health", "models", "focus", "alerts", "dispatches", "util", "network", "ops", "cloud", "posture", "passback", "research_playlists", "boxes", "models_by_box", "receipts", "throughput", "lanes", "bg_agents"}
+    assert set(result.keys()) == {"jobs", "inbox", "health", "models", "focus", "alerts", "dispatches", "util", "network", "ops", "cloud", "posture", "passback", "research_playlists", "boxes", "models_by_box", "receipts", "throughput", "lanes", "downloads", "bg_agents"}
 
     # Assert the content — raw lists/objects, not formatted strings
     assert result["jobs"] == []

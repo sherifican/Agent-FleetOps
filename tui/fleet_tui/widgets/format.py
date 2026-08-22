@@ -783,8 +783,6 @@ def format_box_models(boxes, models_by_box, throughput=None):
             device = str(getattr(row, "device", "") or "")
             label = getattr(box, "device_labels", {}).get(device)
             badge = f" [{label.color}]{label.badge}[/]" if label and label.badge and label.color else ""
-            rate = (rates.get(box.name, {}) or {}).get(getattr(row, "name", ""))
-            rate_text = f" [dim]{rate.tok_s:.1f} tok/s[/]" if rate and rate.tok_s > 0 else ""
             state = str(getattr(row, "state", "") or "")
             if state == "busy":
                 mark, state_text = "[yellow]▶[/]", "busy"
@@ -794,6 +792,9 @@ def format_box_models(boxes, models_by_box, throughput=None):
                 mark, state_text = "[red]×[/]", "down"
             else:
                 mark, state_text = "◍", "idle"
+            rate = (rates.get(box.name, {}) or {}).get(getattr(row, "name", ""))
+            serving = (not getattr(row, "port", 0) and getattr(row, "loaded", False)) or state == "busy"
+            rate_text = f" [dim]{rate.tok_s:.1f} tok/s[/]" if serving and rate and rate.tok_s > 0 else ""
             wake = " [dim]wake on use[/]" if getattr(row, "wake_on_use", False) else ""
             port = f" [dim]:{row.port}[/]" if getattr(row, "port", 0) else ""
             lines.append(f"{mark} {_color_model(getattr(row, 'name', '?'))}{badge}{port} [dim]{state_text}[/]{rate_text}{wake}")
@@ -811,3 +812,10 @@ def format_lanes(lanes, boxes):
             cells.append(f"{box.name}:{count}{suffix}")
         lines.append(f"{escape(str(getattr(lane, 'lane', '?')))} {getattr(lane, 'live', 0)}  " + "  ".join(cells))
     return "\n".join(lines) if len(lines) > 1 else "[b]LANES[/b]\n[dim]n/a[/]"
+
+
+def format_downloads(rows):
+    """Acquisition rows retain their explicit box attribution; no path-based host guess is made."""
+    if not rows:
+        return "[dim]downloads: n/a[/]"
+    return "\n".join(f"[gray]{escape(str(row.file))}[/] [cyan]{escape(str(row.agent or '?'))}[/] [gold]{escape(str(row.box))}[/]" for row in rows)

@@ -1,9 +1,9 @@
 import json
 import time
 
-from fleet_tui.models import FleetBox, ModelState, ReceiptRow, ThroughputRow
-from fleet_tui.sources import bg_agents, boxes, lanes, receipts, throughput
-from fleet_tui.widgets.format import _pad_markup, format_box_models, format_lanes, format_receipt_grid
+from fleet_tui.models import DownloadRow, FleetBox, ModelState, ReceiptRow, ThroughputRow
+from fleet_tui.sources import bg_agents, boxes, downloads, lanes, receipts, throughput
+from fleet_tui.widgets.format import _pad_markup, format_box_models, format_downloads, format_lanes, format_receipt_grid
 from fleet_tui.widgets.power import power_cell
 
 
@@ -38,10 +38,10 @@ def test_receipts_are_safe_and_sorted(tmp_path):
 
 def test_sidecars_show_config_badge_state_wake_and_serving_rate():
     box = FleetBox(name="desk", device_labels={"gpu": boxes.DeviceLabel("D", "purple")})
-    row = ModelState("sidecar", loaded=False, device="gpu", port=8123, state="asleep", wake_on_use=True)
+    row = ModelState("sidecar", loaded=True, device="gpu", port=8123, state="busy", wake_on_use=True)
     rate = ThroughputRow("sidecar", 22.5, "desk")
     rendered = format_box_models([box], {"desk": [row]}, {"desk": {"sidecar": rate}})
-    assert "D" in rendered and ":8123" in rendered and "asleep" in rendered and "wake on use" in rendered
+    assert "D" in rendered and ":8123" in rendered and "busy" in rendered and "wake on use" in rendered
     assert "22.5 tok/s" in rendered
 
 
@@ -68,6 +68,13 @@ def test_throughput_stays_separate_per_box(tmp_path):
     two.write_text('{"same":{"tok_s":22}}')
     data = throughput.read_throughput([FleetBox(name="desk", throughput_path=str(one)), FleetBox(name="rack", kind="remote", throughput_path=str(two))])
     assert data["desk"]["same"].tok_s == 11 and data["rack"]["same"].tok_s == 22
+
+
+def test_download_rows_keep_explicit_box_attribution(tmp_path):
+    path = tmp_path / "downloads.jsonl"
+    path.write_text('{"file":"sample.bin","box":"rack","agent":"worker","ts":2}\n')
+    rows = downloads.read_downloads(path, "desk")
+    assert rows[0].box == "rack" and "rack" in format_downloads(rows)
 
 
 def test_markup_exact_fit_preserves_color_and_power_uses_configured_cap():

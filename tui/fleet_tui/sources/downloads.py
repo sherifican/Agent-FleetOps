@@ -21,3 +21,11 @@ def read_downloads(path, default_box="local", limit=8):
         return sorted(rows, key=lambda row: row.ts, reverse=True)[:limit]
     except Exception:
         return []
+
+
+def from_boxes(boxes, limit=8):
+    rows = []
+    for box in boxes or []:
+        if getattr(box, "downloads_path", ""):
+            rows.extend(read_downloads(box.downloads_path, box.name, limit))
+    return sorted(rows, key=lambda row: row.ts, reverse=True)[:limit]

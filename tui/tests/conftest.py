@@ -4,6 +4,7 @@ import copy
 import pytest
 
 from fleet_tui.widgets import anim
+from fleet_tui.models import FleetBox, FocusState, HealthSnapshot
 
 
 @pytest.fixture(autouse=True)
@@ -26,3 +27,31 @@ def _restore_anim_globals():
         anim._colors = copy.deepcopy(saved_colors)
         anim._active_frames = list(saved_frames)
         anim._glow_on = saved_glow
+
+
+@pytest.fixture(autouse=True)
+def _isolate_app_refresh(monkeypatch, request):
+    """A mounted Textual app must not start live HTTP/subprocess reads during a test.
+
+    Source tests call their readers directly; app tests need only a stable raw snapshot.  Patching the
+    module attribute leaves a test's directly imported ``gather_data`` function available for its own
+    explicit source seams while making every `run_test()` mount hermetic and quick to tear down.
+    """
+    import fleet_tui.app as app
+    snapshot = {
+        "jobs": [], "health": HealthSnapshot(), "models": [], "focus": FocusState(), "inbox": [],
+        "dispatches": [], "util": 0, "network": {}, "alerts": [], "ops": [], "cloud": [],
+        "posture": {}, "passback": [], "research_playlists": [], "boxes": [FleetBox()],
+        "models_by_box": {"local": []}, "receipts": [], "throughput": {"local": {}},
+        "lanes": [], "downloads": [], "bg_agents": [],
+    }
+    monkeypatch.setattr(app, "gather_data", lambda: snapshot)
+    # The PTY is integration-tested in test_terminal.py.  Every other app test renders the pane hidden,
+    # so for those tests avoid spawning a real shell that can outlive a test runner shutdown.
+    if request.node.fspath.basename != "test_terminal.py":
+        from fleet_tui.widgets.terminal import TerminalPane
+
+        async def _no_terminal_process(self):
+            return None
+
+        monkeypatch.setattr(TerminalPane, "on_mount", _no_terminal_process)
