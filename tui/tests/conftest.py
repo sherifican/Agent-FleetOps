@@ -55,3 +55,17 @@ def _isolate_app_refresh(monkeypatch, request):
             return None
 
         monkeypatch.setattr(TerminalPane, "on_mount", _no_terminal_process)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_inbox_triggers(monkeypatch):
+    """Every inbox trigger constant points at a LIVE path on the host; a test that patches only
+    some of them inherits the machine's real alert state (a live .automation_alert made
+    test_list_inbox_integration order-dependent — the default-LIVE-path class, third sighting).
+    Point them ALL at nonexistent paths; tests that want a trigger patch it explicitly."""
+    from fleet_tui.sources import inbox as I
+    for name in ("AUTOMATION_ALERT", "BACKUP_ALERT", "SUPPLY_ALERT", "DEP_TRIGGER",
+                 "CURATION_TRIGGER", "GITHUB_ALERT", "HIVE_ALERT", "REJECTS",
+                 "HF_DIGEST", "TELEGRAM_TRIGGER"):
+        if hasattr(I, name):
+            monkeypatch.setattr(I, name, "/nonexistent/" + name.lower(), raising=False)
