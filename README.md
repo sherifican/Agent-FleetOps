@@ -44,6 +44,14 @@ another machine). The commit history tells that story.
 | `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, and the verified-system-map pattern. |
 | `bench/` | **The two-box throughput operating log** — 47 measurements over 20 model tags, with sample sizes and device labels attached. See below. |
 
+## Set it up with your own AI
+
+Clone this repository, then point your orchestrator at `adopt/README.md`. The agent will inventory the host, propose a local configuration from those observations, show a human the plan and diffs before any service, cron entry, or shell hook, and run the available verification steps. The adoption path degrades to a single box with no GPU or cloud CLI; absent capabilities are recorded rather than guessed. The `adopt/` documents are written for an agent with shell access.
+
+```text
+Read adopt/README.md and follow it in order. Inventory this host before prescribing configuration. Show me the plan and diffs before installing any cron entry, service, or shell hook, then retain the literal verification output.
+```
+
 ## Measured on two boxes
 
 This operating log now records `box-a` and `box-b`: different vendors, serving stacks, and device
@@ -76,6 +84,72 @@ Each bar states its sample size.
 
 `bench/make_charts.py` regenerates all five images from the CSV, and **fails closed** if the two disagree:
 exit 1 on divergence, exit 2 when the CSV is absent — unverifiable is not the same as clean.
+
+### Reference setup
+
+The CSV identifies measurements only as `box-a` or `box-b` and includes the device, quantisation, serving stack, and run count for each row. The detailed host inventory is intentionally omitted: these measurements are operating observations, not a hardware prescription. Inventory the adopter's own host before selecting a model or runner.
+
+**Why the two boxes are not a controlled comparison.** They differ in vendor (NVIDIA/CUDA vs
+AMD/Vulkan), memory architecture (discrete VRAM vs a unified pool), and serving stack. A row that is
+faster on Box B is not evidence that AMD beats NVIDIA — it is evidence that *this model, at this
+quantisation, on this stack* ran at that rate. The value of publishing both is the **shape**: which
+models tolerate an iGPU, where the dGPU/iGPU gap actually lands (1.6× for a 26B MoE, 2.4× for a 31B
+dense), and which quantisations are worth keeping. Read the `device` and `serving_stack` columns
+before comparing any two rows.
+
+**The iGPU is the interesting result.** A 26B MoE at **66 tok/s on integrated graphics** — using a
+slice of the same LPDDR5 the CPU is using — is the row most likely to change what someone buys, because
+it needs no discrete card at all.
+
+**What you'd actually need to reproduce this.** The tier that matters is VRAM, and it is a cliff
+rather than a slope — a model either fits or it doesn't:
+
+- **One 16 GB card** covers everything up to the `gemma4:26b-a4b-it-qat` tier (15 GB of weights,
+  **100 tok/s** measured, and the model this fleet audits code with). LFM2.5-8B (5.2 GB),
+  Ornith-9B (5.6 GB), gemma4:12b (7.6 GB) and deepseek-r1:14b (9.0 GB) all fit comfortably, with
+  room left for KV cache. **This is the honest minimum** — most of the useful lanes live here.
+- **The second card buys the 30–35B tier.** qwen3.6:35b-a3b is 23 GB of weights and occupies
+  **25.1 GB** once loaded, so it spans both cards; Ornith-35B and qwen3-coder:30b are the same
+  story. Those are the 108–200 tok/s rows.
+- **Budget for runtime overhead, not just weights** — it does not scale with model size. See the
+  third chart: one 9 GB model occupies 17 GB loaded.
+- **CPU is not the bottleneck** for GPU-resident inference; it matters for loading and for the
+  orchestration around the models. System RAM matters more than core count — 32 GB is adequate but
+  not generous once several services and a browser are running alongside.
+- Model weights are large. Roughly **700 GB** of models and working state on the internal NVMe here.
+- **Neither the platform nor the PCIe links need to be top-shelf.** This is an AM4 board (MSI B550
+  Tomahawk Max) feeding one card at **PCIe 4.0 x8** and the other at **PCIe 3.0 x4**, with the
+  deliberately mismatched DRAM above settling at 2933 MT/s. Every number in the charts was measured
+  through exactly those links. Once weights are resident, decode traffic barely touches the bus —
+  the choked links show up as slower model *loads*, not slower *inference* — and even the models
+  that span both cards hit their published rates across a 3.0 x4 link. Mismatched, mainstream,
+  lane-starved hardware is sufficient; the VRAM cliff above is the only spec that gates anything.
+
+**Peak decode per model** — weights, quantisation, architecture and run count sit under each name:
+
+![Peak throughput per model](bench/01_peak_throughput.png)
+
+**Before / after.** Six A/B pairs measured on the same box, same task. The finding that changed how
+this fleet routes work: swapping the audit lane from a 30.7B dense model to a 25.2B MoE averaged
+**+348%** across three tasks *at quality parity* — the smaller model also found **more** seeded bugs
+(5/5 vs 4/5, 18/18 vs 16/18). Speculative decoding on the same model averaged **+13%**. Routing beats
+flag-tuning here, and the gap is an order of magnitude.
+
+The two red rows stay red: a claimed MoE-offload speed-up **did not reproduce** at either offload
+level. A record that only keeps its wins is not a record.
+
+![Before and after](bench/02_before_after.png)
+
+**Weights vs VRAM actually occupied.** Runtime footprint does not scale with weight size —
+`deepseek-r1:14b` occupies **1.89×** its 9 GB of weights once loaded, while `qwen3.6:35b-a3b`
+occupies **1.09×** its 23 GB. Sizing VRAM from model size alone goes badly wrong on the small model.
+
+![Weights vs VRAM](bench/03_weights_vs_vram.png)
+
+`bench/make_charts.py` regenerates all three from the CSV, and **fails closed** if the two disagree:
+exit 1 on divergence, exit 2 when the CSV is absent — unverifiable is not the same as clean.
+
+s clean.
 
 ## The guard ladder
 
@@ -128,7 +202,7 @@ mechanical sanitization → provenance wall-check → zero-hit secret/personal-d
 per batch. Paths are genericized; network examples use RFC5737 documentation addresses; measured
 numbers are labeled as measured on the reference setup.
 
-Related: [ParaKit](https://github.com/sherifican/ParaKit-Open_Source) — the desktop application whose
+Related: ParaKit — the desktop application whose
 multi-agent development workflow drove most of these disciplines into existence.
 
 ## License
