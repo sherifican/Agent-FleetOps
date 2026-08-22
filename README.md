@@ -111,7 +111,9 @@ mismatched, mainstream, lane-starved hardware** — that is the point, not an ap
 | **Memory** | **122 GiB LPDDR5-8000**, shared between CPU and iGPU |
 | **Chassis** | GMKtec EVO-X3 mini-PC |
 | **Serving stack** | ollama 0.32.15 over **Vulkan (RADV)** — *not* CUDA, a different kernel path from Box A entirely |
-| **OS** | Ubuntu 26.04 LTS, kernel 7.0 |
+| **OS** | Ubuntu 26.04 LTS, kernel 7.0 (Server Edition) |
+
+Server Edition headless setup allows for the maximum amount of resources can be allocated to compute instead of a desktop. Box A controls Box B over ssh.
 
 **Why the two boxes are not a controlled comparison.** They differ in vendor (NVIDIA/CUDA vs
 AMD/Vulkan), memory architecture (discrete VRAM vs a unified pool), and serving stack. A row that is
