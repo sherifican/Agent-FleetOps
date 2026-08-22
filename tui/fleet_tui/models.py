@@ -86,6 +86,10 @@ class ModelState:
     gb: float = 0.0             # VRAM footprint while loaded
     idle_in: str = ""           # human time until ollama idle-unloads it (e.g. "4m"); "" if not loaded
     busy: bool = False          # in-flight: loaded AND the GPU is actively computing
+    device: str = ""            # configured device key, if supplied by a box relay
+    port: int = 0                # sidecar port; zero for ordinary model runners
+    state: str = ""             # busy | idle | asleep | down for sidecars
+    wake_on_use: bool = False
 
 
 @dataclass
@@ -116,3 +120,65 @@ class Playlist:
     kind: str = "youtube"
     last_checked: str = ""   # ISO ts of the last owner-requested check, "" if never
     last_result: str = ""    # short summary of the last stage pass, "" if none
+
+
+@dataclass(frozen=True)
+class DeviceLabel:
+    """A user-owned display label for one device key."""
+    badge: str = ""
+    color: str = ""
+    power_cap_w: float = 0.0
+
+
+@dataclass(frozen=True)
+class FleetBox:
+    """One configured machine. Paths are local or mounted relay paths, never shell targets."""
+    name: str = "local"
+    kind: str = "local"
+    receipts_path: str = ""
+    models_path: str = ""
+    health_path: str = ""
+    ledger_path: str = ""
+    downloads_path: str = ""
+    throughput_path: str = ""
+    device_labels: Dict[str, DeviceLabel] = field(default_factory=dict)
+
+
+@dataclass
+class ReceiptRow:
+    """One artifact receipt recorded by a box-local or relayed JSONL ledger."""
+    name: str
+    box: str = "local"
+    model: str = ""
+    rc: str = ""
+    bytes: int = 0
+    ts: str = ""
+    status: str = "unknown"
+
+
+@dataclass
+class ThroughputRow:
+    """A measured serving rate; absence means no rate is rendered."""
+    model: str
+    tok_s: float = 0.0
+    box: str = "local"
+    ts: str = ""
+
+
+@dataclass
+class DownloadRow:
+    """One acquisition-ledger entry attributed to an explicitly named box."""
+    file: str
+    box: str = "local"
+    source: str = ""
+    agent: str = ""
+    kind: str = ""
+    ts: int = 0
+
+
+@dataclass
+class LaneState:
+    """Admission state for one lane, including per-box contributions."""
+    lane: str
+    live: int = 0
+    admits_by_box: Dict[str, int] = field(default_factory=dict)

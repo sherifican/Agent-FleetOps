@@ -1,10 +1,7 @@
-# fleet_tui — off-box backup (branch: `fleet_tui`)
-
-> Source: `~/fleet_tui/` on the Fleet box. Backed up here by `backup_push.sh` (`HEAD:fleet_tui`).
-> Part of the [a private backup repository](../../tree/main) repo — see `main` for the fleet overview.
+# fleet_tui — configurable fleet monitor
 
 ## What this is
-The **Fleet fleet TUI** — a [Textual](https://textual.textualize.io/) **monitor + inbox + quick-control** window over the *existing* fleet stack. It **reads** state the fleet already produces (state files, `/api/ps`, `systemctl`) and exposes a couple of thin, owner-initiated control hooks. It is deliberately **not** a second orchestrator, not a code editor, and not an intervention gateway. Current `VERSION = 3.43` (shown in the header next to the clock — the fresh-code signal). **Authoritative source is `fleet_tui/app.py`, not this line** — a version pinned in prose drifts the moment it ships; check the constant if it matters.
+The [Textual](https://textual.textualize.io/) **monitor + inbox + quick-control** window reads existing state files and exposes thin owner-initiated controls. It is not an orchestrator, editor, or intervention gateway. The authoritative version is `VERSION = 4.0` in `fleet_tui/app.py`.
 
 ## Architecture — a strict one-way pipeline
 So a local model can own the data/format layer in bounded, test-gated tasks without fighting the event loop:
@@ -15,7 +12,11 @@ So a local model can own the data/format layer in bounded, test-gated tasks with
 | **`fleet_tui/app.py`** | The Textual **App** — layout, timers, key bindings, modals, the paint loop; an embedded `pyte` terminal (Ctrl+`). |
 | **`fleet_tui/models.py`** | **Frozen** dataclass contracts (change a field → update every source + widget). |
 
-Also: `fleet_tui/fleet_cli/` (control-plane runners), `tests/` + `tests/fixtures/` (**346 tests** as of 2026-08-08, hermetic), `specs/`, `AGENTS.md` (repo DOX root), `CHANGELOG.md`, `TUI_OPERATOR_NOTES.md`, `FLEET_CONTROL_BUILD_PLAN.md`, `pyproject.toml`, `run.sh` (launches the TUI directly — tmux retired), `restart.sh` (stop/reap helper).
+Also: `fleet_tui/fleet_cli/` (control-plane runners), `tests/` + `tests/fixtures/` (hermetic), `specs/`, `AGENTS.md` (repo DOX root), `CHANGELOG.md`, `pyproject.toml`, `run.sh`, and `restart.sh`.
+
+## Boxes configuration
+
+Optional `~/.fleet_tui/boxes.json` is a list (or `{ "boxes": [...] }`) of box objects. Each has `name`, `kind` (`local` or `remote`), optional relay paths (`receipts_path`, `models_path`, `health_path`, `ledger_path`, `downloads_path`, `throughput_path`), and `device_labels`. A label maps a device key to `{ "badge", "color", "power_cap_w" }`. With no file, the TUI uses one box named `local` and its existing local readers. See [`docs/boxes.example.json`](docs/boxes.example.json).
 
 ## HARD contracts (never violated)
 - **Never crash on a missing/malformed state file** — a source returns a safe default; the panel degrades to a muted cell. Degrade panel-by-panel, never die.

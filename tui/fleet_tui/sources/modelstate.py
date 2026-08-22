@@ -111,7 +111,7 @@ def _sidecar_vram_mb(port) -> int:
         pids = {p.strip() for p in result.stdout.split("\n") if p.strip()} if result.returncode == 0 else set()
         if pids:
             # SUM every nvidia-smi compute-app row for our PID(s). A model spanning BOTH cards lists the
-            # same pid on TWO rows (e.g. 148 + 146 MiB on the dual-5060) — summing avoids ~½ undercount.
+            # same pid can appear once per accelerator; sum every row to avoid undercounting.
             nvidia_cmd = ["nvidia-smi", "--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"]
             result = subprocess.run(nvidia_cmd, capture_output=True, text=True, timeout=5)
             if result.returncode == 0:

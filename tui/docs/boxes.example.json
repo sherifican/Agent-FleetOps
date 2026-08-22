@@ -1,0 +1,25 @@
+{
+  "boxes": [
+    {
+      "name": "workstation",
+      "kind": "local",
+      "receipts_path": "~/.fleet_tui/receipts.jsonl",
+      "ledger_path": "~/.fleet_tui/lanes.json",
+      "throughput_path": "~/.fleet_tui/throughput.json",
+      "device_labels": {
+        "dgpu": {"badge": "D", "color": "purple", "power_cap_w": 240},
+        "igpu": {"badge": "I", "color": "springgreen", "power_cap_w": 45}
+      }
+    },
+    {
+      "name": "compute",
+      "kind": "remote",
+      "receipts_path": "/mnt/fleet-relay/compute/receipts.jsonl",
+      "models_path": "/mnt/fleet-relay/compute/models.json",
+      "health_path": "/mnt/fleet-relay/compute/health.json",
+      "ledger_path": "/mnt/fleet-relay/compute/lanes.json",
+      "throughput_path": "/mnt/fleet-relay/compute/throughput.json",
+      "device_labels": {"egpu": {"badge": "E", "color": "cyan", "power_cap_w": 300}}
+    }
+  ]
+}

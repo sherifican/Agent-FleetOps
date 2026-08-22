@@ -1,5 +1,5 @@
 import pytest
-from fleet_tui.models import HealthSnapshot, FocusState
+from fleet_tui.models import HealthSnapshot, FocusState, FleetBox
 from fleet_tui.app import gather_data
 
 
@@ -19,6 +19,7 @@ def test_gather_data(monkeypatch):
     monkeypatch.setattr("fleet_tui.app.focus.read_state", lambda: FocusState(on=False))
     monkeypatch.setattr("fleet_tui.app.network.status", lambda: {"pc": {}, "telegram": {}})
     monkeypatch.setattr("fleet_tui.app._net_cache", {"t": 0.0, "v": None})   # bypass the 20s cache
+    monkeypatch.setattr("fleet_tui.app.boxes.read_boxes", lambda: [FleetBox()])
 
     # Call the function
     result = gather_data()
@@ -26,7 +27,7 @@ def test_gather_data(monkeypatch):
     # Assert the structure — gather_data now returns RAW objects (formatting happens in _paint so the
     # cosmetic animation timer can re-render without re-gathering)
     assert isinstance(result, dict)
-    assert set(result.keys()) == {"jobs", "inbox", "health", "models", "focus", "alerts", "dispatches", "util", "network", "ops", "cloud", "posture", "passback", "research_playlists"}
+    assert set(result.keys()) == {"jobs", "inbox", "health", "models", "focus", "alerts", "dispatches", "util", "network", "ops", "cloud", "posture", "passback", "research_playlists", "boxes", "models_by_box", "receipts", "throughput", "lanes", "bg_agents"}
 
     # Assert the content — raw lists/objects, not formatted strings
     assert result["jobs"] == []

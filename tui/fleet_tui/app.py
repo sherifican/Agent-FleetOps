@@ -9,7 +9,7 @@ from textual.containers import Vertical, VerticalScroll, Horizontal
 from textual.command import Provider, Hit, Hits, DiscoveryHit
 from textual import work
 from rich.markup import escape
-from fleet_tui.sources import jobs, inbox, health, focus, modelstate, joboutput, failures, dispatch, cosmetics, targets, ratings, network, ops, cloud_legs, posture, passback, curation, actions, inflight, research_playlists, codex_link
+from fleet_tui.sources import jobs, inbox, health, focus, modelstate, joboutput, failures, dispatch, cosmetics, targets, ratings, network, ops, cloud_legs, posture, passback, curation, actions, inflight, research_playlists, codex_link, boxes, receipts, throughput, lanes, bg_agents
 from fleet_tui.widgets import format as fmt
 from fleet_tui.widgets import anim
 from fleet_tui.widgets.format import _clean_model_name, _color_model
@@ -17,7 +17,7 @@ from textual.binding import Binding
 from fleet_tui.widgets.terminal import TerminalPane
 
 THEME_FILE = os.path.expanduser("~/.config/fleet_tui/theme")   # persists the chosen theme across reopen
-VERSION = "3.45"  # bump per shipped feature wave; shown in the Header sub-title (next to the clock)
+VERSION = "4.0"  # bump per shipped feature wave; shown in the Header sub-title (next to the clock)
 
 
 def _tighten_svg(svg: str) -> str:
@@ -65,6 +65,18 @@ def gather_data() -> dict:
     snap = health.snapshot()
     models = modelstate.list_models()
     dispatches = dispatch.recent()
+    fleet_boxes = boxes.read_boxes()
+    models_by_box = {box.name: boxes.read_models(box, models) for box in fleet_boxes}
+    for box in fleet_boxes:
+        ledger = getattr(box, "ledger_path", "")
+        if ledger:
+            cloud_rows = bg_agents.read_bg_agents(ledger)
+            if cloud_rows:
+                # The ledger's model label is already its source of truth; no local name mapping.
+                cloud_rows = cloud_rows
+                break
+    else:
+        cloud_rows = []
     return {
         "jobs": jobs_list,
         "health": snap,
@@ -80,6 +92,12 @@ def gather_data() -> dict:
         "posture": posture.snapshot(),   # backup + supply-chain + upstream ledgers → POSTURE panel
         "passback": passback.list_passback(),   # WinClaude→Fleet passback files (w) + header pb counter
         "research_playlists": research_playlists.read_playlists(),   # video-research source queues → Research Playlists panel
+        "boxes": fleet_boxes,
+        "models_by_box": models_by_box,
+        "receipts": receipts.from_boxes(fleet_boxes),
+        "throughput": throughput.read_throughput(fleet_boxes),
+        "lanes": lanes.read_lanes(fleet_boxes),
+        "bg_agents": cloud_rows,
     }
 
 
@@ -1335,7 +1353,12 @@ class FleetTUI(App):
         try:
             put("research_playlists", fmt.format_research_playlists(d.get("research_playlists", [])))
             put("health", fmt.format_health(d["health"], fh, net=d.get("network")))
-            put("models", fmt.format_models(d["models"], f) + "\n" + fmt.format_cloud_legs(d.get("cloud", []), f))   # local KANBAN + ☁ cloud legs
+            cloud = list(d.get("cloud", [])) + list(d.get("bg_agents", []))
+            put("models", "\n".join((fmt.format_models(d["models"], f),
+                                      fmt.format_box_models(d.get("boxes", []), d.get("models_by_box", {}), d.get("throughput", {})),
+                                      fmt.format_cloud_legs(cloud, f),
+                                      fmt.format_receipt_grid(d.get("receipts", []), d.get("boxes", [])),
+                                      fmt.format_lanes(d.get("lanes", []), d.get("boxes", [])))))
             put("jobs", fmt.format_jobs(d["jobs"], fj))
             put("posture", fmt.format_posture(d.get("posture")))
             put("inbox", fmt.format_inbox(d["inbox"]))
@@ -1360,7 +1383,7 @@ class FleetTUI(App):
         _rp_n = len(d.get("research_playlists", []))
         self.query_one("#research_playlists", Static).border_title = self._title("research_playlists", f"RESEARCH PLAYLISTS ({_rp_n})", False)
         self.query_one("#health", Static).border_title = f"{'▶' if h_collapsed else '▼'}{_hb} HEALTH  (body / x = failures)"
-        cloud_n = len(d.get("cloud", []))
+        cloud_n = len(d.get("cloud", [])) + len(d.get("bg_agents", []))
         self.query_one("#models", Static).border_title = self._title("models", "MODELS" + (f" · ☁ {cloud_n}" if cloud_n else ""), bool(cloud_n) and f is not None)
         self.query_one("#jobs", Static).border_title = self._title("jobs", f"JOBS ({len(d['jobs'])}) · body / o = output", jobs_active)
         # POSTURE title carries an attention chip when a backup/supply alert is pending or an upstream CRITICAL is behind.

@@ -1,3 +1,10 @@
+## v4.0 — 2026-08-22 — Generalized multi-box fleet monitor
+
+- Added `boxes.json` configuration with a zero-config single `local` default, relay paths, and per-device badge/color/power-cap labels. The shipped example contains dGPU, iGPU, and eGPU labels without assuming any particular hardware.
+- Added pure, safe-default readers and renderers for per-box receipt grids, relay model rows, sidecar states, serving-only throughput, background-agent ledgers, downloads, and admission-lane unions.
+- Receipt rows reserve the model cell before truncating a filename, preserve a right-flush size/date tail, use KB/MB bands, and escape untrusted receipt paths once. `_pad_markup` now preserves markup at exact visible width.
+- All box identity and device metadata now comes from configuration or recorded ledger fields; no deployment identity is encoded in the TUI.
+
 ## v3.45 — 2026-08-08 — HEALTH panel gains RAM + swap (the swap half is the point)
 
 - [feat] `sources/health.py`: new `read_meminfo()` parsing `/proc/meminfo` (4s cache, file read, no

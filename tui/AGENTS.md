@@ -23,7 +23,7 @@ Full plan: `~/pc-passback/fleet-backbone-context/FLEET_TUI_BUILD_PLAN.md`.
 
 ## Layout
 - `fleet_tui/models.py`   — dataclass CONTRACTS (frozen)
-- `fleet_tui/sources/`    — pure readers: `jobs.py` `inbox.py` `health.py` `focus.py`
+- `fleet_tui/sources/`    — pure readers including `boxes.py`, `receipts.py`, `throughput.py`, `lanes.py`, `downloads.py`, and `bg_agents.py`
 - `fleet_tui/widgets/`    — Textual renderers (dumb; render records only)
 - `fleet_tui/app.py`      — the App: layout, refresh timer, key bindings, focus-toggle write
 - `fleet_tui/fleet_cli/`  — the `fleet` control-plane CLI (reuses `sources/*`; run via `~/.local/bin/fleet`).
@@ -46,3 +46,7 @@ See BUILD_PLAN §2. Summary:
 Each source ships with its `tests/test_*.py` GREEN (`.venv/bin/pytest tests/test_<x>.py`) before finish.
 Never finish on a red or un-run test. On a real block after ≤2 targeted fixes, STOP and report the
 blocker in one line (do not thrash) — Claude fixes that module only.
+
+## v4.0 box schema
+
+`~/.fleet_tui/boxes.json` is optional. It accepts either a top-level list or `{ "boxes": [...] }`; each box requires `name` and `kind` (`local` or `remote`). Relay paths are local file paths and are read-only: `receipts_path`, `models_path`, `health_path`, `ledger_path`, `downloads_path`, and `throughput_path`. `device_labels` maps a relay device key to `{ "badge", "color", "power_cap_w" }`. Missing or malformed configuration returns one usable `local` box. Use `docs/boxes.example.json` as a neutral two-box dGPU/iGPU/eGPU example.

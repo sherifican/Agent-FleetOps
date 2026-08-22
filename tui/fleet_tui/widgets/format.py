@@ -130,7 +130,7 @@ def _okfail(ok) -> str:
 
 def _pad_markup(plain: str, markup: str, w: int) -> str:
     """Pad a possibly-marked-up cell to visible width `w` (padding computed on the PLAIN text)."""
-    if len(plain) >= w:
+    if len(plain) > w:
         return plain[:w]          # too long → drop color, truncate (rare; loaded cells are short)
     return markup + " " * (w - len(plain))
 
@@ -714,3 +714,100 @@ def format_research_playlists(playlists, frame=None) -> str:
         lines.append(f"[cyan]▶ check[/]  [b]{escape(p.name)}[/]   [dim]{_human_checked(p.last_checked)}[/]")
     lines.append("[dim]click a playlist → Claude checks it for new videos + stages them for the research team[/]")
     return "\n".join(lines)
+
+
+def _receipt_size(size):
+    """Receipt size with the established KB/MB bands; zero is an explicit empty result."""
+    try:
+        size = max(0, int(size))
+    except (TypeError, ValueError):
+        size = 0
+    if size >= 1024 * 1024:
+        return f"[dodgerblue]{size / (1024 * 1024):.1f}MB[/]"
+    kb = size / 1024
+    color = "green" if kb <= 2 else ("yellow" if kb <= 9 else ("coral" if kb <= 20 else "hotpink"))
+    return f"[{color}]{kb:.1f}KB[/]"
+
+
+def _receipt_row(row, width=58):
+    """One receipt with model reserved before filename and a right-flush size/date tail."""
+    name = escape(str(getattr(row, "name", "?") or "?"))
+    model = escape(str(getattr(row, "model", "") or ""))
+    ts = escape(str(getattr(row, "ts", "") or "")[:10])
+    status = str(getattr(row, "status", "unknown") or "unknown")
+    color = {"ok": "green", "empty": "yellow", "failed": "red"}.get(status, "gray")
+    model_cell = f"[cyan]{model}[/] " if model else ""
+    tail = f" {_receipt_size(getattr(row, 'bytes', 0))} {ts}".rstrip()
+    plain_tail = re.sub(r"\[/?[^\]]+\]", "", tail)
+    budget = max(8, width - len(re.sub(r"\[/?[^\]]+\]", "", model_cell)) - len(plain_tail) - 1)
+    if len(name) > budget:
+        name = name[: max(1, budget - 1)] + "…"
+    body = f"{model_cell}[{color}]{name}[/]"
+    padding = max(1, width - len(re.sub(r"\[/?[^\]]+\]", "", body)) - len(plain_tail))
+    return body + " " * padding + tail
+
+
+def format_receipt_grid(rows, boxes, width=58):
+    """Render the first two configured boxes side-by-side; a single box has no phantom right column."""
+    boxes = list(boxes or [])
+    if not boxes:
+        return "[dim]receipts: n/a[/]"
+    columns = []
+    for box in boxes[:2]:
+        records = [row for row in (rows or []) if getattr(row, "box", "local") == box.name]
+        columns.append([f"[b]{escape(box.name)} RECEIPTS[/b]"] + [_receipt_row(row, width) for row in records[:6]] or ["[dim]n/a[/]"])
+    if len(columns) == 1:
+        return "\n".join(columns[0])
+    left, right = columns
+    out = []
+    for index in range(max(len(left), len(right))):
+        a = left[index] if index < len(left) else ""
+        b = right[index] if index < len(right) else ""
+        av = len(re.sub(r"\[/?[^\]]+\]", "", a))
+        out.append(a + " " * max(1, width - av) + " │ " + b)
+    return "\n".join(out)
+
+
+def format_box_models(boxes, models_by_box, throughput=None):
+    """Only serving rows receive a rate; labels and colors originate in boxes.json."""
+    lines = []
+    rates = throughput or {}
+    for box in boxes or []:
+        rows = list((models_by_box or {}).get(box.name, []) or [])
+        lines.append(f"[b]{escape(box.name)} MODELS[/b]")
+        serving = [row for row in rows if getattr(row, "loaded", False) or getattr(row, "state", "") in {"asleep", "down"}]
+        if not serving:
+            lines.append("[dim]n/a[/]")
+            continue
+        for row in serving:
+            device = str(getattr(row, "device", "") or "")
+            label = getattr(box, "device_labels", {}).get(device)
+            badge = f" [{label.color}]{label.badge}[/]" if label and label.badge and label.color else ""
+            rate = (rates.get(box.name, {}) or {}).get(getattr(row, "name", ""))
+            rate_text = f" [dim]{rate.tok_s:.1f} tok/s[/]" if rate and rate.tok_s > 0 else ""
+            state = str(getattr(row, "state", "") or "")
+            if state == "busy":
+                mark, state_text = "[yellow]▶[/]", "busy"
+            elif state == "asleep":
+                mark, state_text = "[dim]◌[/]", "asleep"
+            elif state == "down":
+                mark, state_text = "[red]×[/]", "down"
+            else:
+                mark, state_text = "◍", "idle"
+            wake = " [dim]wake on use[/]" if getattr(row, "wake_on_use", False) else ""
+            port = f" [dim]:{row.port}[/]" if getattr(row, "port", 0) else ""
+            lines.append(f"{mark} {_color_model(getattr(row, 'name', '?'))}{badge}{port} [dim]{state_text}[/]{rate_text}{wake}")
+    return "\n".join(lines) if lines else "[dim]models: n/a[/]"
+
+
+def format_lanes(lanes, boxes):
+    """Union lane rows with each box's admits and a compact +N initial attribution."""
+    lines = ["[b]LANES[/b]"]
+    for lane in lanes or []:
+        cells = []
+        for box in boxes or []:
+            count = int((getattr(lane, "admits_by_box", {}) or {}).get(box.name, 0) or 0)
+            suffix = f" +{count}{box.name[:1].upper()}" if count else ""
+            cells.append(f"{box.name}:{count}{suffix}")
+        lines.append(f"{escape(str(getattr(lane, 'lane', '?')))} {getattr(lane, 'live', 0)}  " + "  ".join(cells))
+    return "\n".join(lines) if len(lines) > 1 else "[b]LANES[/b]\n[dim]n/a[/]"
