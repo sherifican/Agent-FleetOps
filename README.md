@@ -62,6 +62,7 @@ These will be replaced as the sample deepens.
 |---|---|
 | **GPU** | 2 × NVIDIA RTX 5060 Ti, **16 GB GDDR7 each (32 GB total)** · Blackwell, compute capability **12.0 (sm_120)** · driver 595.71.05, CUDA 13.2 |
 | **CPU** | AMD Ryzen 7 5800XT — 8 cores / 16 threads, boost ~4.97 GHz |
+| **Motherboard** | MSI MAG B550 TOMAHAWK MAX WIFI — **AM4**, a mainstream 2020-era board. One GPU runs at **PCIe 4.0 x8**, the other at **PCIe 3.0 x4** (chipset slot). Neither gets a full x16 link. |
 | **RAM** | 32 GB DDR4 (30 GB usable) + 8 GB swap — 4 × 8 GB running at **2933 MT/s**. Deliberately mismatched: 3 × DDR4-3200 CL16 single-rank + 1 × DDR4-3000 CL15 dual-rank, so the controller settles below both kits' ratings. See the note below. |
 | **Storage** | 2 TB internal NVMe (BIWIN NV7400) for models and working state; 1 TB USB-attached NVMe SSD for backups |
 | **OS** | Ubuntu 26.04 LTS, kernel 7.0 |
@@ -82,6 +83,13 @@ rather than a slope — a model either fits or it doesn't:
   orchestration around the models. System RAM matters more than core count — 32 GB is adequate but
   not generous once several services and a browser are running alongside.
 - Model weights are large. Roughly **700 GB** of models and working state on the internal NVMe here.
+- **Neither the platform nor the PCIe links need to be top-shelf.** This is an AM4 board (MSI B550
+  Tomahawk Max) feeding one card at **PCIe 4.0 x8** and the other at **PCIe 3.0 x4**, with the
+  deliberately mismatched DRAM above settling at 2933 MT/s. Every number in the charts was measured
+  through exactly those links. Once weights are resident, decode traffic barely touches the bus —
+  the choked links show up as slower model *loads*, not slower *inference* — and even the models
+  that span both cards hit their published rates across a 3.0 x4 link. Mismatched, mainstream,
+  lane-starved hardware is sufficient; the VRAM cliff above is the only spec that gates anything.
 
 **Peak decode per model** — weights, quantisation, architecture and run count sit under each name:
 
