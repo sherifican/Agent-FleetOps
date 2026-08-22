@@ -1,5 +1,7 @@
 # Agent-FleetOps
 
+hi quick update, so this was originally a private repo, or at least i thought it was. I've been using it as a backup for my operations with the intent to publish it, I just hadn't realized that it already got published. Anyway I'll keep up with it since I saw that there are some people who cloned it, I'll push more regular updates as I improve things and generalize more of my setup/processes so I can upload them safely.
+
 Operational tooling and discipline for running a **multi-agent AI engineering fleet** — extracted
 and generalized from a working two-workstation setup that routes real engineering work across
 frontier cloud models, cheaper cloud tiers, and local GPU models.
