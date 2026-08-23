@@ -14,6 +14,7 @@ The organizing idea, applied everywhere here:
 ```mermaid
 flowchart TD
     W["Fleet activity <br/>local + cloud model legs"] --> T["fleet-tui <br/>OBSERVE - read-only monitor <br/>no model calls, no autonomous actions"]
+    L["driver lock <br/>SERIALIZE - one writer per tree <br/>(specs/driver-lock-protocol)"] -->|gates writes| W
     W --> G["guard/ <br/>VERIFY - drift guards"]
     TP["teeth_prover <br/>can every guard actually fail?"] -->|proves| G
     G -->|"0 clean / 1 violation / 2 UNMEASURED <br/>(2 dominates 1)"| V{verdict}
@@ -24,8 +25,8 @@ flowchart TD
     style H fill:#3a2a1a,stroke:#ffb347
 ```
 
-Observation never mutates, verification must be able to fail, and evolution of the rules
-themselves passes a human gate. The three loops share one substrate: everything is a file,
+Observation never mutates, writes serialize behind a lock, verification must be able to fail, and
+evolution of the rules themselves passes a human gate. The three loops share one substrate: everything is a file,
 everything is diffable, everything is revertible.
 
 That rule is enforced on this repository itself: the export pipeline's secret scanner and
