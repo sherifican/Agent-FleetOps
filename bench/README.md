@@ -21,7 +21,7 @@ names; blank is more honest than a reconstructed value.
 | | |
 |---|---|
 | Models covered | **20 model tags** |
-| Total measurements | **47** |
+| Total measurements | **55** |
 | Cells with a **single** run | **many; every chart labels n=1** |
 | Largest sample for any model | **4** |
 | Variance / confidence intervals | **none — not computable at these sample sizes** |

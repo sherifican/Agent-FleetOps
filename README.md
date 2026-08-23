@@ -47,7 +47,7 @@ another machine). The commit history tells that story.
 | `_tools/` | The export pipeline's own gates — provenance wall-checker, secrets/personal-data scanner, and a **ref gate**, all mutation-proven (`--self-test`). The first two ask "is this tree safe to publish?"; the third asks the question they structurally cannot: **"what would a push actually publish?"** A history rewrite is only true of the branch you rewrote — this repo's own rewrite left a clean `main` beside two leftover refs still carrying the trailers and build artifacts the rewrite removed, one `push --all` away from being republished. Content gates scan a worktree; pushes carry refs. |
 | `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 165 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus. `2 = UNMEASURED` dominates `1 = violation` throughout. |
 | `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, and the verified-system-map pattern. |
-| `bench/` | **The two-box throughput operating log** — 47 measurements over 20 model tags, with sample sizes and device labels attached. See below. |
+| `bench/` | **The two-box throughput operating log** — 55 measurements over 20 model tags, with sample sizes and device labels attached. See below. |
 
 ### fleet-tui, running
 
