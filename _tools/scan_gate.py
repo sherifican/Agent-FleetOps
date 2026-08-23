@@ -45,7 +45,7 @@ DOC_IP = re.compile(r"\b(192\.0\.2|198\.51\.100|203\.0\.113)\.\d{1,3}\b")
 
 def _allowlist(staging: str):
     """Explicit, reviewable exceptions: _tools/scan_allow.tsv lines of
-    'path-substring<TAB>pattern-name' — a hit matching both is deliberate (e.g. the owner's
+    'exact-relative-path<TAB>pattern-name' — a hit matching both is deliberate (e.g. the owner's
     public GitHub handle in the root README). Every entry is a human decision on record."""
     p = os.path.join(staging, "_tools", "scan_allow.tsv")
     if not os.path.isfile(p):
@@ -79,7 +79,11 @@ def scan(staging: str):
                         hits.append((rel, i, "SECRET", name))
                 for name, pat in PERSONAL_PATTERNS:
                     if pat.search(probe):
-                        if any(sub in rel and pname == name for sub, pname in allow):
+                        # EXACT relative path, not substring: a substring entry "README.md"
+                        # silently allowlisted EVERY README in the tree — found 2026-08-23 when a
+                        # planted identity term in templates/README.md sailed through the teeth
+                        # test. Every allow entry is one file, one human decision.
+                        if any(sub == rel and pname == name for sub, pname in allow):
                             continue
                         hits.append((rel, i, "PERSONAL", name))
     return hits

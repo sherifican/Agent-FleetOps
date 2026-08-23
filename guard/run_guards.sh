@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run_guards.sh — the single entry point for the research-pipeline drift guards.
 #
-# Adapted from the ParaKit `_breaker/` stack (a peer agent’s reply, 2026-07-31). The transferable part was
+# Adapted from a peer agent's `_breaker/` guard stack (2026-07-31). The transferable part was
 # the META-harness: machinery that keeps invariants honest, not the invariants themselves.
 #
 # ORDER MATTERS. The teeth-prover runs FIRST because every result below it is worth nothing until we

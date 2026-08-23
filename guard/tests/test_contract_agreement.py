@@ -20,26 +20,26 @@ from guard.contract_agreement import (  # noqa: E402
 )
 
 VALIDATOR_PY = '''
-BUCKETS = {"ParaKit", "HomeLLM", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory"}
+BUCKETS = {"Flagship-App", "Local-Models", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory"}
 ACTIONS = {"GET", "ADOPT", "ADAPT", "VET", "EXPLORE", "WATCH", "REJECT"}
 BANNED = {"TRY": "VET or EXPLORE", "MONITOR": "WATCH"}
 PRIOS = {"P0", "P1", "P2"}
-PROJECTS = ["HomeLLM", "ParaKit", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory"]
+PROJECTS = ["Local-Models", "Flagship-App", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory"]
 RATINGS = {"HIGH", "MED", "LOW", "NONE"}
 '''
 
 ADDENDUM_MD = """
 ## §3b — RELEVANCE VERDICT LINES
 
-RELEVANCE: HomeLLM = <HIGH|MED|LOW|NONE>
-RELEVANCE: ParaKit = <HIGH|MED|LOW|NONE>
+RELEVANCE: Local-Models = <HIGH|MED|LOW|NONE>
+RELEVANCE: Flagship-App = <HIGH|MED|LOW|NONE>
 RELEVANCE: Fleet-Ops = <HIGH|MED|LOW|NONE>
 RELEVANCE: Tooling-Infra = <HIGH|MED|LOW|NONE>
 RELEVANCE: Research-Pipeline = <HIGH|MED|LOW|NONE>
 RELEVANCE: Memory = <HIGH|MED|LOW|NONE>
 
 ### Bucket — exactly one of these SIX strings
-`ParaKit` · `HomeLLM` · `Fleet-Ops` · `Tooling-Infra` · `Research-Pipeline` · `Memory`
+`Flagship-App` · `Local-Models` · `Fleet-Ops` · `Tooling-Infra` · `Research-Pipeline` · `Memory`
 
 ### Action — a CLOSED vocabulary. Exactly one of these seven strings:
 `GET` · `ADOPT` · `ADAPT` · `VET` · `EXPLORE` · `WATCH` · `REJECT`
@@ -55,7 +55,7 @@ Rejected synonyms, do NOT invent verbs:
 def write_surfaces(tmp_path, validator=VALIDATOR_PY, addendum=ADDENDUM_MD, rollup=None, preamble=None):
     if rollup is None:
         rollup = (
-            'BUCKETS = ["ParaKit", "HomeLLM", "Fleet-Ops", "Tooling-Infra", '
+            'BUCKETS = ["Flagship-App", "Local-Models", "Fleet-Ops", "Tooling-Infra", '
             '"Research-Pipeline", "Memory", "Unsorted"]\n'
             'PRIOS = ["P0", "P1", "P2", "—"]\n'
             'ACTIONS = ["GET", "ADOPT", "ADAPT", "VET", "EXPLORE", "WATCH", "REJECT"]\n'
@@ -95,7 +95,7 @@ def test_reads_vocabularies_from_the_markdown_addendum(tmp_path):
     assert rs["ACTIONS"].values == frozenset(
         {"GET", "ADOPT", "ADAPT", "VET", "EXPLORE", "WATCH", "REJECT"})
     assert rs["BUCKETS"].values == frozenset(
-        {"ParaKit", "HomeLLM", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory"})
+        {"Flagship-App", "Local-Models", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory"})
     assert rs["PRIOS"].values == frozenset({"P0", "P1", "P2"})
 
 
@@ -140,7 +140,7 @@ def test_declared_sentinels_are_not_drift(tmp_path):
 
 def test_an_undeclared_extra_value_IS_drift(tmp_path):
     rollup = (
-        'BUCKETS = ["ParaKit", "HomeLLM", "Fleet-Ops", "Tooling-Infra", '
+        'BUCKETS = ["Flagship-App", "Local-Models", "Fleet-Ops", "Tooling-Infra", '
         '"Research-Pipeline", "Memory", "Unsorted", "DevOps"]\n'
         'ACTIONS = ["GET", "ADOPT", "ADAPT", "VET", "EXPLORE", "WATCH", "REJECT"]\n'
     )
@@ -164,8 +164,8 @@ def test_disagreement_message_names_both_surfaces(tmp_path):
 
 def test_projects_and_buckets_must_be_equal(tmp_path):
     v = VALIDATOR_PY.replace(
-        'PROJECTS = ["HomeLLM", "ParaKit", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory"]',
-        'PROJECTS = ["HomeLLM", "ParaKit", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline"]')
+        'PROJECTS = ["Local-Models", "Flagship-App", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory"]',
+        'PROJECTS = ["Local-Models", "Flagship-App", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline"]')
     msgs = compare(readings_for(write_surfaces(tmp_path, validator=v)))
     assert msgs and any("Memory" in m for m in msgs)
 

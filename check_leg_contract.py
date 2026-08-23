@@ -18,12 +18,12 @@ import re, sys, os
 # "Memory" was missing here while §3b asked legs to RATE Memory, so legs that used it as a bucket were
 # flagged for being consistent. When a vocabulary lives in two places it drifts; this is the second time
 # (see the TRY/MONITOR case). (fix 2026-07-30, caught by the watchdog.)
-BUCKETS = {"ParaKit", "HomeLLM", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory"}
+BUCKETS = {"Flagship-App", "Local-Models", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory"}
 ACTIONS = {"GET", "ADOPT", "ADAPT", "VET", "EXPLORE", "WATCH", "REJECT"}
 BANNED = {"TRY": "VET or EXPLORE", "MONITOR": "WATCH", "CONSIDER": "EXPLORE",
           "INVESTIGATE": "VET", "TBD": "pick one of the seven", "TEST": "VET"}
 PRIOS = {"P0", "P1", "P2"}
-PROJECTS = ["HomeLLM", "ParaKit", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory"]
+PROJECTS = ["Local-Models", "Flagship-App", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory"]
 RATINGS = {"HIGH", "MED", "LOW", "NONE"}
 
 

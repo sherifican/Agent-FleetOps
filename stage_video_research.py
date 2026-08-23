@@ -36,14 +36,14 @@ HIGH = {"f61DCDwvFis","L9QZ97y9Exg","xFEcAGB5kyg","uqNpKVpmajw","9gHcmhUDJfw",
         "DbeFq_uoaRs","Sb96po6S67k","YN05CyV_TpM","u6L9aedHqZc","zmrPY6S1FwY","K2BpNt3UBOQ",
         "NVkRkioBXQc","7zZy1QTvokM","TpEBYINwokA","ZCsPUsJUSf8","okdwcU-UC-w","ESELhY-G_9w",
         "mG4SmhWyeFA","n8rP6Ceskm4","mGYr9VqQnEI","Owv503rTqYY",
-        # 2026-07-07 new playlist batch — clearly fleet-relevant (HomeLLM/Hermes/GLM/Ornith/MCP/RAG/A2A):
+        # 2026-07-07 new playlist batch — clearly fleet-relevant (Local-Models/Hermes/GLM/Ornith/MCP/RAG/A2A):
         "tC0Dv5qOcas","_Jdjq6pgIRg","wDpN2ORnqZk","VytSYCDhWQ0","GuTcle5edjk","tA7COD7l6o8",
         "SfP1YBO2tNo","bXn1BPYNHew","_X55fkwdC-Q","XbHeJL45USQ",
         # 2026-07-13 new batch — image-token MEMORY method (owner priority) + local-frontier + tiny function-calling:
         "Bbt8cEyzsTk","dElQ1atTSCI","tt9UJ0NiOzU",
         # 2026-07-28 new batch (77 videos). HIGH = bears on a CURRENT fleet decision, not merely interesting:
         #  local-model landscape we actually route to (GLM/Qwen/Kimi-K3/Colibri/local-coding),
-        #  HomeLLM fine-tuning (Unsloth/Ollama FT), our own tools (Graphify), memory architecture
+        #  Local-Models fine-tuning (Unsloth/Ollama FT), our own tools (Graphify), memory architecture
         #  (we run a Tier-2 brain), MCP (we run MCP servers), and cross-model routing.
         "SsUKTFSQoGM","T8v8Rxr8rMM","60lYsmAhoAg","ERCdFgTXNY4","A61WYw5-FLM","V6LmF7TuBmY",
         "uNfkHpNfXow","3uOOwUCfl9w","19xCOJxWU0A","2hMQ2k1JLA0","QfCpRTLSOB4","MsdZZ-HEUFo",
@@ -97,7 +97,7 @@ preamble = f"""# DISPATCH PREAMBLE — prepend before EVERY video-research dispa
 ## METHOD — video-research-report (apply all 4 sections)
 - **§1 TRANSCRIPT REPORT** — read the transcript ONCE (small text file). Condensed overview + EVERY load-bearing claim as a numbered list. Sanity-check the parse (lesson 6).
 - **§2 PER-CLAIM VERIFICATION** — one ROW per named entity/number/repo/person (lesson 4); self-citation hard law, this-run URLs only (lesson 7); match search source to claim type + direct owner/repo fetch before any ❌ (lesson 10); cap live fetches at the ~10-15 LOAD-BEARING (lesson 14). Verdicts: ✅ CORROBORATED / ⚠️ PARTIAL / ⚠️ UNSUBSTANTIATED / ❌ CONTRADICTED (❌ is a HIGH bar).
-- **§3 RELEVANCE** — FIRST emit the six `RELEVANCE: <Project> = <HIGH|MED|LOW|NONE>` verdict lines exactly as specified in the ACTIONABLE ADDENDUM (they are parsed mechanically; prose is not a rating, and `NONE` is a correct and expected answer). Then rate to each Fleet project — the SIX exact names, which are also the six §5 buckets: **HomeLLM** (local fine-tuning/inference on dual RTX 5060 Ti) · **ParaKit** (drum-charting: audio detection/MIDI/automation) · **Fleet-Ops** (orchestration / routing / cost / agent methodology) · **Tooling-Infra** (CLIs, MCP servers, dev tooling, monitoring, security) · **Research-Pipeline** (the video/research pipeline itself) · **Memory** (the Tier-2 brain: memory architecture, wiki-links, hygiene, retrieval). HIGH/MED/LOW/NONE + the specific thread + an action from the CLOSED vocabulary (GET/ADOPT/ADAPT/VET/EXPLORE/WATCH/REJECT). ⚠ `TRY` and `MONITOR` are NOT valid — this line previously prescribed them, which is why legs emitted them; use VET/EXPLORE and WATCH instead.
+- **§3 RELEVANCE** — FIRST emit the six `RELEVANCE: <Project> = <HIGH|MED|LOW|NONE>` verdict lines exactly as specified in the ACTIONABLE ADDENDUM (they are parsed mechanically; prose is not a rating, and `NONE` is a correct and expected answer). Then rate to each Fleet project — the SIX exact names, which are also the six §5 buckets: **Local-Models** (local fine-tuning/inference on dual RTX 5060 Ti) · **Flagship-App** (drum-charting: audio detection/MIDI/automation) · **Fleet-Ops** (orchestration / routing / cost / agent methodology) · **Tooling-Infra** (CLIs, MCP servers, dev tooling, monitoring, security) · **Research-Pipeline** (the video/research pipeline itself) · **Memory** (the Tier-2 brain: memory architecture, wiki-links, hygiene, retrieval). HIGH/MED/LOW/NONE + the specific thread + an action from the CLOSED vocabulary (GET/ADOPT/ADAPT/VET/EXPLORE/WATCH/REJECT). ⚠ `TRY` and `MONITOR` are NOT valid — this line previously prescribed them, which is why legs emitted them; use VET/EXPLORE and WATCH instead.
 - **§4 STANDOUT + SKILLS** — standout YES/NO/MAYBE + theme bucket; list any INSTALLABLE skills (name · what · install command · license).
 - **Cross-reference prior fleet reports** where this overlaps (lesson 9) — cite + spend fresh effort on what's NEW. **SHIP A PARTIAL** — always leave a written report at the OUTPUT path (lesson 14).
 """
@@ -125,7 +125,7 @@ for line in open(NEWVIDS):
 
 ## Task
 Run the full video-research method (§1-§4 in the preamble) on this video, working from the parsed transcript above.
-Focus §3 relevance on HomeLLM (local FT/inference), ParaKit (drum detection/MIDI), and the Fleet fleet (orchestration/cost/local-AI).
+Focus §3 relevance on Local-Models (local FT/inference), Flagship-App (drum detection/MIDI), and the Fleet fleet (orchestration/cost/local-AI).
 
 ## Dispatch
 - Full-leg roster: **kimi** (Hermes) + **grok** (owner desktop). Local models do NOT carry a full leg — use gemma4:31b-qat only for a SCOPED audit of the FINAL.

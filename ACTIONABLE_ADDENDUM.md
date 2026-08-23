@@ -4,7 +4,8 @@ Emit these **six lines verbatim**, each on its own line, filling in one rating. 
 discussion below them as normal. The lines are parsed mechanically — prose alone is not a rating.
 
 ```
-RELEVANCE: HomeLLM = <HIGH|MED|LOW|NONE>
+RELEVANCE: Flagship-App = <HIGH|MED|LOW|NONE>
+RELEVANCE: Local-Models = <HIGH|MED|LOW|NONE>
 RELEVANCE: Fleet-Ops = <HIGH|MED|LOW|NONE>
 RELEVANCE: Tooling-Infra = <HIGH|MED|LOW|NONE>
 RELEVANCE: Research-Pipeline = <HIGH|MED|LOW|NONE>
@@ -18,9 +19,9 @@ Rate by **evidence in THIS video**, not by how interesting the project is:
 - `HIGH` — the video contains material that bears on a decision we are making now.
 - `MED` — genuinely useful to that project, no urgency.
 - `LOW` — a real but thin or indirect thread.
-- `NONE` — **the video contains nothing on that project's subject matter.** If a video has no audio, MIDI,
-  onset-detection or drum-charting content, **ParaKit is NONE** — an argument that "the general pattern
-  could apply" is not relevance, it applies to almost anything.
+- `NONE` — **the video contains nothing on that project's subject matter.** If your flagship project is,
+  say, an audio tool and a video contains nothing about audio, **Flagship-App is NONE** — an argument that
+  "the general pattern could apply" is not relevance, it applies to almost anything.
 
 ---
 
@@ -37,10 +38,15 @@ software — a *method* ("run the verifier outside the agent loop") is an action
 | :--- | :--- | :---: | :---: | :---: | :--- | :---: |
 
 ### Bucket — exactly one of these SIX strings, spelled exactly
-`ParaKit` · `HomeLLM` · `Fleet-Ops` · `Tooling-Infra` · `Research-Pipeline` · `Memory`
-(drum-charting audio/MIDI · local FT+inference on dual RTX 5060 Ti · orchestration/routing/cost/agent
+`Flagship-App` · `Local-Models` · `Fleet-Ops` · `Tooling-Infra` · `Research-Pipeline` · `Memory`
+(your main application project · your local model FT+inference stack · orchestration/routing/cost/agent
 method · CLIs, MCP servers, dev tooling, monitoring, security · the video/research pipeline itself ·
-the Tier-2 brain: memory architecture, wiki-links, hygiene/lint, retrieval)
+memory architecture, wiki-links, hygiene/lint, retrieval)
+
+> **Adapt these buckets.** `Flagship-App` and `Local-Models` are PLACEHOLDERS — rename them to your own
+> projects. The vocabulary is enforced across four surfaces by the contract-agreement guard, so change it
+> in ALL of: this file, `check_leg_contract.py`, `actionable_rollup.py`, and `guard/teeth_prover.py`
+> (the guard tests will fail on any surface you miss — that is the guard doing its job).
 
 **The six buckets MATCH the six `RELEVANCE:` projects above, deliberately.** If you rate `Memory = HIGH`,
 `Memory` is a valid bucket for a row. (Earlier these two lists disagreed — §3b had six projects, §5 had

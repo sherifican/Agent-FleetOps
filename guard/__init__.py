@@ -1,6 +1,6 @@
 """guard — drift / mutation guards for the video-research pipeline.
 
-Adapted from the ParaKit `_breaker/` stack (a peer agent, 2026-07-31). The transferable part turned out to
+Adapted from a peer agent's `_breaker/` guard stack (2026-07-31). The transferable part turned out to
 be the meta-harness — the machinery that keeps invariants honest — not the invariants themselves.
 
   research_properties.py  artifact -> deterministic property vector (no stored baseline; see the reply)

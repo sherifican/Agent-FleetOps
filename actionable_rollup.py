@@ -2,7 +2,7 @@
 """actionable_rollup.py — build the cross-video ACTIONABLE ITEMS rollup.
 
 Owner ask (2026-07-30): "compile a list of potentially useful skills, workflows, repos, tools, and
-anything else that stands out or has high relevance to parakit or our system stack / fleet operations
+anything else that stands out or has high relevance to your projects or system stack / fleet operations
 into an actionable items list, organized by priority/relevance to a particular project or system
 function / fleet operations optimization / upgrades."
 
@@ -27,7 +27,7 @@ import re, os, glob, argparse, collections
 BASE = "~/Fleet-PC-Passback/Research-fleet"
 OUT_DEFAULT = f"{BASE}/ACTIONABLE_ROLLUP.md"
 
-BUCKETS = ["ParaKit", "HomeLLM", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory", "Unsorted"]
+BUCKETS = ["Flagship-App", "Local-Models", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory", "Unsorted"]
 PRIOS = ["P0", "P1", "P2", "—"]
 ACTIONS = ["GET", "ADOPT", "ADAPT", "VET", "EXPLORE", "WATCH", "REJECT"]
 # trust order: a FINAL is reconciled + audited; a synthesis is one model; a single leg is one model unverified
@@ -36,8 +36,10 @@ SRC_TRUST = {"FINAL": 3, "SYNTHESIS": 2, "LEDGER": 2, "RESULT": 1}
 # heuristic bucketing for v1 rows (no Bucket column). First match wins; deliberately conservative —
 # anything that does not clearly match stays Unsorted so a human re-triages rather than trusting a guess.
 BUCKET_HINTS = [
-    ("ParaKit", r"\b(drum|onset|midi|stem|demucs|audio|chart(ing)?|tempo|beat|transcri(be|ption) of audio|spectrogram)\b"),
-    ("HomeLLM", r"\b(fine[- ]?tun|unsloth|lora|qlora|quantiz|gguf|vram|distill|train(ing)?|dataset|rtx|gpu memory"
+    # EDIT ME: keyword route for YOUR flagship project. The words below are an EXAMPLE from the
+    # origin fleet (an audio app); replace them with terms from your own domain or the route is dead.
+    ("Flagship-App", r"\b(drum|onset|midi|stem|demucs|audio|chart(ing)?|tempo|beat|transcri(be|ption) of audio|spectrogram)\b"),
+    ("Local-Models", r"\b(fine[- ]?tun|unsloth|lora|qlora|quantiz|gguf|vram|distill|train(ing)?|dataset|rtx|gpu memory"
                 r"|glm-?\d|qwen|codestral|gemma|llama|mistral|deepseek|moe\b|\d+b\b|ollama|llama\.?cpp|vllm)\b"),
     ("Research-Pipeline", r"\b(transcript|caption|subtitle|whisper|frame|vision|screenshot|synthesis|hub card|playlist|ocr)\b"),
     ("Tooling-Infra", r"\b(mcp|cli|docker|container|backup|monitor|systemd|cron|proxy|server|self[- ]host|dashboard|obsidian|syncthing)\b"),

@@ -62,8 +62,8 @@ DEFAULT_FIXTURE = """# RESULT — teeth-prover self-test fixture (clean)
 
 Source: https://youtu.be/dQw4w9WgXcQ
 
-RELEVANCE: HomeLLM = NONE
-RELEVANCE: ParaKit = NONE
+RELEVANCE: Local-Models = NONE
+RELEVANCE: Flagship-App = NONE
 RELEVANCE: Fleet-Ops = HIGH
 RELEVANCE: Tooling-Infra = MED
 RELEVANCE: Research-Pipeline = LOW
@@ -104,8 +104,8 @@ _RE_SOURCE_URL = re.compile(r"https?://\S*(?:youtu\.be|youtube\.com)\S*")
 
 _ACTION_CELLS = ("| GET |", "| ADOPT |", "| ADAPT |", "| VET |", "| EXPLORE |", "| WATCH |",
                  "| REJECT |")
-_BUCKET_CELLS = ("| Tooling-Infra |", "| ParaKit |", "| Memory |", "| Fleet-Ops |",
-                 "| HomeLLM |", "| Research-Pipeline |")
+_BUCKET_CELLS = ("| Tooling-Infra |", "| Flagship-App |", "| Memory |", "| Fleet-Ops |",
+                 "| Local-Models |", "| Research-Pipeline |")
 _PRIO_CELLS = ("| P0 |", "| P1 |", "| P2 |")
 
 

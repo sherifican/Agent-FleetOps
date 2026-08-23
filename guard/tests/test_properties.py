@@ -25,8 +25,8 @@ CLEAN = f"""# RESULT — a clean leg report
 
 Source: https://youtu.be/{REAL_ID}
 
-RELEVANCE: HomeLLM = NONE
-RELEVANCE: ParaKit = NONE
+RELEVANCE: Local-Models = NONE
+RELEVANCE: Flagship-App = NONE
 RELEVANCE: Fleet-Ops = HIGH
 RELEVANCE: Tooling-Infra = MED
 RELEVANCE: Research-Pipeline = LOW
@@ -94,7 +94,7 @@ def test_relevance_values_valid_goes_red_on_a_bogus_rating():
 
 def test_relevance_calibrated_goes_red_when_everything_is_high():
     text = CLEAN
-    for proj in ("HomeLLM", "ParaKit", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory"):
+    for proj in ("Local-Models", "Flagship-App", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory"):
         text = text.replace(f"{proj} = NONE", f"{proj} = HIGH")
         text = text.replace(f"{proj} = MED", f"{proj} = HIGH")
         text = text.replace(f"{proj} = LOW", f"{proj} = HIGH")
