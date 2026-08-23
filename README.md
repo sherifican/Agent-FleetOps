@@ -268,4 +268,4 @@ multi-agent development workflow drove most of these disciplines into existence.
 
 ## License
 
-GPL-3.0 — see LICENSE.
+MIT — see LICENSE.
