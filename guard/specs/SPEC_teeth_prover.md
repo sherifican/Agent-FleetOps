@@ -112,7 +112,7 @@ from a property that does not work.
 Default fixture: the module constant `DEFAULT_FIXTURE`, a clean in-file report string (so the prover
 runs with zero external dependencies). `--fixture` replays a real cached `RESULT_*.md` instead.
 When `--fixture` is given and no `--registry`, default the registry to the tmp backlogs
-`~/.claude/jobs/c08a8bf5/tmp/backlog_all.txt` so `video_ids_resolve` is actually evaluated.
+`$TEETH_REGISTRY` (your worklist file) so `video_ids_resolve` is actually evaluated.
 
 Print one line per mutation: `<outcome padded>  <mutation>  -> <target>` plus collateral/detail when
 present, then a summary counting each outcome.

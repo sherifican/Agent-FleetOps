@@ -24,7 +24,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import vision_ingest as vi
 
-CORPUS = "~/pc-passback/Research-fleet/video/*/vision/keeps/*.jpg"
+CORPUS = os.environ.get("VISION_CORPUS_GLOB", "./video/*/vision/keeps/*.jpg")  # EDIT ME
 FAILS = []
 PROVEN = []
 

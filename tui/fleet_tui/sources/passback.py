@@ -7,7 +7,7 @@ import os
 import time
 
 DOCS_GLOB = os.path.expanduser("~/Documents/PASSBACK_*.md")
-PC_GLOB   = os.path.expanduser("~/pc-passback/PC_CLAUDE_*.md")
+PC_GLOB   = os.path.expanduser(os.environ.get("PASSBACK_PC_GLOB", "~/comms/inbound/PC_CLAUDE_*.md"))  # EDIT ME
 SEEN_FILE = os.path.expanduser("~/.fleet_tui/passback_seen.json")
 
 

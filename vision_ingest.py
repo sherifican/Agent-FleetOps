@@ -63,7 +63,7 @@ COMPANION_MAX = int(os.environ.get("VI_COMPANION_MAX", "10"))      # hard ceilin
 RESERVE_EXTRA = int(os.environ.get("VI_RESERVE_EXTRA", "5"))
 
 
-WHISPERX_BIN = os.environ.get("VI_WHISPERX_BIN", "~/whisperx-venv/bin/whisperx")
+WHISPERX_BIN = os.environ.get("VI_WHISPERX_BIN", "whisperx")  # EDIT ME: PATH or your venv binary
 WHISPERX_MODEL = os.environ.get("VI_WHISPERX_MODEL", "large-v2")
 WHISPERX_COMPUTE = os.environ.get("VI_WHISPERX_COMPUTE", "float16")   # int8 for CPU/low-VRAM
 

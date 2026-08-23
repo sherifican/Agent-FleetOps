@@ -36,7 +36,7 @@ import os
 import shutil
 import sys
 
-DEFAULT_ROOT = "~/pc-passback/CLAUDE-COMMS"
+DEFAULT_ROOT = os.environ.get("COMMS_ROOT", "~/comms")  # EDIT ME: your comms root
 
 # prefix -> the folder it belongs in
 # NARROW BY DESIGN. A first draft asserted a full prefix->folder mapping and fired on 31 files across
@@ -56,7 +56,7 @@ ASK_FOLDER = "requests"
 
 # Only these directions are checked; topic sub-folders (kick_gate_sweep/, corpus_multitier/, …) are
 # deliberate working areas and are NOT governed by the prefix rule.
-DIRECTIONS = ("fleet-to-win", "win-to-fleet")
+DIRECTIONS = ("outbound", "inbound")  # EDIT ME: your channel direction names
 GOVERNED = ("requests", "replies", "reports")
 
 

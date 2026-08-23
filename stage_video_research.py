@@ -24,45 +24,20 @@ FEEDBACK = "~/Fleet-PC-Passback/fleet-backbone-context/FLEET_FEEDBACK.md"
 NEWVIDS = os.environ.get("VIDEO_NEWVIDS", "/tmp/new_videos.txt")
 os.makedirs(OUT, exist_ok=True)
 
-# Owner's priority pin for THIS batch — was hard-coded to an old batch's id ("f61DCDwvFis") and silently
+# Owner's priority pin for THIS batch — was hard-coded to an old batch's id and silently
 # misdirected dispatch on every later run. Now env-overridable and defaulted to the current batch's pin;
 # set VIDEO_PRIORITY_PIN="" to disable. (fix 2026-07-30)
-PRIORITY_PIN = os.environ.get("VIDEO_PRIORITY_PIN", "P1KpxzLVg7c")
+PRIORITY_PIN = os.environ.get("VIDEO_PRIORITY_PIN", "")  # EDIT ME: pin one of YOUR video ids, or leave unset
 
 # fleet-relevance pre-screen (orchestrator judgment from titles)
-HIGH = {"f61DCDwvFis","L9QZ97y9Exg","xFEcAGB5kyg","uqNpKVpmajw","9gHcmhUDJfw",
-        "mdPIjy-1Q6g","pDsTcrRVNc0","cV4zHxb-Q3k","g-qW8fQimyg",
-        # 2026-06-23 new batch (fleet/Hermes/Gemma-local/memory-method/DeepSeek/cost):
-        "DbeFq_uoaRs","Sb96po6S67k","YN05CyV_TpM","u6L9aedHqZc","zmrPY6S1FwY","K2BpNt3UBOQ",
-        "NVkRkioBXQc","7zZy1QTvokM","TpEBYINwokA","ZCsPUsJUSf8","okdwcU-UC-w","ESELhY-G_9w",
-        "mG4SmhWyeFA","n8rP6Ceskm4","mGYr9VqQnEI","Owv503rTqYY",
-        # 2026-07-07 new playlist batch — clearly fleet-relevant (Local-Models/Hermes/GLM/Ornith/MCP/RAG/A2A):
-        "tC0Dv5qOcas","_Jdjq6pgIRg","wDpN2ORnqZk","VytSYCDhWQ0","GuTcle5edjk","tA7COD7l6o8",
-        "SfP1YBO2tNo","bXn1BPYNHew","_X55fkwdC-Q","XbHeJL45USQ",
-        # 2026-07-13 new batch — image-token MEMORY method (owner priority) + local-frontier + tiny function-calling:
-        "Bbt8cEyzsTk","dElQ1atTSCI","tt9UJ0NiOzU",
-        # 2026-07-28 new batch (77 videos). HIGH = bears on a CURRENT fleet decision, not merely interesting:
-        #  local-model landscape we actually route to (GLM/Qwen/Kimi-K3/Colibri/local-coding),
-        #  Local-Models fine-tuning (Unsloth/Ollama FT), our own tools (Graphify), memory architecture
-        #  (we run a Tier-2 brain), MCP (we run MCP servers), and cross-model routing.
-        "SsUKTFSQoGM","T8v8Rxr8rMM","60lYsmAhoAg","ERCdFgTXNY4","A61WYw5-FLM","V6LmF7TuBmY",
-        "uNfkHpNfXow","3uOOwUCfl9w","19xCOJxWU0A","2hMQ2k1JLA0","QfCpRTLSOB4","MsdZZ-HEUFo",
-        "pTaSDVz0gok","HGPTUc7tEq4","LPDWUWP9SCk","U7fcJvVukHQ","zIiiu8hS1To","22iy2mDFiF8",
-        "IwN-eK1s8og","3PbZ1h6buks","kDM2rBcvWh0","AQl5Q-0l7FQ",
-        # 2026-07-30 new batch (4 videos). Buzz AI = OWNER PRIORITY, dispatch first.
-        #  Buzz AI = a Claude-Code<->Codex interop tool (we run BOTH as fleet legs, so it bears directly on
-        #  our cross-leg orchestration); token-limit/context method (we are context-bound on every long
-        #  session); MCP servers for a home lab (we run an MCP registry + second-brain MCP).
-        "P1KpxzLVg7c","Y8vAQ1FgNbM","NgAglRc_ccs"}
-LOW = {"PhVBCMPx4W4","6TK7gH920uI","ioJ0dCbeWTs","7w_tjX04BDY","j7xKK1odKs0","MwZq2_J_lSY","vuezTFo4kRE",
-       "NnYLzGMk8Tg","TSl0RZK5Slo","mOBvnwM5iX4",
-       # 2026-07-07 new batch — tangential to the fleet (a language intro / tmux tool / animator / web framework):
-       "qy4iPvFFcV8","5GtkyPvuvbQ","z6Kj8vSCOpE","PgyggSRHY1o",
-       # 2026-07-28 batch — general web/infra/careers/opinion with no fleet thread:
-       "3Qc49WnQnSg","XJC5WB2Bwrc","I2mWnh66Bkg","WZoC1HA1vec","4Lmqvn_yz-c","1-hC_erTDwA",
-       "VQHRUQDCh_Q","CXSvKcLovAk","NJpP5Z26g0w","cZqFaMlufDY","98JTsdLSzuc","W99Sm8wldQU",
-       "Ja6p4j0aeCw","131yAOjxHHQ","f39MnczcJZA","1PXFAFMgdns","sUJI49dTAms","yW3zMV2rFo4",
-       "uJblcC4lKYw","ro5FHh_voqk","Noo0NWD0gHU","oqjn7UyCWWA","MsQACpcuTkU","xJaMTo2YgO8"}
+HIGH = {
+        # EDIT ME — example ids only; put YOUR high-priority video ids here
+        "dQw4w9WgXcQ",
+    }
+LOW = {
+        # EDIT ME — example ids only
+        "oHg5SJYRHA0",
+    }
 def tier(v): return "HIGH" if v in HIGH else ("LOW" if v in LOW else "MED")
 
 def parse_vtt(path):

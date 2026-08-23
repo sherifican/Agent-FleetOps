@@ -294,7 +294,7 @@ _TGT_GROUP_COLOR = {"Cloud legs": "deepskyblue", "Local models": "cyan",
                     "Combos": "orange", "Teams": "magenta"}
 
 
-SCORECARD_FILE = os.path.expanduser("~/pc-passback/Research-fleet/viz_assets/reports/fleet_pairings_scorecard.html")
+SCORECARD_FILE = os.path.expanduser(os.environ.get("FLEET_RESEARCH_DIR", "~/research") + "/viz_assets/reports/fleet_pairings_scorecard.html")
 
 
 def _scorecard_brief(summary: dict) -> str:

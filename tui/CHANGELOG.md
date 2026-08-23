@@ -292,7 +292,7 @@
 
 ## v3.15 — 2026-07-07 — WinClaude passback inbox + header attention counter
 - **[feat]** New `sources/passback.py` + **PassbackModal** (key **`p`**): WinClaude→Fleet passback files
-  (`~/Documents/PASSBACK_*` + `pc-passback/PC_CLAUDE_*`) newest-first with an unread `●` marker;
+  (the two peer-message globs) newest-first with an unread `●` marker;
   opening the modal marks them seen. Seen-state lives in `~/.fleet_tui/passback_seen.json` — the passback
   files themselves are never touched. (Roadmap wave #5.)
 - **[qol]** **Header attention counter** — the Header sub-title now shows a single-glance

@@ -7,7 +7,7 @@ into an actionable items list, organized by priority/relevance to a particular p
 function / fleet operations optimization / upgrades."
 
 Reads every actionable-items table the pipeline produces and emits ONE prioritized document grouped by
-BUCKET (which part of our world it upgrades) then PRIORITY then ACTION.
+BUCKET (which configured project it upgrades) then PRIORITY then ACTION.
 
 Two table formats are handled:
   v1 (vision-synthesis harvest, pre-2026-07-30, 5 cols): Item | What | Action | Why | [MM:SS]
@@ -219,7 +219,7 @@ def render(items):
     apos = {a: i for i, a in enumerate(ACTIONS)}
     ppos = {p: i for i, p in enumerate(PRIOS)}
     out = ["# ACTIONABLE ITEMS — cross-video rollup", "",
-           "Everything the video-research pipeline surfaced that has real pull on our stack — skills, "
+           "Everything the video-research pipeline surfaced that has real pull on the configured stack — skills, "
            "workflows, repos, tools, models, MCP servers, methods — **grouped by what it upgrades, then by "
            "priority**. Built by `fleet_optests/actionable_rollup.py`; regenerate after every batch.", ""]
     tot = len(items)

@@ -49,7 +49,7 @@ The strict measure also cross-validates: strict p=0 = 0.0677 reproduces the inde
 
 Before any sweep numbers are reported, the run must print an anchor line comparing the STRICT p=0
 aggregate — restricted to songs whose `name` appears in
-`~/pc-passback/CLAUDE-COMMS/fleet-to-win/reports/merge_validation_results.json` —
+`<comms-root>/outbound/reports/merge_validation_results.json` —
 against the known value:
 
       expected STRICT p=0 add-precision on the reference subset = 0.0677  (report states 6.7%)

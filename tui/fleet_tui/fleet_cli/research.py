@@ -8,7 +8,7 @@ from typing import Dict, Any
 
 from fleet_tui.sources import dispatch
 
-RESEARCH_DIR = os.path.expanduser("~/pc-passback/Research-fleet")
+RESEARCH_DIR = os.path.expanduser(os.environ.get("FLEET_RESEARCH_DIR", "~/research"))  # EDIT ME
 
 def launch_research(slug: str, question: str) -> Dict[str, Any]:
     """

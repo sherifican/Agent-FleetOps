@@ -7,7 +7,7 @@ gate tests/test_passback.py EXACTLY. Do NOT edit models.py (return plain dicts, 
 
 MODULE-LEVEL constants (tests monkeypatch these — must be module attributes with these names):
     DOCS_GLOB = "~/Documents/PASSBACK_*.md"
-    PC_GLOB   = "~/pc-passback/PC_CLAUDE_*.md"
+    PC_GLOB   = "$PASSBACK_PC_GLOB (your inbound-message glob)"
     SEEN_FILE = "~/.fleet_tui/passback_seen.json"
 
 Use `import glob, json, os, time`.

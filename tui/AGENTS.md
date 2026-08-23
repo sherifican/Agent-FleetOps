@@ -4,7 +4,7 @@
 A lightweight **Textual** MONITOR + INBOX + QUICK-CONTROL window over the EXISTING Fleet fleet stack.
 It READS state files the fleet already produces + one control semaphore (`watchers.lock`). It is NOT
 an orchestrator, NOT a code editor, NOT an intervention gateway.
-Full plan: `~/pc-passback/fleet-backbone-context/FLEET_TUI_BUILD_PLAN.md`.
+Full plan: kept in the origin fleet's private notes; this file is self-contained.
 
 ## HARD contracts (never violate)
 1. **Never crash on a missing/malformed state file.** A source returns `[]`/`unavailable`; the widget

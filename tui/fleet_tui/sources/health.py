@@ -12,7 +12,7 @@ import urllib.request
 
 DEFAULT_SERVICES = ["hermes-gateway", "openrgb-server"]
 BIG_MODEL_BYTES = 15_000_000_000
-RELIABILITY_PATH = os.path.expanduser("~/pc-passback/FLEET_HEALTH_latest.txt")
+RELIABILITY_PATH = os.path.expanduser(os.environ.get("FLEET_HEALTH_FILE", "~/comms/FLEET_HEALTH_latest.txt"))  # EDIT ME
 DISK_PATH = "~"   # the partition holding models (~/.ollama) + logs; what fills up
 
 # The UI refreshes ~every 3s, but `fleet-doctor --json` spawns nvidia-smi + systemctl + subprocess probes;

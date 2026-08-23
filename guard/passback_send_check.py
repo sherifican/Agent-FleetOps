@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """passback_send_check.py — does a peer agent actually hold what we think we sent?
 
-Backlog D19. The rule "writing a file into fleet-to-win/ is not sending it" was written 2026-07-28 and did
+Backlog D19. The rule "writing a file into the outbox is not sending it" was written 2026-07-28 and did
 not prevent four replies sitting undelivered for a day on 08-01, or a stale `run_guards.sh` on 08-03. A rule
 that has failed twice is a mechanism that does not exist.
 
@@ -19,9 +19,9 @@ Three states, because two is what caused the original failure:
 
 ★ WHY "NOT-PUSHED" IS NOT A VIOLATION — this check was WRONG on its first run and this is the
 correction. There are TWO delivery paths, and this box can only observe one:
-  (1) `topc` push  -> lands in Downloads/fleet-to-win_<date>/  -- observable here
+  (1) push script -> lands in the receiver's dated transfer dir  -- observable here
   (2) a peer agent reading the outbox IN PLACE from this box over the .100 SSH link (documented in
-      [[fleet-pc-passback-channel]]; the `claude-pc-to-fleet` key and its logins are real)  -- NOT observable
+      the channel's SSH key and its logins are real)  -- NOT observable
 So "absent from Downloads" cannot distinguish NEVER-SENT from READ-IN-PLACE. Reporting it as a violation
 would assert knowledge we do not have, and would be the same two-states-one-output defect this whole
 subsystem exists to catch — a check that cries wolf trains you to ignore it, which is worse than no check.
@@ -40,7 +40,7 @@ known, enumerated and printed. That is a SCOPE LIMIT, which belongs in the OUTPU
 Generalisable: UNMEASURED-dominates is right when unmeasured is EXCEPTIONAL, and becomes a zero-information
 generator the moment unmeasured is the permanent baseline.
 
-PRE-CONVENTION FILES ARE NEVER COUNTED AS VERIFIED. Dated transfer dirs (Downloads/fleet-to-win_<date>/)
+PRE-CONVENTION FILES ARE NEVER COUNTED AS VERIFIED. Dated transfer dirs on the receiver
 only start 2026-07-28; anything older crossed by other means and cannot be checked from here. They are
 printed with a count on every run, never silently dropped — a check that quietly excludes what it cannot
 judge reports a cleanliness it did not measure.
@@ -49,7 +49,7 @@ Usage:  passback_send_check.py [--json] [--quiet]
 """
 import base64, hashlib, json, os, subprocess, sys
 
-OUTBOX = "~/pc-passback/CLAUDE-COMMS/fleet-to-win"
+OUTBOX = os.environ.get("PASSBACK_OUTBOX", "~/comms/outbound")  # EDIT ME: your outbox dir
 PCSH = "~/.local/bin/pcsh"
 REMOTE_GLOB = r"C:\Users\<user>\Downloads\fleet-to-peer_*"
 CONVENTION_START = "2026-07-28"          # first dated transfer dir; older sends are unverifiable from here

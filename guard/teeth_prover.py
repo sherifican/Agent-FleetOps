@@ -53,7 +53,7 @@ REPORTING_ONLY = {"row_count", "word_count"}
 FABRICATED_ID = "aNiBFVjvoqk"
 
 # When --fixture is given without --registry, video_ids_resolve is evaluated against this backlog.
-DEFAULT_REGISTRY = "~/.claude/jobs/c08a8bf5/tmp/backlog_all.txt"
+DEFAULT_REGISTRY = os.environ.get("TEETH_REGISTRY", "./fixtures/backlog_ids.txt")  # EDIT ME: your worklist
 
 # A clean in-file report: every judging property ok=True. The prover runs with zero external
 # dependencies, and a mutation test on a dirty fixture proves nothing — so this premise is checked

@@ -6,16 +6,16 @@ Two mutations, each must turn it red in the RIGHT way:
   M2  make the recipient unreachable    -> must exit 2 (UNMEASURED), never 0
 Restores byte-exactly and verifies the restore by hash.
 """
-import hashlib, importlib.util, io, shutil, sys, contextlib
+import hashlib, importlib.util, io, os, shutil, sys, contextlib
 
 sys.path.insert(0, "./guard")
 spec = importlib.util.spec_from_file_location("psc", "./guard/passback_send_check.py")
 psc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(psc)
 
-TARGET = ("~/pc-passback/CLAUDE-COMMS/fleet-to-win/replies/"
+TARGET = (os.environ.get("PASSBACK_OUTBOX", "~/comms/outbound") + "/replies/"
           "REPLY_stale_artifact_and_missing_reply_2026-08-03.md")
-BACKUP = "~/.claude/jobs/c08a8bf5/tmp/teeth_target.bak"
+BACKUP = os.environ.get("TEETH_BACKUP", "/tmp/teeth_target.bak")
 
 
 def sha(p):

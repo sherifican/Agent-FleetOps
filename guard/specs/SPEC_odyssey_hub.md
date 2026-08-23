@@ -14,9 +14,9 @@ per-model, and presentation stops being something a model can get wrong.
 **It is INCREMENTAL by construction.** We will keep adding crawl files over months. Re-running the
 script must pick up every file currently on disk and rebuild the page. Never hard-code a file list.
 
-    INPUT   ~/pc-passback/Research-fleet/odysseus_crawl/raw/*.md
-            ~/pc-passback/Research-fleet/odysseus_crawl/reconciled/*.md
-    OUTPUT  ~/pc-passback/Research-fleet/odysseus_crawl/reports/ODYSSEUS_CRAWL_HUB.html
+    INPUT   <research-root>/odysseus_crawl/raw/*.md
+            <research-root>/odysseus_crawl/reconciled/*.md
+    OUTPUT  <research-root>/odysseus_crawl/reports/ODYSSEUS_CRAWL_HUB.html
 
     usage: odyssey_crawl_hub.py [--root DIR] [--out FILE]
 
