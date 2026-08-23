@@ -123,6 +123,10 @@ describe the lock claim as merely advisory. The content hash is evidence of a
 region's unchanged state at the point of the check; it is required only for
 `regions` claims in the documented protocol.
 
+![Animation of an outside edit changing a region hash and the pre-write check refusing the write](driver-lock-protocol-hashcheck.gif)
+
+*Illustrative animation — timings and hashes are synthetic, not fleet data.*
+
 ## Fail-stop: the halt sentinel
 
 The halt sentinel carries collision evidence in YAML. A generic equivalent is:
