@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/banner.png" alt="Agent-FleetOps — operational tooling and verification infrastructure for multi-agent fleets" width="100%">
+</p>
+
 # Agent-FleetOps
 
 Operational tooling and discipline for running a **multi-agent AI engineering fleet** — extracted
