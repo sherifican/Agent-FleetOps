@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" role="img" aria-label="Agent-FleetOps — operational tooling and verification infrastructure for multi-agent fleets">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a0b12"/><stop offset="100%" stop-color="#12101e"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#22d3ee"/><stop offset="100%" stop-color="#e879f9"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="320" rx="22" fill="url(#bg)" stroke="#232135" stroke-width="1.5"/>
+
+  <!-- Hex mark -->
+  <g transform="translate(96, 160)">
+    <polygon points="0,-52 45,-26 45,26 0,52 -45,26 -45,-26" fill="#0d0f1a" stroke="url(#accent)" stroke-width="2.5"/>
+    <text x="0" y="10" text-anchor="middle" font-family="Consolas, monospace" font-size="30" font-weight="bold" fill="#22d3ee">&gt;_</text>
+  </g>
+
+  <!-- Wordmark -->
+  <g transform="translate(172, 0)">
+    <text x="0" y="122" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="900" font-size="54" fill="#ffffff" letter-spacing="-1.5">Agent-FleetOps</text>
+    <rect x="2" y="138" width="384" height="4" rx="2" fill="url(#accent)"/>
+    <text x="2" y="172" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="700" font-size="16" fill="#e2e8f0">Operational Tooling &amp; Verification Infrastructure for Multi-Agent Fleets</text>
+    <text x="2" y="198" font-family="Consolas, monospace" font-size="12.5" fill="#a8b0c2">A check that cannot fail is indistinguishable from a check that passes.</text>
+
+    <g transform="translate(2, 222)">
+      <rect width="190" height="28" rx="14" fill="#0c1a20" stroke="#22d3ee" stroke-opacity="0.55" stroke-width="1"/>
+      <text x="95" y="18" text-anchor="middle" font-family="Consolas, monospace" font-size="9.5" font-weight="bold" fill="#22d3ee" letter-spacing="0.05em">MUTATION-PROVEN GUARDS</text>
+
+      <rect x="202" width="178" height="28" rx="14" fill="#150f22" stroke="#b388ff" stroke-opacity="0.55" stroke-width="1"/>
+      <text x="291" y="18" text-anchor="middle" font-family="Consolas, monospace" font-size="9.5" font-weight="bold" fill="#b388ff" letter-spacing="0.05em">FAIL-STOP CONCURRENCY</text>
+
+      <rect x="392" width="188" height="28" rx="14" fill="#0b1a12" stroke="#39d36f" stroke-opacity="0.55" stroke-width="1"/>
+      <text x="486" y="18" text-anchor="middle" font-family="Consolas, monospace" font-size="9.5" font-weight="bold" fill="#39d36f" letter-spacing="0.05em">HASH-VERIFIED PASSBACK</text>
+    </g>
+  </g>
+
+  <!-- Right: what's inside (no hardware, no live status) -->
+  <g transform="translate(764, 30)">
+    <rect width="404" height="260" rx="12" fill="#080a11" stroke="#232a3b" stroke-width="1.2"/>
+
+    <text x="18" y="28" font-family="Consolas, monospace" font-size="11" font-weight="bold" fill="#39d36f" letter-spacing="0.08em">WHAT&apos;S INSIDE</text>
+    <text x="386" y="28" text-anchor="end" font-family="Consolas, monospace" font-size="10" fill="#9aa4ba">MIT · self-gated export</text>
+    <path d="M18,42 L386,42" stroke="#232a3b" stroke-width="1"/>
+
+    <g font-family="Consolas, monospace">
+      <text x="18"  y="70"  font-size="15" font-weight="bold" fill="#22d3ee">3</text>
+      <text x="52"  y="70"  font-size="11" fill="#e2e8f0">protocol specs</text>
+      <text x="386" y="70"  text-anchor="end" font-size="11" fill="#9aa4ba">lock · curation · verified map</text>
+
+      <text x="46" y="100" text-anchor="end" font-size="15" font-weight="bold" fill="#b388ff">19</text>
+      <text x="56"  y="100" font-size="11" fill="#e2e8f0">guards</text>
+      <text x="386" y="100" text-anchor="end" font-size="11" fill="#9aa4ba">each ships a way to go red</text>
+
+      <text x="46" y="130" text-anchor="end" font-size="15" font-weight="bold" fill="#39d36f">24</text>
+      <text x="56"  y="130" font-size="11" fill="#e2e8f0">skills</text>
+      <text x="386" y="130" text-anchor="end" font-size="11" fill="#9aa4ba">generalized agent procedures</text>
+
+      <text x="46" y="160" text-anchor="end" font-size="15" font-weight="bold" fill="#22d3ee">364</text>
+      <text x="56"  y="160" font-size="11" fill="#e2e8f0">tests</text>
+      <text x="386" y="160" text-anchor="end" font-size="11" fill="#9aa4ba">hermetic — no live fleet needed</text>
+
+      <text x="46" y="190" text-anchor="end" font-size="15" font-weight="bold" fill="#b388ff">55</text>
+      <text x="56"  y="190" font-size="11" fill="#e2e8f0">measured rows</text>
+      <text x="386" y="190" text-anchor="end" font-size="11" fill="#9aa4ba">throughput, limits stated</text>
+
+      <text x="46" y="220" text-anchor="end" font-size="15" font-weight="bold" fill="#39d36f">6</text>
+      <text x="56"  y="220" font-size="11" fill="#e2e8f0">adoption steps</text>
+      <text x="386" y="220" text-anchor="end" font-size="11" fill="#9aa4ba">human-gated, diffs reviewed</text>
+    </g>
+
+    <path d="M18,238 L386,238" stroke="#232a3b" stroke-width="1" stroke-dasharray="3,4"/>
+    <text x="18" y="254" font-family="Consolas, monospace" font-size="10.5" fill="#ffc266">no pattern becomes automation without a reviewed diff</text>
+  </g>
+</svg>
