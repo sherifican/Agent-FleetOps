@@ -7,7 +7,7 @@ The [Textual](https://textual.textualize.io/) **monitor + inbox + quick-control*
 So a local model can own the data/format layer in bounded, test-gated tasks without fighting the event loop:
 | Layer | Rule |
 |---|---|
-| **`fleet_tui/sources/*.py`** (22 modules) | Pure **headless** readers — read files / shell-outs → records. **Zero `textual` import**, unit-testable against `tests/fixtures/`. Each reader wrapped in try/except returning a **safe default** (never raises). |
+| **`fleet_tui/sources/*.py`** (27 modules, excluding `__init__.py`) | Pure **headless** readers — read files / shell-outs → records. **Zero `textual` import**, unit-testable against `tests/fixtures/`. Each reader wrapped in try/except returning a **safe default** (never raises). |
 | **`fleet_tui/widgets/format.py`** | Dumb pure **formatters** — records → Rich-markup strings. No I/O, no state. |
 | **`fleet_tui/app.py`** | The Textual **App** — layout, timers, key bindings, modals, the paint loop; an embedded `pyte` terminal (Ctrl+`). |
 | **`fleet_tui/models.py`** | **Frozen** dataclass contracts (change a field → update every source + widget). |
