@@ -5,7 +5,6 @@ discussion below them as normal. The lines are parsed mechanically — prose alo
 
 ```
 RELEVANCE: HomeLLM = <HIGH|MED|LOW|NONE>
-RELEVANCE: ParaKit = <HIGH|MED|LOW|NONE>
 RELEVANCE: Fleet-Ops = <HIGH|MED|LOW|NONE>
 RELEVANCE: Tooling-Infra = <HIGH|MED|LOW|NONE>
 RELEVANCE: Research-Pipeline = <HIGH|MED|LOW|NONE>
