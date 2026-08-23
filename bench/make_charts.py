@@ -28,7 +28,58 @@ peak = [
     ("gemma4:31b-it-q8_0",      6.6, "gemma",    "box-b · igpu · q8_0 · n=1 · dumped"),
     ("gemma4:31b-it-bf16",      3.6, "gemma",    "box-b · igpu · bf16 · n=1 · dumped"),
 ]
-p1 = [{"model": m, "tps": v, "family": f, "detail": d} for m, v, f, d in peak]
+# Sorted here rather than by hand: when a re-measurement changes a value, a hand-kept order
+# silently stops matching the bars. (It did: qwen3-coder went 111.7 -> 135.5 and stayed 5th.)
+peak = sorted(peak, key=lambda t: -t[1])
+
+# ---------------------------------------------------------------- silicon labels
+# Every bar states the GPU it actually ran on. The mapping is derived from the CSV rather than
+# typed into the detail strings, because a hand-kept second copy of the device is exactly the
+# drift this file's consistency gate exists to prevent.
+#
+# ⚠ device is a property of the RUN, not of the model. ollama places by free VRAM at load time,
+# so the same model can land on one card or span two on different days — measured 2026-08-22:
+# ornith:9b is 5.6 GB and fits one card, yet was split 5435/5315 MiB across both, while lfm:8b
+# at 5.2 GB stayed on one. Read each row as "where this measurement ran".
+ALIAS = {"Ornith-1.0-35B-A3B": "Ornith-1.0-35B-A3B-MoE-Q4", "qwen3.6:35b-a3b": "qwen3.6:35b-a3b-q4_K_M"}
+GPU = {
+    ("box-a", "dgpu-a"):    "1× RTX 5060 Ti 16GB",
+    ("box-a", "both-dgpu"): "2× RTX 5060 Ti · 32GB",
+    ("box-b", "dgpu-b"):    "Radeon AI PRO R9700 31GB",
+    ("box-b", "igpu"):      "Radeon 8060S iGPU",
+}
+
+
+def _silicon():
+    """model -> GPU string, taken from the CSV row that supplies its peak figure."""
+    import csv, os
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_model_throughput.csv")
+    best = {}
+    for r in csv.DictReader(open(path)):
+        if r["metric"] not in ("generation", "decode"):
+            continue
+        v = float(r["tok_per_sec"])
+        if r["model"] not in best or v > best[r["model"]][0]:
+            best[r["model"]] = (v, r)
+    return {m: GPU.get((r["box"], r["device"]), "") for m, (v, r) in best.items()}
+
+
+_SIL = _silicon()
+
+
+def _detail(model, d):
+    """Lead with the silicon; drop the old box·device prefix so it is not stated twice."""
+    parts = [x.strip() for x in d.split("·")]
+    parts = [x for x in parts if not x.startswith("box-") and x not in
+             ("dgpu-a", "dgpu-b", "both-dgpu", "igpu")]
+    gpu = _SIL.get(ALIAS.get(model, model), "")
+    if not gpu:
+        # Never silently print a model with no device: say it is unrecorded.
+        gpu = "device unrecorded"
+    return " · ".join([gpu] + parts)
+
+
+p1 = [{"model": m, "tps": v, "family": f, "detail": _detail(m, d)} for m, v, f, d in peak]
 
 ab = [
     ("gemma4 31b→26b-a4b · 18-issue corroborate",  21.0, 100.0, "swap", "same task · 18/18 vs 16/18"),
@@ -65,16 +116,16 @@ order = [m for m, *_ in peak]
 
 ROWH1 = 34
 p1_text = {
-    "width": 300, "height": len(peak) * ROWH1,
+    "width": 400, "height": len(peak) * ROWH1,
     "data": {"values": p1},
     "encoding": {"y": {"field": "model", "type": "nominal", "sort": order, "title": None,
                        "axis": None, "scale": {"paddingInner": 0.22}}},
     "layer": [
-        {"mark": {"type": "text", "align": "right", "x": 300, "dy": -6,
-                  "fontSize": 12.5, "fontWeight": "bold", "color": FG, "limit": 298},
+        {"mark": {"type": "text", "align": "right", "x": 400, "dy": -6,
+                  "fontSize": 12.5, "fontWeight": "bold", "color": FG, "limit": 398},
          "encoding": {"text": {"field": "model"}}},
-        {"mark": {"type": "text", "align": "right", "x": 300, "dy": 8,
-                  "fontSize": 8.6, "color": MUTED, "limit": 298},
+        {"mark": {"type": "text", "align": "right", "x": 400, "dy": 8,
+                  "fontSize": 8.6, "color": MUTED, "limit": 398},
          "encoding": {"text": {"field": "detail"}}},
     ],
 }
@@ -102,7 +153,8 @@ p1_bars = {
 panel1 = {
     "title": {"text": "Local model throughput — two-box operating log",
               "subtitle": ["Best recorded row per model. Mixed serving stacks and boxes are directional operating data, not a controlled cross-vendor benchmark.",
-                           "Every single-run chart row states n=1; box and device sit under each model name."],
+                           "Each row names the GPU that measurement ran on. Placement is a property of the run, not the model:",
+                           "ollama packs by free VRAM at load time, so a model that fits one card may still span two."],
               "anchor": "start", "color": FG, "fontSize": 19, "subtitleColor": MUTED,
               "subtitleFontSize": 11.5},
     "hconcat": [p1_text, p1_bars], "spacing": 14,
@@ -249,7 +301,7 @@ def _verify_against_csv():
         if r["metric"] in ("generation", "decode"):
             best[r["model"]] = max(best[r["model"]], float(r["tok_per_sec"]))
             values.add((r["model"], float(r["tok_per_sec"])))
-    alias = {"Ornith-1.0-35B-A3B": "Ornith-1.0-35B-A3B-MoE-Q4", "qwen3.6:35b-a3b": "qwen3.6:35b-a3b-q4_K_M"}
+    alias = ALIAS
     bad = []
     for name, v, _fam, _detail in peak:
         key = alias.get(name, name)

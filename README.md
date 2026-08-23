@@ -77,7 +77,11 @@ and `n_runs_for_model` so the sample size stays attached to the number. Some row
 This is not a controlled cross-vendor benchmark; it is a transparent record for operating decisions,
 with its limits visible.
 
-**Best recorded row per model** — box, device, quantisation, and run count sit under each name:
+**Best recorded row per model** — each row names **the GPU that measurement actually ran on**,
+then quantisation and run count. Placement is a property of the run rather than of the model:
+ollama packs by free VRAM at load time, so a model small enough for one card may still be split
+across two. Measured 2026-08-22 on Box A: `ornith:9b` is 5.6 GB and fits one card comfortably, yet
+loaded as 5435 / 5315 MiB across both, while `lfm:8b` at 5.2 GB stayed on a single card.
 
 ![Peak throughput per model](bench/01_peak_throughput.png)
 
@@ -189,7 +193,9 @@ rather than a slope — a model either fits or it doesn't:
   Ornith-9B (5.6 GB), gemma4:12b (7.6 GB) and deepseek-r1:14b (9.0 GB) all fit comfortably, with
   room left for KV cache. **This is the honest minimum** — most of the useful lanes live here.
 - **The second card buys the 30–35B tier.** qwen3.6:35b-a3b is 23 GB of weights and occupies
-  **25.1 GB** once loaded, so it spans both cards; Ornith-35B and qwen3-coder:30b are the same
+  **25.1 GB** once loaded, so it spans both cards — directly confirmed by loading it: Ornith-35B
+  sits at 11839 / 11323 MiB and GLM-4.7-Flash at 11447 / 10789 MiB, both across the pair, because
+  neither fits in one 16 GiB card at all. Ornith-35B and qwen3-coder:30b are the same
   story. Those are the 108–200 tok/s rows.
 - **Budget for runtime overhead, not just weights** — it does not scale with model size. See the
   third chart: one 9 GB model occupies 17 GB loaded.
