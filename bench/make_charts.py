@@ -8,7 +8,9 @@ FAM = {"qwen": "#4cc9f0", "gemma": "#b5179e", "ornith": "#f7b801", "lfm": "#43e9
 
 peak = [
     ("LFM2.5-8B-A1B",         230.0, "lfm",      "5.2 GB · Q4_K_M · MoE A1B · decode · best of 2"),
-    ("Ornith-1.0-35B-A3B",    199.9, "ornith",   "21 GB · Q4_K_M · MoE A3B · llama.cpp -ngl 24 · best of 4"),
+    # Ornith-1.0-35B-A3B 199.9 REMOVED 2026-08-23: that figure is llama.cpp `pp2048` = PROMPT
+    # PROCESSING, not decode. It sat on this generation axis at ~2x the same model's real
+    # decode row (115.0, below). The CSV rows are now metric=prefill; this chart is decode-only.
     ("Ornith-1.0-35B",        115.0, "ornith",   "21 GB · Q4_K_M · MoE A3B · single run"),
     ("qwen3.6:35b-a3b",       114.43, "qwen",    "box-a · both-dgpu · Q4_K_M · n=1"),
     ("qwen3-coder:30b",       135.5, "qwen",     "box-b · dgpu-b · quant unknown · n=2"),
@@ -312,6 +314,17 @@ def _verify_against_csv():
     for row in p4 + p5:
         if (row["model"], row["tps"]) not in values:
             bad.append(f"{row['model']}: chart {row['tps']} not present in CSV")
+    # ★ The gate above compares the chart to the CSV — it CANNOT catch an error present in BOTH.
+    # It did not: a pp2048 (prompt-processing) row carried metric=generation, so chart and CSV
+    # agreed with each other and disagreed with reality. Verify the CLAIM, not just the copy:
+    # a row whose own condition text names a prompt-processing measurement may not be charted
+    # as generation/decode.
+    import re as _re
+    _PP = _re.compile(r"\bpp\d+\b|prompt[- ]processing|\bprefill\b", _re.I)
+    for r in csv.DictReader(open(csv_path)):
+        if r["metric"] in ("generation", "decode") and _PP.search(r["condition"] + " " + r["source"]):
+            bad.append(f"{r['model']}: metric={r['metric']} but condition names a prompt-processing "
+                       f"measurement ({r['condition'][:60]}...) — prefill is not decode")
     if bad:
         sys.stderr.write("make_charts: chart table DISAGREES with the CSV record:\n")
         for b in bad: sys.stderr.write(f"  - {b}\n")
