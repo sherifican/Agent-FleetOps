@@ -88,8 +88,8 @@ ab = [
     ("gemma4 31b→26b-a4b · 9.3K-tok artifact",     19.0,  90.0, "swap", "same task · quality parity"),
     ("gemma4 31b→26b-a4b · 5-seeded-bug review",   20.4,  80.6, "swap", "same task · 5/5 vs 4/5"),
     ("qwen3-coder:30b · spec-decode ngram-mod",    95.6, 108.1, "tune", "same model + same prompt"),
-    ("Ornith-35B-A3B · MoE accel (-ngl 8)",       115.7, 114.1, "tune", "claimed win did NOT reproduce"),
-    ("Ornith-35B-A3B · MoE accel (-ngl 24)",      199.9, 188.7, "tune", "claimed win did NOT reproduce"),
+    ("Ornith-35B-A3B · MoE accel (-ngl 8) · PREFILL pp2048",       115.7, 114.1, "tune", "claimed win did NOT reproduce"),
+    ("Ornith-35B-A3B · MoE accel (-ngl 24) · PREFILL",      199.9, 188.7, "tune", "claimed win did NOT reproduce"),
 ]
 p2 = []
 for lab, b, a, grp, note in ab:
@@ -311,6 +311,20 @@ def _verify_against_csv():
             bad.append(f"{name}: not present in CSV"); continue
         if abs(best[key] - v) > 0.051:
             bad.append(f"{name}: chart {v} vs CSV {best[key]}")
+    # The before/after list was previously verified by NOTHING. Its axis is a generic
+    # "tokens per second" that legitimately carries decode rows AND prefill A/B rows, so each
+    # value must exist in the CSV and a prefill-sourced bar must say so in its own label.
+    allvals = {}
+    for r in csv.DictReader(open(csv_path)):
+        allvals.setdefault(float(r["tok_per_sec"]), set()).add(r["metric"])
+    for lab, b, a, _grp, _note in ab:
+        for v in (b, a):
+            metrics = allvals.get(v)
+            if metrics is None:
+                bad.append(f"before/after '{lab}': {v} is not in the CSV record")
+            elif metrics == {"prefill"} and "prefill" not in lab.lower():
+                bad.append(f"before/after '{lab}': {v} is a PREFILL row in the CSV but the label "
+                           f"does not say so — it shares an axis with decode bars")
     for row in p4 + p5:
         if (row["model"], row["tps"]) not in values:
             bad.append(f"{row['model']}: chart {row['tps']} not present in CSV")
