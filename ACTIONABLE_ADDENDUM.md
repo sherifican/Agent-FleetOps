@@ -45,7 +45,7 @@ memory architecture, wiki-links, hygiene/lint, retrieval)
 
 > **Adapt these buckets.** `Flagship-App` and `Local-Models` are PLACEHOLDERS — rename them to your own
 > projects. The vocabulary is enforced across four surfaces by the contract-agreement guard, so change it
-> in ALL of: this file, `check_leg_contract.py`, `actionable_rollup.py`, and `guard/teeth_prover.py`
+> in ALL of: this file, `check_leg_contract.py`, `actionable_rollup.py`, and `stage_video_research.py` (the dispatch preamble)
 > (the guard tests will fail on any surface you miss — that is the guard doing its job).
 
 **The six buckets MATCH the six `RELEVANCE:` projects above, deliberately.** If you rate `Memory = HIGH`,

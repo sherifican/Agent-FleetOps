@@ -50,7 +50,7 @@ another machine). The commit history tells that story.
 | `skills/` | **24 generalized agent-discipline procedures** — evaluation integrity, model routing (the living-table method), the local-lane build loop, multi-agent code workflow, research dispatch/verification, memory ops, brain bookkeeping, protected-function guards, blocked-page retrieval, and more. Each encodes failure stories from real operation. The portable start-list is in [`adopt/20_skills.md`](adopt/20_skills.md); you are not expected to install 24. |
 | `templates/` | Copyable dispatch, honesty, pinned-environment, and research-artifact patterns. Templates are adoption patterns, not automatic enforcement. |
 | `_tools/` | The export pipeline's own gates — provenance wall-checker, secrets/personal-data scanner, and a **ref gate**, all mutation-proven (`--self-test`). The first two ask "is this tree safe to publish?"; the third asks the question they structurally cannot: **"what would a push actually publish?"** A history rewrite is only true of the branch you rewrote — this repo's own rewrite left a clean `main` beside two leftover refs still carrying the trailers and build artifacts the rewrite removed, one `push --all` away from being republished. Content gates scan a worktree; pushes carry refs. |
-| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 165 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus. `2 = UNMEASURED` dominates `1 = violation` throughout. |
+| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 170 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus. `2 = UNMEASURED` dominates `1 = violation` throughout. |
 | `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, the verified-system-map pattern, and the [research-team](specs/research-team-protocol.md) and [rigor-spectrum](specs/rigor-spectrum.md) guides. |
 | `bench/` | **The two-box throughput operating log** — 55 measurements over 20 model tags, with sample sizes and device labels attached. See below. |
 
@@ -140,20 +140,21 @@ rather than a slope — a model either fits or it doesn't:
   Ornith-9B (5.6 GB), gemma4:12b (7.6 GB) and deepseek-r1:14b (9.0 GB) all fit comfortably, with
   room left for KV cache. **This is the honest minimum** — most of the useful lanes live here.
 - **The second card buys the 30–35B tier.** qwen3.6:35b-a3b is 23 GB of weights and occupies
-  **25.1 GB** once loaded, so it spans both cards — directly confirmed by loading it: Ornith-35B
+  **25.1 GiB** once loaded, so it spans both cards — directly confirmed by loading it: Ornith-35B
   sits at 11839 / 11323 MiB and GLM-4.7-Flash at 11447 / 10789 MiB, both across the pair, because
   neither fits in one 16 GiB card at all. Ornith-35B and qwen3-coder:30b are the same
   story. On decode those two-card rows land at ~105–115 tok/s (the higher figures that used to sit here were prompt-processing, not decode).
 - **Budget for runtime overhead, not just weights** — it does not scale with model size. See the
-  third chart: one 9 GB model occupies 17 GB loaded.
+  third chart: one 9 GB model occupies 17.0 GiB loaded, summed across both cards.
 - **CPU is not the bottleneck** for GPU-resident inference; it matters for loading and for the
   orchestration around the models. System RAM matters more than core count — 32 GB is adequate but
   not generous once several services and a browser are running alongside.
 - Model weights are large. Hundreds of GB of models and working state on the internal NVMe here (not inventoried in this export).
 - **Neither the platform nor the PCIe links need to be top-shelf.** This is an AM4 board (MSI B550
   Tomahawk Max) feeding one card at **PCIe 4.0 x8** and the other at **PCIe 3.0 x4**, with the
-  deliberately mismatched DRAM above settling at 2933 MT/s. Every number in the charts was measured
-  through exactly those links. Once weights are resident, decode traffic barely touches the bus —
+  deliberately mismatched DRAM above settling at 2933 MT/s. Every **box-a** number in the charts was measured
+  through exactly those links; the cross-box and device-split panels also carry box-b values, which
+  run on that machine's own unified-memory path. Once weights are resident, decode traffic barely touches the bus —
   the choked links show up as slower model *loads*, not slower *inference* — and even the models
   that span both cards hit their published rates across a 3.0 x4 link. Mismatched, mainstream,
   lane-starved hardware is sufficient; the VRAM cliff above is the only spec that gates anything.
@@ -280,7 +281,7 @@ flowchart LR
     S([run_guards.sh]) --> T1["1. teeth_prover <br/>plant defects, expect red"]
     T1 -->|HAS_TEETH| T2["2. contract_agreement <br/>four surfaces, one vocabulary"]
     T1 -->|VACUOUS / OVERBROAD| X1["STOP - a guard that cannot fail <br/>certifies nothing below it"]
-    T2 --> T3["3. unit gates <br/>165 hermetic tests"]
+    T2 --> T3["3. unit gates <br/>170 hermetic tests"]
     T3 --> T4[4. leg liveness]
     T4 -->|probed| OK([0 clean])
     T4 -->|dry-run| UM(["2 UNMEASURED <br/>louder than a violation"])

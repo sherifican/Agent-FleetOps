@@ -18,7 +18,7 @@ staleness check could never fire. That defect is why the dry run now returns `2`
 |---|---|---|
 | Teeth-prover | `python3 guard/teeth_prover.py` | 10 planted mutations; every guard proves it can fail |
 | Contract agreement | `python3 guard/contract_agreement.py` | all four vocabulary surfaces agree (validator · addendum · rollup · preamble) |
-| Guard unit gates | `pytest guard/tests/ -q` | 165 tests, hermetic |
+| Guard unit gates | `pytest guard/tests/ -q` | 170 tests, hermetic |
 | Full runner | `guard/run_guards.sh` | the above in order; leg-liveness dry-run returns `2 = UNMEASURED` by design |
 
 ## What fail-closes without private data — deliberately

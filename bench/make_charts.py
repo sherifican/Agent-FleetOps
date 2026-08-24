@@ -15,7 +15,7 @@ peak = [
     ("qwen3.6:35b-a3b",       114.43, "qwen",    "box-a · both-dgpu · Q4_K_M · n=1"),
     ("qwen3-coder:30b",       135.5, "qwen",     "box-b · dgpu-b · quant unknown · n=2"),
     ("gemma4:26b-a4b-it-qat", 109.05, "gemma",   "box-b · dgpu-b · q4_0-qat · n=2"),
-    ("GLM-4.7-Flash",         105.0, "glm",      "18 GB · Q4_K_M · llama-server · n=1"),
+    ("GLM-4.7-Flash",         105.0, "glm",      "18 GB · quant unrecorded · vLLM/endpoint probe · n=1"),
     ("GLM-4.7-Flash-GGUF",    105.0, "glm",      "box-a · both-dgpu · quant unknown · n=1"),
     ("Ornith-1.0-9B",          67.0, "ornith",   "5.6 GB · Q4_K_M · 9B dense · single run"),
     ("qwen3.8:27b-devicepinned", 56.4, "qwen",   "box-b · dgpu-b · device-pinned build · n=1"),
@@ -158,7 +158,7 @@ p1_bars = {
 }
 panel1 = {
     "title": {"text": "Local model throughput — two-box operating log",
-              "subtitle": ["Best recorded row per model. Mixed serving stacks and boxes are directional operating data, not a controlled cross-vendor benchmark.",
+              "subtitle": ["Best recorded generation/decode row per model that has one (19 of 20 tags; one is prefill-only). Mixed serving stacks and boxes are directional operating data, not a controlled cross-vendor benchmark.",
                            "Each row names the GPU that measurement ran on. Placement is a property of the run, not the model:",
                            "ollama packs by free VRAM at load time, so a model that fits one card may still span two."],
               "anchor": "start", "color": FG, "fontSize": 19, "subtitleColor": MUTED,
@@ -223,7 +223,7 @@ panel3 = {
                  "yOffset": {"field": "kind"}},
     "layer": [
         {"mark": {"type": "bar", "height": 20},
-         "encoding": {"x": {"field": "gb", "type": "quantitative", "title": "gigabytes",
+         "encoding": {"x": {"field": "gb", "type": "quantitative", "title": "gibibytes",
                             "scale": {"domain": [0, 32]}, "axis": {"tickCount": 8}},
                       "color": {"field": "kind", "type": "nominal",
                                 "scale": {"domain": ["weights on disk", "VRAM occupied"],
@@ -236,21 +236,24 @@ panel3 = {
 }
 
 # ---------------------------------------------------------------- new two-box panels
+# ★ Every pair here must compare the SAME metric. It did not: the box-a cells are
+# metric=generation while the box-b cells were metric=decode, so a "different silicon"
+# picture was really generation-vs-decode. Box-b now uses its generation rows.
 p4 = [
     {"model": "gemma4:26b-a4b-it-qat", "side": "box-a / dgpu-a", "tps": 83.3, "label": "83.3  n=1"},
-    {"model": "gemma4:26b-a4b-it-qat", "side": "box-b / dgpu-b", "tps": 109.05, "label": "109.05  n=2"},
+    {"model": "gemma4:26b-a4b-it-qat", "side": "box-b / dgpu-b", "tps": 105.2, "label": "105.2  n=2"},
     {"model": "gemma4:31b-it-qat", "side": "box-a / dgpu-a", "tps": 18.2, "label": "18.2  n=1"},
-    {"model": "gemma4:31b-it-qat", "side": "box-b / dgpu-b", "tps": 28.35, "label": "28.35  n=2"},
+    {"model": "gemma4:31b-it-qat", "side": "box-b / dgpu-b", "tps": 28.25, "label": "28.25  n=2"},
     {"model": "qwen3-coder:30b", "side": "box-a / dgpu-a", "tps": 35.6, "label": "35.6  n=1 · ollama"},
-    {"model": "qwen3-coder:30b", "side": "box-b / dgpu-b", "tps": 135.5, "label": "135.5  n=2"},
+    {"model": "qwen3-coder:30b", "side": "box-b / dgpu-b", "tps": 111.7, "label": "111.7  n=1"},
     {"model": "qwen3.8:27b", "side": "box-a / dgpu-a", "tps": 21.2, "label": "21.2  n=1"},
-    {"model": "qwen3.8:27b", "side": "box-b / dgpu-b", "tps": 54.35, "label": "54.35  n=2"},
+    {"model": "qwen3.8:27b", "side": "box-b / dgpu-b", "tps": 46.0, "label": "46.0  n=1"},
 ]
 panel4 = {
     "title": {"text": "Cross-box throughput — identical model, different silicon",
               "subtitle": ["Grouped bars show the published CSV cell value, with box/device and n attached.",
                            "Different vendors and serving stacks make this an operating comparison, not a controlled benchmark.",
-                           "Read the stack label before the gap: the coder pair is an n=1 ollama cell against an n=2 tuned cell. Same-stack rows in this CSV (108.1 llama.cpp on box-a) put that model far closer."],
+                           "Both sides of every pair are generation rows. Stacks still differ: the coder pair is an n=1 ollama cell against an n=1 box-b cell, and box-a also has 108.1 on llama.cpp."],
               "anchor": "start", "color": FG, "fontSize": 18, "subtitleColor": MUTED, "subtitleFontSize": 11.5},
     "width": 900, "height": 280, "data": {"values": p4},
     "encoding": {"x": {"field": "model", "type": "nominal", "title": None, "axis": {"labelAngle": 0, "labelLimit": 260, "labelFontSize": 11}}, "xOffset": {"field": "side"}},
