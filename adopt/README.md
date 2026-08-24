@@ -16,3 +16,20 @@ Run the numbered documents in order. Keep `adopt-scratch/inventory.md` local and
 | 6 | [90_verify_all.md](90_verify_all.md) — fill the acceptance table and show it to the human. |
 
 Every command below is an **ADOPTER COMMAND**: run it on the adopter's own machine, not on the export author's host. Do not treat an expected-output string as evidence; inspect the command's actual output.
+
+## Minimum viable slice
+
+Start with three skills: `eval-integrity`, `generate-review-fix-loop`, and `model-routing-table`; two guards: `guard/teeth_prover.py` and `guard/artifact_txn.py`; and one protocol: `specs/verified-system-map.md`. This works with one subscription and no GPU. Stop there until a concrete failure mode justifies another rung.
+
+## Upgrade ladder
+
+| Add | Add it when… |
+|---|---|
+| fleet-tui | You want observability, not only files. |
+| local-model onboarding and a distinct audit lane | You have a GPU and local model. |
+| driver-lock protocol | Two writers share a tree. |
+| dispatch, honesty, and pinned-environment templates | Runs continue without a human present. |
+| research-team protocol and its contract check | You need independent evidence legs. |
+| fetch gate plus an adopter-supplied detector | Legs read attacker-writable material. |
+| curation-loop architecture | Rules themselves receive agent-proposed edits. |
+| second box and full measured routing | You actually operate one; it remains optional. |

@@ -27,3 +27,17 @@ Pattern: prepend a compact evidence contract to each brief: no invented results,
 Pattern: pin model and effort in the invocation, clear inherited tuning variables, and log the effective values.
 
 **The defect this prevents:** an ambient effort variable silently raised every child dispatch to the most expensive tier, breaking a cost cap until detected. Pin settings per invocation and echo the effective values.
+
+## Video-research templates
+
+- `video-research/_DISPATCH_PREAMBLE.md.template` — the shared transcript, verification, relevance, and standout method.
+- `video-research/brief.md.template` — a per-video dispatch brief.
+- `video-research/RESULT.md.template` — a contract-shaped research-leg result.
+- `video-research/FINAL.md.template` — a reconcile skeleton with provenance.
+- `video-research/reconcile.sh.template` — annotated orchestration guidance, not a runnable script.
+- `video-research/known_ids.txt.example` — synthetic known-video input for `video_backlog_diff.py`.
+- `video-research/new_videos.txt.example` — synthetic source-video input for `video_backlog_diff.py`.
+- `video-research/SYNTHETIC.md` — fixture-data marker for the video-research examples.
+- `video-hub/VIDEO_RESEARCH_HUB.html.template` — one self-contained synthetic card-hub reference.
+- `video-hub/SYNTHETIC.md` — fixture-data marker for the video-hub example.
+- `solo-rich-report.md.template` — the contract-shaped source template for a qualifying Solo-Rich Report.

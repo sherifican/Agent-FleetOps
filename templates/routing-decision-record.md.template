@@ -1,0 +1,31 @@
+Hand this file to your AI agent with: “adapt this to my project.”
+
+# Routing decision record
+
+Use one record per consequential or changed route. The canonical routing procedures remain in
+`skills/model-routing-table/` and `skills/fleet-model-routing/`; this record prevents a decision from
+being remembered as folklore.
+
+| Field | Record |
+|---|---|
+| Task shape, consequence, required artifact | `<task and observable acceptance condition>` |
+| Candidate local lane, availability, measured step budget | `<lane, availability observation, budget>` |
+| Decomposition attempted / why unsafe | `<bounded split tried, or reason it changes correctness>` |
+| Escalation route and trigger | `<route; evidence-triggered threshold>` |
+| Cloud cost cap or subscription posture | `<cap or subscription constraint>` |
+| Effort level and approval reference | `<standing effort or approved bump>` |
+| Verification result and next table update | `<literal result; date/owner of routing-table update>` |
+
+<!--
+Synthetic filled example — no measured performance claim:
+
+| Field | Record |
+|---|---|
+| Task shape, consequence, required artifact | Parse a small CSV; artifact is a checked-in summary table. |
+| Candidate local lane, availability, measured step budget | local-format lane available; 4-step budget from this project’s last comparable task. |
+| Decomposition attempted / why unsafe | Split parsing from review; safe because the reviewer receives the generated table. |
+| Escalation route and trigger | cloud reviewer only if local output fails schema verification. |
+| Cloud cost cap or subscription posture | one subscription; no metered API use. |
+| Effort level and approval reference | standing effort; no bump approved. |
+| Verification result and next table update | schema command output retained; update the local-format row after review. |
+-->

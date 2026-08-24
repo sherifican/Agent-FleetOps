@@ -15,7 +15,7 @@ rg -n '(^name:|^description:|scripts/|https?://|~/|/home/|C:\\)' skills/*/SKILL.
 
 ## Step 2 — classify before copying
 
-Start with these host-agnostic procedure patterns: `eval-integrity`, `model-routing-table`, `local-model-onboarding`, `agent-memory-ops`, and `shared-brain-bookkeeping`. Their policy text transfers, but any linked scripts or repository paths must travel with the selected skill and be rechecked after installation.
+Start with these host-agnostic procedure patterns: `eval-integrity`, `generate-review-fix-loop`, `model-routing-table`, `local-model-onboarding`, `agent-memory-ops`, and `shared-brain-bookkeeping`. `generate-review-fix-loop` supplies the smallest independent draft/review/repair pattern when a second vendor is unavailable. Their policy text transfers, but any linked scripts or repository paths must travel with the selected skill and be rechecked after installation.
 
 Treat these as requiring host adaptation before activation: skills that name a runtime, endpoint, model roster, project-root path, executable, or a target agent's native skill directory. Replace those values only from `adopt-scratch/inventory.md` and the human-approved plan; never copy a reference host topology into the new host.
 
@@ -30,6 +30,8 @@ test -s adopt-scratch/inventory.md && find skills -mindepth 2 -maxdepth 2 -name 
 ## Step 3 — create a living routing table, not a remembered roster
 
 Create the adopter's routing table in its durable agent-rule location. For each task class, record: capability, primary candidate, fallback, serving path, context/step limit, evidence command or evaluation artifact, date, and known failure mode. Record a negative result rather than silently retrying it later. Prefer the cheapest capable local model; use cloud work as an explicit escalation for hard or long work.
+
+Before copying a routing table, fill the [budget-tier row](../README.md#why-the-routing-table-looks-like-that) that matches `adopt-scratch/inventory.md`.
 
 **ADOPTER COMMAND:**
 

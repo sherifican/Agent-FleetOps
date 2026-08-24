@@ -4,14 +4,18 @@
 
 # Agent-FleetOps
 
-Operational tooling and discipline for running a **multi-agent AI engineering fleet** — extracted
-and generalized from a working two-workstation setup that routes real engineering work across
-frontier cloud models, cheaper cloud tiers, and local GPU models.
+Pattern library for keeping local, cloud, and hybrid agent fleets honest, effective, and reliable.
+It works on one box; the two-workstation setup that produced it is provenance, not a requirement.
 
 The organizing idea, applied everywhere here:
 
 > **A check that cannot fail is indistinguishable from a check that passes.**
 > Every guard ships with a way to prove it can go red.
+
+This repo is a pattern library. You do not need two workstations.
+**Hand it to your AI:** clone it, then paste the block under **Set it up with your own AI**; the agent records missing GPUs and CLIs as `ABSENT`.
+**Read it yourself:** the specs and guards are the same teeth, written so a check can go red.
+Start with `eval-integrity`, `generate-review-fix-loop`, and `model-routing-table`; the [minimum viable slice](adopt/README.md#minimum-viable-slice) explains the rest.
 
 ## How the pieces fit
 
@@ -43,10 +47,11 @@ another machine). The commit history tells that story.
 | Dir | Contents |
 |---|---|
 | `tui/` | **fleet-tui** — a Textual terminal monitor for a local/cloud model fleet. 27 headless source modules (excluding `__init__.py`) behind a 364-test hermetic suite; strict one-way pipeline (pure readers → pure formatters → app), frozen dataclass contracts, safe-default degradation. CI runs the full suite on every push. |
-| `skills/` | **24 generalized agent-discipline procedures** — evaluation integrity, model routing (the living-table method), the local-lane build loop, multi-agent code workflow, research dispatch/verification, memory ops, brain bookkeeping, protected-function guards, blocked-page retrieval, and more. Each encodes failure stories from real operation. |
+| `skills/` | **24 generalized agent-discipline procedures** — evaluation integrity, model routing (the living-table method), the local-lane build loop, multi-agent code workflow, research dispatch/verification, memory ops, brain bookkeeping, protected-function guards, blocked-page retrieval, and more. Each encodes failure stories from real operation. The portable start-list is in [`adopt/20_skills.md`](adopt/20_skills.md); you are not expected to install 24. |
+| `templates/` | Copyable dispatch, honesty, pinned-environment, and research-artifact patterns. Templates are adoption patterns, not automatic enforcement. |
 | `_tools/` | The export pipeline's own gates — provenance wall-checker, secrets/personal-data scanner, and a **ref gate**, all mutation-proven (`--self-test`). The first two ask "is this tree safe to publish?"; the third asks the question they structurally cannot: **"what would a push actually publish?"** A history rewrite is only true of the branch you rewrote — this repo's own rewrite left a clean `main` beside two leftover refs still carrying the trailers and build artifacts the rewrite removed, one `push --all` away from being republished. Content gates scan a worktree; pushes carry refs. |
 | `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 165 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus. `2 = UNMEASURED` dominates `1 = violation` throughout. |
-| `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, and the verified-system-map pattern. |
+| `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, the verified-system-map pattern, and the [research-team](specs/research-team-protocol.md) and [rigor-spectrum](specs/rigor-spectrum.md) guides. |
 | `bench/` | **The two-box throughput operating log** — 55 measurements over 20 model tags, with sample sizes and device labels attached. See below. |
 
 ### fleet-tui, running
@@ -66,6 +71,57 @@ panel shows exactly which dependencies are behind.
 
 *Hostnames, LAN addresses and box nicknames are redacted; every reading is real.*
 
+## Research team
+
+Research is a chain of inspectable artifacts, not an answer a model says confidently. The roles,
+independence rule, receipt fields, failure handling, and security boundaries are canonical in
+[`specs/research-team-protocol.md`](specs/research-team-protocol.md).
+
+| Role | Responsibility | Boundary |
+|---|---|---|
+| Orchestrator | Frames the question and keeps the second brief blind. | Judgment remains human/accountable. |
+| Independent research legs | Retrieve evidence and retain separately named RESULT artifacts. | Agreement is not source verification. |
+| Reconciler + verifier | Preserves dissent, then checks claims against the evidence pack. | The verifier is not the producing leg. |
+| Actionability pass | Maps findings to the project’s closed vocabulary. | It does not turn a finding into truth. |
+
+### Video research
+
+A video or talk backlog becomes dispatched multi-leg research briefs; legs return contract-checked RESULTs, a reconcile produces one FINAL, and per-project actionability is rated against a closed vocabulary. Findings render as cards on one self-contained hub page, because research you cannot re-find or audit is research you do not have.
+
+**Conceptual — see the status table:** `backlog diff -> stage briefs -> dispatch >=2 legs -> reconcile -> actionability ratings -> hub cards -> (rarely) a Solo-Rich Report`
+
+<!-- HUB SCREENSHOT: owner-provided, pending -->
+
+### Solo-Rich Reports — why they exist
+
+Most findings belong on a card. A finding earns a standalone richly-presented page only by clearing a measurable 2-of-3 gate: cross-leg convergence, actionable density, or real captured media. “Seems interesting” as a trigger produces exactly the bloat this tier exists to avoid; see [`guard/specs/SPEC_solo_rich_report.md`](guard/specs/SPEC_solo_rich_report.md) and [`templates/solo-rich-report.md.template`](templates/solo-rich-report.md.template).
+
+### What's runnable vs contract-only
+
+| Surface | Status |
+|---|---|
+| Overview + hub template | Template/reference |
+| `ACTIONABLE_ADDENDUM.md` | Contract |
+| `SPEC_solo_rich_report.md` + solo-rich template | Contract + template |
+| `SPEC_odyssey_hub.md` | Design guidance for a DIFFERENT hub (its RAW/RECONCILED data model is NOT the video hub) |
+| `stage_video_research.py` + `video_backlog_diff.py` | Runnable, adapter-config required (EDIT ME markers + VIDEO_ROOT) |
+| Deterministic hub/solo-rich renderers | Not supplied yet (follow-up) |
+
+### Security and delivery integrity
+
+| Defense | Component | Adopter proof it can fail | Invocation boundary |
+|---|---|---|---|
+| Retain worker output | [`dispatch-wrapper`](templates/dispatch-wrapper.sh.template) | empty output or nonzero exit with an artifact | The template marks artifacts; it does not invoke transaction or contract checks. |
+| Check result vocabulary | [`check_leg_contract.py`](check_leg_contract.py) | missing relevance line or invented verb | Run after a RESULT is produced. |
+| Atomic replacement | [`artifact_txn.py`](guard/artifact_txn.py) | validator or commit failure | Separate component, not wrapper wiring. |
+| Detect contract drift | [`contract_agreement.py`](guard/contract_agreement.py) | one of four vocabulary surfaces diverges | Pre-dispatch/release guard, not evidence verification. |
+| Treat a leg as adversarial | [research protocol](specs/research-team-protocol.md) | retained artifact contradicts a report | Operating pattern, not an enforced guard. |
+
+The research skills describe failure modes—premise leakage, consensus laundering, skipped verification,
+and invalid evaluation signals—not capabilities automatically granted by copying a directory.
+
+**If you only take one thing:** retain independent artifacts and make a different worker verify claims before actionability.
+
 ## Set it up with your own AI
 
 Clone this repository, then point your orchestrator at `adopt/README.md`. The agent will inventory the host, propose a local configuration from those observations, show a human the plan and diffs before any service, cron entry, or shell hook, and run the available verification steps. The adoption path degrades to a single box with no GPU or cloud CLI; absent capabilities are recorded rather than guessed. The `adopt/` documents are written for an agent with shell access.
@@ -75,6 +131,32 @@ Read adopt/README.md and follow it in order. Inventory this host before prescrib
 ```
 
 ## Measured on two boxes
+
+**What you'd actually need to reproduce this.** The tier that matters is VRAM, and it is a cliff
+rather than a slope — a model either fits or it doesn't:
+
+- **One 16 GB card** covers everything up to the `gemma4:26b-a4b-it-qat` tier (15 GB of weights,
+  **100 tok/s** measured, and the model this fleet audits code with). LFM2.5-8B (5.2 GB),
+  Ornith-9B (5.6 GB), gemma4:12b (7.6 GB) and deepseek-r1:14b (9.0 GB) all fit comfortably, with
+  room left for KV cache. **This is the honest minimum** — most of the useful lanes live here.
+- **The second card buys the 30–35B tier.** qwen3.6:35b-a3b is 23 GB of weights and occupies
+  **25.1 GB** once loaded, so it spans both cards — directly confirmed by loading it: Ornith-35B
+  sits at 11839 / 11323 MiB and GLM-4.7-Flash at 11447 / 10789 MiB, both across the pair, because
+  neither fits in one 16 GiB card at all. Ornith-35B and qwen3-coder:30b are the same
+  story. Those are the 108–200 tok/s rows.
+- **Budget for runtime overhead, not just weights** — it does not scale with model size. See the
+  third chart: one 9 GB model occupies 17 GB loaded.
+- **CPU is not the bottleneck** for GPU-resident inference; it matters for loading and for the
+  orchestration around the models. System RAM matters more than core count — 32 GB is adequate but
+  not generous once several services and a browser are running alongside.
+- Model weights are large. Roughly **700 GB** of models and working state on the internal NVMe here.
+- **Neither the platform nor the PCIe links need to be top-shelf.** This is an AM4 board (MSI B550
+  Tomahawk Max) feeding one card at **PCIe 4.0 x8** and the other at **PCIe 3.0 x4**, with the
+  deliberately mismatched DRAM above settling at 2933 MT/s. Every number in the charts was measured
+  through exactly those links. Once weights are resident, decode traffic barely touches the bus —
+  the choked links show up as slower model *loads*, not slower *inference* — and even the models
+  that span both cards hit their published rates across a 3.0 x4 link. Mismatched, mainstream,
+  lane-starved hardware is sufficient; the VRAM cliff above is the only spec that gates anything.
 
 This operating log now records `box-a` and `box-b`: different vendors, serving stacks, and device
 paths. Every CSV row carries `box`, `device`, `quant`, `serving_stack`, `quality_score`, `verdict`,
@@ -190,32 +272,6 @@ has to run on the iGPU, prefer the sparse model.**
 slice of the same LPDDR5 the CPU is using — is the row most likely to change what someone buys, because
 it needs no discrete card at all.
 
-**What you'd actually need to reproduce this.** The tier that matters is VRAM, and it is a cliff
-rather than a slope — a model either fits or it doesn't:
-
-- **One 16 GB card** covers everything up to the `gemma4:26b-a4b-it-qat` tier (15 GB of weights,
-  **100 tok/s** measured, and the model this fleet audits code with). LFM2.5-8B (5.2 GB),
-  Ornith-9B (5.6 GB), gemma4:12b (7.6 GB) and deepseek-r1:14b (9.0 GB) all fit comfortably, with
-  room left for KV cache. **This is the honest minimum** — most of the useful lanes live here.
-- **The second card buys the 30–35B tier.** qwen3.6:35b-a3b is 23 GB of weights and occupies
-  **25.1 GB** once loaded, so it spans both cards — directly confirmed by loading it: Ornith-35B
-  sits at 11839 / 11323 MiB and GLM-4.7-Flash at 11447 / 10789 MiB, both across the pair, because
-  neither fits in one 16 GiB card at all. Ornith-35B and qwen3-coder:30b are the same
-  story. Those are the 108–200 tok/s rows.
-- **Budget for runtime overhead, not just weights** — it does not scale with model size. See the
-  third chart: one 9 GB model occupies 17 GB loaded.
-- **CPU is not the bottleneck** for GPU-resident inference; it matters for loading and for the
-  orchestration around the models. System RAM matters more than core count — 32 GB is adequate but
-  not generous once several services and a browser are running alongside.
-- Model weights are large. Roughly **700 GB** of models and working state on the internal NVMe here.
-- **Neither the platform nor the PCIe links need to be top-shelf.** This is an AM4 board (MSI B550
-  Tomahawk Max) feeding one card at **PCIe 4.0 x8** and the other at **PCIe 3.0 x4**, with the
-  deliberately mismatched DRAM above settling at 2933 MT/s. Every number in the charts was measured
-  through exactly those links. Once weights are resident, decode traffic barely touches the bus —
-  the choked links show up as slower model *loads*, not slower *inference* — and even the models
-  that span both cards hit their published rates across a 3.0 x4 link. Mismatched, mainstream,
-  lane-starved hardware is sufficient; the VRAM cliff above is the only spec that gates anything.
-
 ## The guard ladder
 
 ```mermaid
@@ -231,6 +287,19 @@ flowchart LR
     style UM fill:#3a2a1a,stroke:#ffb347
 ```
 
+### Same teeth, different rung count
+
+The laws are the same; consequence and reversibility decide the rung count. See the canonical
+[rigor spectrum](specs/rigor-spectrum.md) before importing a larger inventory.
+
+| Pattern-library workflow | User-facing app, updater, or long-lived corpus |
+|---|---|
+| Prove a few guards can fail; add a guard after a named failure mode. | Keep the same base, then add release rehearsals and broader invariants for the actual blast radius. |
+| Accept a narrowly scoped check that rejects its unknowns. | Rehearse cross-surface and rollback failures before release. |
+| Stop after four copied practices when the project is reversible. | Fund more rungs when users, self-updates, or irreversible corpus changes justify them. |
+
+**If you only take one thing:** copy the four baseline practices in the rigor guide, then add rungs only for a named risk.
+
 ## Two load-bearing skill patterns
 
 **A report is not an artifact** (from the dispatch/verification skills — both directions):
@@ -245,6 +314,22 @@ flowchart LR
     A2 -->|work actually landed| SAVE(["false failure - keep it, <br/>correct the routing record"])
     A2 -->|nothing there| RETRY(["real failure - now retry"])
 ```
+
+### Why the routing table looks like that
+
+Routine bounded labor is local-first; decompose before escalation; choose the cheapest capable role;
+use cloud as support; apply token thrift to metered cloud work, not free local generation; and gate
+effort bumps with evidence. The canonical procedures remain [`model-routing-table`](skills/model-routing-table/SKILL.md)
+and [`fleet-model-routing`](skills/fleet-model-routing/SKILL.md); use the [routing decision record](templates/routing-decision-record.md.template) to record a local choice.
+
+| Posture | Route | Stop paying for |
+|---|---|---|
+| One subscription, no GPU | Standing-effort subscription; draft/review as roles | unattended high-effort loops and spare APIs |
+| +1 16 GB GPU | Local routine work; cloud review or hard/long work | paid boilerplate generation |
+| +2nd cloud subscription | Use only for independent or capacity-bound work | duplicate default labor |
+| Two boxes | Local labor on both; cloud support/escalation | cloud orchestration plus routine cloud legwork |
+
+**If you only take one thing:** record why a route earned escalation and what evidence would change it.
 
 **Audit the test before trusting it** (from `skills/eval-integrity`):
 
