@@ -298,9 +298,9 @@ The laws are the same; consequence and reversibility decide the rung count. See 
 |---|---|
 | Prove a few guards can fail; add a guard after a named failure mode. | Keep the same base, then add release rehearsals and broader invariants for the actual blast radius. |
 | Accept a narrowly scoped check that rejects its unknowns. | Rehearse cross-surface and rollback failures before release. |
-| Stop after four copied practices when the project is reversible. | Fund more rungs when users, self-updates, or irreversible corpus changes justify them. |
+| Stop after five copied practices when the project is reversible. | Fund more rungs when users, self-updates, or irreversible corpus changes justify them. |
 
-**If you only take one thing:** copy the four baseline practices in the rigor guide, then add rungs only for a named risk.
+**If you only take one thing:** copy the five baseline practices in the rigor guide, then add rungs only for a named risk.
 
 ## Two load-bearing skill patterns
 
