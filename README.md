@@ -64,12 +64,12 @@ reached over the LAN — its own GPU/thermal/memory readings, its scheduled jobs
 posture alerts, inbox, and what was downloaded onto which box.
 
 Worth noticing, because it is what the tool is *for*: the second box's dGPU is at **96% / 68°C / 299 W**
-serving a 17 GB model at **60.4 tok/s** while its iGPU sits at 0% / 46°C — two devices, one box, wildly
+serving a 17 GB model at **60.4 tok/s** (a live TUI eval rate, not one of the CSV cells — the logged peak for that tag is 54.4–56.4) while its iGPU sits at 0% / 46°C — two devices, one box, wildly
 different states, both visible at a glance. Three cloud legs are in flight next to two resident local
 models. An automation failure is surfaced in the inbox rather than buried in a log, and the upstream
 panel shows exactly which dependencies are behind.
 
-*Hostnames, LAN addresses and box nicknames are redacted; every reading is real.*
+*Hostnames, LAN addresses and box nicknames are redacted (grey boxes); every reading is real. The header shows a newer in-house build than the `tui/` sources exported here.*
 
 ## Research team
 
@@ -143,13 +143,13 @@ rather than a slope — a model either fits or it doesn't:
   **25.1 GB** once loaded, so it spans both cards — directly confirmed by loading it: Ornith-35B
   sits at 11839 / 11323 MiB and GLM-4.7-Flash at 11447 / 10789 MiB, both across the pair, because
   neither fits in one 16 GiB card at all. Ornith-35B and qwen3-coder:30b are the same
-  story. Those are the 108–200 tok/s rows.
+  story. On decode those two-card rows land at ~105–115 tok/s (the higher figures that used to sit here were prompt-processing, not decode).
 - **Budget for runtime overhead, not just weights** — it does not scale with model size. See the
   third chart: one 9 GB model occupies 17 GB loaded.
 - **CPU is not the bottleneck** for GPU-resident inference; it matters for loading and for the
   orchestration around the models. System RAM matters more than core count — 32 GB is adequate but
   not generous once several services and a browser are running alongside.
-- Model weights are large. Roughly **700 GB** of models and working state on the internal NVMe here.
+- Model weights are large. Hundreds of GB of models and working state on the internal NVMe here (not inventoried in this export).
 - **Neither the platform nor the PCIe links need to be top-shelf.** This is an AM4 board (MSI B550
   Tomahawk Max) feeding one card at **PCIe 4.0 x8** and the other at **PCIe 3.0 x4**, with the
   deliberately mismatched DRAM above settling at 2933 MT/s. Every number in the charts was measured
@@ -159,7 +159,8 @@ rather than a slope — a model either fits or it doesn't:
   lane-starved hardware is sufficient; the VRAM cliff above is the only spec that gates anything.
 
 This operating log now records `box-a` and `box-b`: different vendors, serving stacks, and device
-paths. Every CSV row carries `box`, `device`, `quant`, `serving_stack`, `quality_score`, `verdict`,
+paths. Every CSV row has `box`, `device`, `quant`, `serving_stack`, `quality_score`, `verdict` columns —
+many values are blank, because a blank is more honest than a value reconstructed after the fact —
 and `n_runs_for_model` so the sample size stays attached to the number. Some rows are single-run.
 This is not a controlled cross-vendor benchmark; it is a transparent record for operating decisions,
 with its limits visible.
@@ -174,7 +175,7 @@ loaded as 5435 / 5315 MiB across both, while `lfm:8b` at 5.2 GB stayed on a sing
 
 **Before / after.** Six A/B pairs measured on the same box, same task. The finding that changed how
 this fleet routes work: swapping the audit lane from a 30.7B dense model to a 25.2B MoE averaged
-**+348%** across three tasks *at quality parity* — the smaller model also found **more** seeded bugs
+**+348%** across three tasks *at equal-or-better seeded-bug recall* — the smaller model also found **more** seeded bugs
 (5/5 vs 4/5, 18/18 vs 16/18). Speculative decoding on the same model averaged **+13%**. Routing beats
 flag-tuning here, and the gap is an order of magnitude.
 
@@ -201,7 +202,7 @@ reading cannot silently reuse the first device. Each bar states its sample size.
 
 ![Box-b device split](bench/05_device_split.png)
 
-`bench/device_split_bench.py` is the harness that produced those eight cells, so the comparison can be
+`bench/device_split_bench.py` is the written-down method for those eight cells — the originals came from an ad-hoc command on the second box, and this file is that protocol recorded so the comparison can be
 re-run rather than taken on trust. It drives one model onto each GPU through `options.main_gpu`,
 discards a warm-up so model-load time is not counted as decode rate, and **unloads between devices** —
 without that, the second request quietly reuses the copy already resident on the first device and the
@@ -219,8 +220,8 @@ mismatched, mainstream, lane-starved hardware** — that is the point, not an ap
 
 | | |
 |---|---|
-| **GPU** | 2 × NVIDIA RTX 5060 Ti, **16 GB GDDR7 each (32 GB total)** · Blackwell, compute capability **12.0 (sm_120)** · driver 595.71.05, CUDA 13.2 |
-| **CPU** | AMD Ryzen 7 5800XT — 8 cores / 16 threads, boost ~4.97 GHz |
+| **GPU** | 2 × NVIDIA RTX 5060 Ti, **16 GB GDDR7 each (32 GB total)** · Blackwell, compute capability **12.0 (sm_120)** · driver 595.71.05, CUDA 13.2 toolkit (one llama.cpp binary in the log was built against 13.3) |
+| **CPU** | AMD Ryzen 7 5800XT — 8 cores / 16 threads, rated boost 4.8 GHz (≈4.97 GHz observed under PBO) |
 | **Motherboard** | MSI MAG B550 TOMAHAWK MAX WIFI — **AM4**, a mainstream 2020-era board. One GPU runs at **PCIe 4.0 x8**, the other at **PCIe 3.0 x4** (chipset slot). Neither gets a full x16 link. |
 | **RAM** | 32 GB DDR4 (30 GB usable) + 8 GB swap — 4 × 8 GB at **2933 MT/s**. Deliberately mismatched: 3 × DDR4-3200 CL16 single-rank + 1 × DDR4-3000 CL15 dual-rank, so the controller settles below both kits' ratings. |
 | **Storage** | 2 TB internal NVMe for models and working state; 1 TB USB-attached NVMe for backups |
@@ -231,7 +232,7 @@ mismatched, mainstream, lane-starved hardware** — that is the point, not an ap
 | | |
 |---|---|
 | **APU** | AMD Ryzen AI MAX+ 395 ("Strix Halo") — 32 threads, with integrated **Radeon 8060S** graphics |
-| **Discrete GPU** | **AMD Radeon AI PRO R9700** (Navi 48, RDNA 4, `gfx1201`) — **31 GiB** usable VRAM |
+| **Discrete GPU** | **AMD Radeon AI PRO R9700** (Navi 48, RDNA 4, `gfx1201`) — **~31.9 GiB** usable VRAM (32624 MiB measured; 32 GB SKU) |
 | **iGPU** | Radeon 8060S on **unified memory** — the same pool as system RAM, so "VRAM" is an allocation, not a fixed partition |
 | **Memory** | **122 GiB LPDDR5-8000**, shared between CPU and iGPU |
 | **Chassis** | GMKtec EVO-X3 mini-PC |

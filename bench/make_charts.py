@@ -4,10 +4,10 @@ import json, vl_convert as vlc
 
 BG, FG, MUTED, GRID = "#12141a", "#e8eaf0", "#98a0b3", "#2a2f3a"
 FAM = {"qwen": "#4cc9f0", "gemma": "#b5179e", "ornith": "#f7b801", "lfm": "#43e97b",
-       "deepseek": "#f56565", "glm": "#9d8df1", "qwythos": "#8d99ae"}
+       "deepseek": "#f56565", "glm": "#9d8df1", "qwythos": "#8d99ae", "other": "#7f8794"}
 
 peak = [
-    ("LFM2.5-8B-A1B",         230.0, "lfm",      "5.2 GB · Q4_K_M · MoE A1B · decode · best of 2"),
+    ("LFM2.5-8B-A1B",         230.0, "lfm",      "5.2 GB · Q4_K_M · MoE A1B · decode · HIGH END of a measured 130-230 range"),
     # Ornith-1.0-35B-A3B 199.9 REMOVED 2026-08-23: that figure is llama.cpp `pp2048` = PROMPT
     # PROCESSING, not decode. It sat on this generation axis at ~2x the same model's real
     # decode row (115.0, below). The CSV rows are now metric=prefill; this chart is decode-only.
@@ -15,17 +15,17 @@ peak = [
     ("qwen3.6:35b-a3b",       114.43, "qwen",    "box-a · both-dgpu · Q4_K_M · n=1"),
     ("qwen3-coder:30b",       135.5, "qwen",     "box-b · dgpu-b · quant unknown · n=2"),
     ("gemma4:26b-a4b-it-qat", 109.05, "gemma",   "box-b · dgpu-b · q4_0-qat · n=2"),
-    ("GLM-4.7-Flash",         105.0, "glm",      "18 GB · Q4_K_M · llama-server · best of 2"),
+    ("GLM-4.7-Flash",         105.0, "glm",      "18 GB · Q4_K_M · llama-server · n=1"),
     ("GLM-4.7-Flash-GGUF",    105.0, "glm",      "box-a · both-dgpu · quant unknown · n=1"),
     ("Ornith-1.0-9B",          67.0, "ornith",   "5.6 GB · Q4_K_M · 9B dense · single run"),
     ("qwen3.8:27b-devicepinned", 56.4, "qwen",   "box-b · dgpu-b · device-pinned build · n=1"),
-    ("gemma4:12b",             54.0, "gemma",    "7.6 GB · Q4_K_M · 11.9B dense · best of 3"),
+    ("gemma4:12b",             54.0, "gemma",    "7.6 GB · Q4_K_M · 11.9B dense · max of 3 conditions"),
     ("qwen3.8:27b",           54.35, "qwen",     "box-b · dgpu-b · quant unknown · n=2"),
-    ("qwen3:14b",              42.5, "qwen",     "Q4_K_M · 14B · ollama · single run"),
-    ("deepseek-r1:14b",        42.4, "deepseek", "9.0 GB · Q4_K_M · 14.8B · single run"),
-    ("muse-glimmer",           33.8, "qwythos",  "box-b · igpu · llama-server spec-decode · n=3"),
+    ("qwen3:14b",             42.49, "qwen",     "Q4_K_M · 14B · ollama · single run"),
+    ("deepseek-r1:14b",       42.37, "deepseek", "9.0 GB · Q4_K_M · 14.8B · single run"),
+    ("muse-glimmer",           33.8, "other",    "box-b · igpu · llama-server spec-decode · n=3"),
     ("gemma4:31b-it-qat",     28.35, "gemma",    "box-b · dgpu-b · q4_0-qat · n=2"),
-    ("Qwythos-9B",             28.0, "qwythos",  "9B · decode, short context · best of 2"),
+    ("Qwythos-9B",             28.0, "qwythos",  "9B · decode · max of 2 context depths (short)"),
     ("gemma4:26b-a4b-it-bf16", 13.0, "gemma",    "box-b · igpu · bf16 · n=1 · dumped"),
     ("gemma4:31b-it-q8_0",      6.6, "gemma",    "box-b · igpu · q8_0 · n=1 · dumped"),
     ("gemma4:31b-it-bf16",      3.6, "gemma",    "box-b · igpu · bf16 · n=1 · dumped"),
@@ -108,9 +108,13 @@ for m, w, v in vram:
 pos = [r["delta"] for r in p2 if r["delta"] > 0]
 neg = [r["delta"] for r in p2 if r["delta"] <= 0]
 swap = [r["delta"] for r in p2 if r["group"] == "swap"]
+tune = [r["delta"] for r in p2 if r["group"] == "tune"]
 sub2 = (f"mean of the {len(pos)} that improved: +{sum(pos)/len(pos):.1f}%   ·   "
         f"mean of the {len(neg)} that did not: {sum(neg)/len(neg):.1f}%   ·   "
-        f"model-swap group: +{sum(swap)/len(swap):.1f}%   ·   same-model tuning: +{pos[-1]:.1f}%")
+        f"model-swap group: +{sum(swap)/len(swap):.1f}%   ·   "
+        # `pos[-1]` reported the single winning tune row as if it were the class average:
+        # the other two same-model tunes are -1.4% and -5.6%, so the honest tune mean is ~+2%.
+        f"same-model tuning (mean of {len(tune)}): {sum(tune)/len(tune):+.1f}%")
 
 AX = {"labelColor": FG, "titleColor": FG, "gridColor": GRID, "domainColor": GRID,
       "tickColor": GRID, "labelFontSize": 11, "titleFontSize": 12}
@@ -237,7 +241,7 @@ p4 = [
     {"model": "gemma4:26b-a4b-it-qat", "side": "box-b / dgpu-b", "tps": 109.05, "label": "109.05  n=2"},
     {"model": "gemma4:31b-it-qat", "side": "box-a / dgpu-a", "tps": 18.2, "label": "18.2  n=1"},
     {"model": "gemma4:31b-it-qat", "side": "box-b / dgpu-b", "tps": 28.35, "label": "28.35  n=2"},
-    {"model": "qwen3-coder:30b", "side": "box-a / dgpu-a", "tps": 35.6, "label": "35.6  n=1"},
+    {"model": "qwen3-coder:30b", "side": "box-a / dgpu-a", "tps": 35.6, "label": "35.6  n=1 · ollama"},
     {"model": "qwen3-coder:30b", "side": "box-b / dgpu-b", "tps": 135.5, "label": "135.5  n=2"},
     {"model": "qwen3.8:27b", "side": "box-a / dgpu-a", "tps": 21.2, "label": "21.2  n=1"},
     {"model": "qwen3.8:27b", "side": "box-b / dgpu-b", "tps": 54.35, "label": "54.35  n=2"},
@@ -245,7 +249,8 @@ p4 = [
 panel4 = {
     "title": {"text": "Cross-box throughput — identical model, different silicon",
               "subtitle": ["Grouped bars show the published CSV cell value, with box/device and n attached.",
-                           "Different vendors and serving stacks make this an operating comparison, not a controlled benchmark."],
+                           "Different vendors and serving stacks make this an operating comparison, not a controlled benchmark.",
+                           "Read the stack label before the gap: the coder pair is an n=1 ollama cell against an n=2 tuned cell. Same-stack rows in this CSV (108.1 llama.cpp on box-a) put that model far closer."],
               "anchor": "start", "color": FG, "fontSize": 18, "subtitleColor": MUTED, "subtitleFontSize": 11.5},
     "width": 900, "height": 280, "data": {"values": p4},
     "encoding": {"x": {"field": "model", "type": "nominal", "title": None, "axis": {"labelAngle": 0, "labelLimit": 260, "labelFontSize": 11}}, "xOffset": {"field": "side"}},
@@ -309,7 +314,7 @@ def _verify_against_csv():
         key = alias.get(name, name)
         if key not in best:
             bad.append(f"{name}: not present in CSV"); continue
-        if abs(best[key] - v) > 0.051:
+        if abs(best[key] - v) > 0.005:  # was 0.051 — wide enough to hide a rounded hand-pin
             bad.append(f"{name}: chart {v} vs CSV {best[key]}")
     # The before/after list was previously verified by NOTHING. Its axis is a generic
     # "tokens per second" that legitimately carries decode rows AND prefill A/B rows, so each

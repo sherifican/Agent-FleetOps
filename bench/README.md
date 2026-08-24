@@ -57,7 +57,7 @@ Three further constraints worth naming:
 
 | file | what it is |
 |---|---|
-| `local_model_throughput.csv` | the 47-row record, including box, device, quant, stack, quality, and verdict |
+| `local_model_throughput.csv` | the 55-row record, including box, device, quant, stack, quality, and verdict |
 | `01_peak_throughput.png` | best recorded row per model, coloured by family, with box/device and run count |
 | `02_before_after.png` | the six measured A/B pairs with deltas, including the two that went backwards |
 | `03_weights_vs_vram.png` | weights on disk vs VRAM actually occupied |
