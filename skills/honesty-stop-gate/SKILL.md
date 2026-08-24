@@ -1,12 +1,12 @@
 ---
 name: honesty-stop-gate
-description: Adapt the honesty stop gate (guard/hooks/honesty_stop_gate.py) to THIS user's stack — a Stop hook that blocks a turn asserting live state it never measured. Invoke when a user says "add the honesty gate", "wire up the stop hook", "adapt the honesty stop gate", or after copying guard/hooks/ into their project. The procedure forces the adopting AI to VERIFY every command it wires actually exists on the user's system (via --check-config), ASK about anything it cannot determine, keep private files and environments untouched, and prove the gate can fail end-to-end on the user's own box before calling it done.
+description: Adapt the honesty stop gate (guard/honesty_stop_gate.py) to THIS user's stack — a Stop hook that blocks a turn asserting live state it never measured. Invoke when a user says "add the honesty gate", "wire up the stop hook", "adapt the honesty stop gate", or after copying guard/ into their project. The procedure forces the adopting AI to VERIFY every command it wires actually exists on the user's system (via --check-config), ASK about anything it cannot determine, keep private files and environments untouched, and prove the gate can fail end-to-end on the user's own box before calling it done.
 license: MIT
 ---
 
 # Honesty Stop Gate — adaptation skill
 
-You are wiring `guard/hooks/honesty_stop_gate.py` into the user's agent so it blocks the agent from ending a turn on a live-state claim it never measured. The mechanism is fixed and correct; your whole job is the three config parameters — and the danger in that job is **building a stair to nowhere**: a check that reads as coverage and verifies nothing, because it points at a command the user's system does not have, or one that cannot fail. Read [`specs/honesty-stop-gate.md`](../../specs/honesty-stop-gate.md) first — including *"What it enforces, precisely"* (the gate confirms a probe RAN and named the subject; it does not read the probe's output). Do not reimplement the mechanism.
+You are wiring `guard/honesty_stop_gate.py` into the user's agent so it blocks the agent from ending a turn on a live-state claim it never measured. The mechanism is fixed and correct; your whole job is the three config parameters — and the danger in that job is **building a stair to nowhere**: a check that reads as coverage and verifies nothing, because it points at a command the user's system does not have, or one that cannot fail. Read [`specs/honesty-stop-gate.md`](../../specs/honesty-stop-gate.md) first — including *"What it enforces, precisely"* (the gate confirms a probe RAN and named the subject; it does not read the probe's output). Do not reimplement the mechanism.
 
 ## The contract you operate under
 
@@ -18,7 +18,7 @@ You are wiring `guard/hooks/honesty_stop_gate.py` into the user's agent so it bl
 ## Procedure
 
 ### 1. Read the mechanism, then map the three parameters
-Open `guard/hooks/honesty_gate.config.example.json`. You are producing a `honesty_gate.config.json` (same directory, or pointed to by `$HONESTY_GATE_CONFIG`) that overrides only `claim_patterns`, `verification_commands`, `subjects`, and optionally `non_subjects` / `verify_hint`. Leave `completion_pattern` alone unless the user's language for "finished" genuinely differs — and keep its linking-verb + clause-final requirement, or a bare "Done," will fire.
+Open `guard/honesty_gate.config.example.json`. You are producing a `honesty_gate.config.json` (same directory, or pointed to by `$HONESTY_GATE_CONFIG`) that overrides only `claim_patterns`, `verification_commands`, `subjects`, and optionally `non_subjects` / `verify_hint`. Leave `completion_pattern` alone unless the user's language for "finished" genuinely differs — and keep its linking-verb + clause-final requirement, or a bare "Done," will fire.
 
 ### 2. Discover the user's SUBJECTS (what live things do they claim state about?)
 Ask, or infer from what is safely visible: what does this agent launch and then report on? Background jobs, CI runs, deploys, services, containers, other agents/legs, long builds. These become `subjects`. Prefer distinct single tokens (a service name) over generic compounds — "build" and "job" as separate subjects make "build job" demand both be verified. If the user has a naming convention (e.g. logs named `<subject>_run.log`), note it: the gate resolves a subject from a `*.log`/`*.json`/`*.txt` filename.
@@ -37,7 +37,7 @@ For each way the user's agent could observe live state, find the actual command.
 Write your candidate list into `honesty_gate.config.json`, then run:
 
 ```
-HONESTY_GATE_CONFIG=guard/hooks/honesty_gate.config.json python3 guard/hooks/honesty_stop_gate.py --check-config
+HONESTY_GATE_CONFIG=guard/honesty_gate.config.json python3 guard/honesty_stop_gate.py --check-config
 ```
 
 It fails on any command whose binary does not resolve on this box (a stair to nowhere) and on any empty load-bearing list. **A candidate it flags is dropped, and you tell the user it was dropped and why** — silent omission reads as "covered everything." If, after dropping unresolved commands, `verification_commands` would be empty, STOP and tell the user: the gate cannot function without at least one real probe — surface the gap rather than shipping a gate that can never verify. Do not proceed past a red `--check-config`.
@@ -46,7 +46,7 @@ It fails on any command whose binary does not resolve on this box (a stair to no
 `claim_patterns` should cover how *this* agent phrases live-state claims (keep both running-type and completion-type families from the example). When unsure whether a phrase is a claim, leave it in — a false block is recoverable (run the check, delete, or label); a missed claim is the silent failure the gate exists to prevent. But do not add a pattern so broad it matches ordinary prose every turn — an always-firing gate gets disabled, which is the same as no gate.
 
 ### 5. Confirm the harness will actually run the hook
-The hook's contract is Claude-Code-shaped: the harness must (a) invoke `Stop` hooks, (b) pass the turn's `transcript_path` on stdin, and (c) honor a `{"decision":"block"}` response. If any of those is untrue, the hook silently no-ops and the install *reads as done while the gate never fires*. Confirm the user's harness supports all three, or ASK. For Claude Code: add one `Stop` hook entry pointing at `guard/hooks/honesty_stop_gate.py`. **Show the exact settings diff and back up the settings file before writing**, and add only that one entry — do not modify settings you were not asked to.
+The hook's contract is Claude-Code-shaped: the harness must (a) invoke `Stop` hooks, (b) pass the turn's `transcript_path` on stdin, and (c) honor a `{"decision":"block"}` response. If any of those is untrue, the hook silently no-ops and the install *reads as done while the gate never fires*. Confirm the user's harness supports all three, or ASK. For Claude Code: add one `Stop` hook entry pointing at `guard/honesty_stop_gate.py`. **Show the exact settings diff and back up the settings file before writing**, and add only that one entry — do not modify settings you were not asked to.
 
 ### 6. Prove it can fail END-TO-END, on this box, with the user's own config
 Two acceptance checks, both required:
@@ -56,7 +56,7 @@ Two acceptance checks, both required:
 
    ```
    printf '{"type":"assistant","message":{"content":[{"type":"text","text":"The <their-subject> is still running."}]}}\n' > /tmp/ht.jsonl
-   echo '{"transcript_path":"/tmp/ht.jsonl"}' | HONESTY_GATE_CONFIG=guard/hooks/honesty_gate.config.json python3 guard/hooks/honesty_stop_gate.py
+   echo '{"transcript_path":"/tmp/ht.jsonl"}' | HONESTY_GATE_CONFIG=guard/honesty_gate.config.json python3 guard/honesty_stop_gate.py
    ```
 
    That must emit a `{"decision":"block", …}`. Then add a line running one of the user's *real* verification commands naming that subject (a `tool_use` + `tool_result` pair) before the claim, and confirm it goes silent. A gate you have not watched block a real unbacked claim and pass a real backed one on this machine is not yet trusted — this is the same law the rest of the guard ladder runs on ([rigor-spectrum](../../specs/rigor-spectrum.md)): no guard without a proof it can fail.

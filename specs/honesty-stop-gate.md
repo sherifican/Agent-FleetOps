@@ -55,7 +55,7 @@ It was written **after** the failure it prevents, not before — the three-turn 
 
 ## What is mechanism and what you change
 
-Everything in the mechanism transfers unchanged. The three things that are specific to your stack are the config surface (`guard/hooks/honesty_gate.config.example.json`):
+Everything in the mechanism transfers unchanged. The three things that are specific to your stack are the config surface (`guard/honesty_gate.config.example.json`):
 
 | Parameter | What it is | The trap if you get it wrong |
 |---|---|---|
@@ -67,4 +67,4 @@ The middle row is the dangerous one, and it is why adaptation is not a copy-past
 
 ## Install
 
-The hook is a standard Claude Code / agent **Stop hook**: register `guard/hooks/honesty_stop_gate.py` as a `Stop` hook in your agent's settings, adapt the config via the skill, run `--check-config` (it flags any verification command whose binary does not exist on your box — a stair to nowhere — and any empty load-bearing list), and confirm `--self-test` passes on your machine. It emits a `{"decision": "block", "reason": …}` JSON object when it blocks and exits silently (0) otherwise; a broken config falls back to the built-in defaults rather than disabling the gate.
+The hook is a standard Claude Code / agent **Stop hook**: register `guard/honesty_stop_gate.py` as a `Stop` hook in your agent's settings, adapt the config via the skill, run `--check-config` (it flags any verification command whose binary does not exist on your box — a stair to nowhere — and any empty load-bearing list), and confirm `--self-test` passes on your machine. It emits a `{"decision": "block", "reason": …}` JSON object when it blocks and exits silently (0) otherwise; a broken config falls back to the built-in defaults rather than disabling the gate.
