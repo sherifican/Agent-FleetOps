@@ -1,0 +1,17 @@
+<!-- EDIT ME: replace example values with evidence from one research leg. -->
+# RESULT — <title> — <leg>
+
+RELEVANCE: Flagship-App = NONE
+RELEVANCE: Local-Models = NONE
+RELEVANCE: Fleet-Ops = NONE
+RELEVANCE: Tooling-Infra = NONE
+RELEVANCE: Research-Pipeline = NONE
+RELEVANCE: Memory = NONE
+
+## ACTIONABLE ITEMS
+
+| Item | What it is | Bucket | Action | Priority | Why | [MM:SS] |
+|---|---|---|---|---|---|---|
+| <evidenced item> | <description> | Tooling-Infra | VET | P2 | <why it matters> | <MM:SS> |
+
+CONTRACT SELF-CHECK: six relevance lines present; every action uses the closed vocabulary; evidence and gaps are labelled.

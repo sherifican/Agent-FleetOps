@@ -1,0 +1,18 @@
+<!-- EDIT ME: your project names (must match ACTIONABLE_ADDENDUM.md). -->
+# DISPATCH PREAMBLE — prepend before every video-research dispatch
+
+## §1 — transcript-grounded extraction
+
+Read the transcript once. Give a concise overview, then list every load-bearing claim with its transcript anchor. Flag an uncertain parse rather than filling a gap from memory.
+
+## §2 — per-claim verification
+
+For each load-bearing claim, state the claim and the evidence in the video separately. Use only sources retrieved in this run. Mark unsupported or conflicting claims clearly; a contradiction requires direct evidence.
+
+## §3 — relevance and actionability
+
+First emit the six `RELEVANCE: <Project> = <HIGH|MED|LOW|NONE>` lines exactly as specified in `ACTIONABLE_ADDENDUM.md`. Rate the six exact buckets: **Local-Models** (EDIT ME: your local inference/tuning setup) · **Flagship-App** (EDIT ME: your flagship product's domain) · **Fleet-Ops** (EDIT ME: your fleet operations) · **Tooling-Infra** (EDIT ME: your tooling infrastructure) · **Research-Pipeline** (EDIT ME: your research pipeline) · **Memory** (EDIT ME: your memory and retrieval practice). Then use the closed action vocabulary only: `GET`, `ADOPT`, `ADAPT`, `VET`, `EXPLORE`, `WATCH`, or `REJECT`. `NONE` is a valid relevance verdict.
+
+## §4 — standout and skills
+
+State `STANDOUT: YES`, `NO`, or `MAYBE`, with a reason and theme bucket. List installable skills only when their name, purpose, install command, and licence are evidenced.

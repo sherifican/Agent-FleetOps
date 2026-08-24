@@ -1,0 +1,10 @@
+<!-- EDIT ME: replace every angle-bracket placeholder for this video. -->
+# VIDEO-RESEARCH BRIEF — <title>
+
+- **Title:** <title>
+- **URL:** <url>
+- **Transcript path:** <transcript-path>
+- **Tier:** <HIGH|MED|LOW>
+- **Output:** `RESULT_<slug>_<leg>.md`
+
+Prepend `_DISPATCH_PREAMBLE.md` before dispatch. Work from the transcript and report gaps explicitly.

@@ -1,0 +1,26 @@
+<!-- EDIT ME: reconcile only what the leg outputs actually support. -->
+# FINAL — <title> — <date>
+
+## Agreements
+
+- <claim and the legs that agree>
+
+## Divergences
+
+- <claim: leg-a said …; leg-b said …>
+
+## Adjudications
+
+- <decision, evidence, and remaining uncertainty>
+
+## Surviving actionable items
+
+| Item | Bucket | Action | Priority | Why | Provenance |
+|---|---|---|---|---|---|
+| <item> | <one of the six buckets> | <GET|ADOPT|ADAPT|VET|EXPLORE|WATCH|REJECT> | <P0|P1|P2> | <reason> | <legs and anchors> |
+
+## Provenance
+
+- Legs: <leg-a>, <leg-b>
+- Dates: <dates>
+- Byte counts: <per-leg byte counts>

@@ -1,0 +1,40 @@
+<!-- EDIT ME: a report that cannot name its qualifying criteria does not get made. -->
+qualifying_criteria: [<cross-leg-convergence>, <actionable-density>]
+gate_score: <n> (descriptive — a validator must recompute before trusting)
+gate_evidence: <measured evidence for each criterion>
+hub_card: <hub card path or identifier>
+source_artifacts: [<FINAL>, <RESULT>, <captured media>]
+
+# Masthead
+
+<title · source link · creator · date · duration>
+
+## Provenance block
+
+<legs and byte counts · reconcile date · audit verdict · frames captured/kept · items harvested · qualifying criteria>
+
+## VERDICT
+
+<120 words or fewer>
+
+## THE FINDING
+
+<one thing most worth knowing>
+
+## BY DATA POINT
+
+<Claim → Evidence → Analysis → Implications>
+
+## ACTIONABLE ITEMS
+
+| Item | Bucket | Action | Priority | Convergence | Evidence |
+|---|---|---|---|---|---|
+| <item> | <bucket> | <action> | <P0|P1|P2> | <n/N legs> | <anchor> |
+
+## WHAT WE ALREADY DO
+
+<honest placement against the current stack>
+
+## OPEN QUESTIONS / UNVERIFIED
+
+<unsettled point and the exact check that would settle it>

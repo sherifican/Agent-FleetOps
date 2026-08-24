@@ -10,7 +10,7 @@ catch is a detector that should exist. Observed violations that motivated this, 
   · project relevance over-rated (everything HIGH) — uncalibrated, not thorough
 
 Exit codes:  0 = clean · 1 = violations found · 2 = file unreadable
-Run standalone, or let dispatch_video_research.sh call it after the legs return.
+Run standalone, or let templates/dispatch-wrapper.sh.template call it after the legs return.
 """
 import re, sys, os
 

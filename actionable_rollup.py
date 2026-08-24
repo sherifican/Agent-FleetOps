@@ -24,7 +24,7 @@ Usage: python3 actionable_rollup.py [--out <path>]
 """
 import re, os, glob, argparse, collections
 
-BASE = "~/Fleet-PC-Passback/Research-fleet"
+BASE = os.path.expanduser(os.environ.get("VIDEO_ROOT", "./video-research"))  # EDIT ME or set VIDEO_ROOT
 OUT_DEFAULT = f"{BASE}/ACTIONABLE_ROLLUP.md"
 
 BUCKETS = ["Flagship-App", "Local-Models", "Fleet-Ops", "Tooling-Infra", "Research-Pipeline", "Memory", "Unsorted"]
@@ -36,9 +36,8 @@ SRC_TRUST = {"FINAL": 3, "SYNTHESIS": 2, "LEDGER": 2, "RESULT": 1}
 # heuristic bucketing for v1 rows (no Bucket column). First match wins; deliberately conservative —
 # anything that does not clearly match stays Unsorted so a human re-triages rather than trusting a guess.
 BUCKET_HINTS = [
-    # EDIT ME: keyword route for YOUR flagship project. The words below are an EXAMPLE from the
-    # origin fleet (an audio app); replace them with terms from your own domain or the route is dead.
-    ("Flagship-App", r"\b(drum|onset|midi|stem|demucs|audio|chart(ing)?|tempo|beat|transcri(be|ption) of audio|spectrogram)\b"),
+    # EDIT ME: keywords for YOUR flagship domain.
+    ("Flagship-App", r"\b(photo|raw|lens|exif)\b"),
     ("Local-Models", r"\b(fine[- ]?tun|unsloth|lora|qlora|quantiz|gguf|vram|distill|train(ing)?|dataset|rtx|gpu memory"
                 r"|glm-?\d|qwen|codestral|gemma|llama|mistral|deepseek|moe\b|\d+b\b|ollama|llama\.?cpp|vllm)\b"),
     ("Research-Pipeline", r"\b(transcript|caption|subtitle|whisper|frame|vision|screenshot|synthesis|hub card|playlist|ocr)\b"),
@@ -182,7 +181,7 @@ def collect():
             b = os.path.basename(f)
             b = re.sub(r"^(RESULT|FINAL|SYNTHESIS)_", "", b)
             b = re.sub(r"\.md$", "", b)
-            b = re.sub(r"_(kimi|grok|gemini36|flash|codex-terra|claude-opus48|antigravity)$", "", b)
+            b = re.sub(r"_(kimi|grok|gemini36|flash|codex-terra|claude-opus48|antigravity)$", "", b)  # EDIT ME: your leg-name suffixes
             b = re.sub(r"_\d{4}-\d{2}-\d{2}$", "", b)
             rows += parse_tables(open(f, encoding="utf-8", errors="replace").read(), lab, b)
     return rows
@@ -221,7 +220,7 @@ def render(items):
     out = ["# ACTIONABLE ITEMS — cross-video rollup", "",
            "Everything the video-research pipeline surfaced that has real pull on the configured stack — skills, "
            "workflows, repos, tools, models, MCP servers, methods — **grouped by what it upgrades, then by "
-           "priority**. Built by `fleet_optests/actionable_rollup.py`; regenerate after every batch.", ""]
+           "priority**. Built by `actionable_rollup.py`; regenerate after every batch.", ""]
     tot = len(items)
     by_b = collections.Counter(i["bucket"] for i in items)
     by_p = collections.Counter(i["prio"] for i in items)

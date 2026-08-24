@@ -1,0 +1,4 @@
+# EDIT ME: this is an annotated template, not a runnable script.
+# Run YOUR orchestrator with skills/dual-model-reconciliation/SKILL.md as its method.
+# Give it the relevant RESULT_<slug>_<leg>.md files and write the reconciled result to FINAL_<slug>_<date>.md.
+# Preserve each leg's claims and identify which leg said what when they differ.
