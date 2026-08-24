@@ -47,11 +47,11 @@ another machine). The commit history tells that story.
 | Dir | Contents |
 |---|---|
 | `tui/` | **fleet-tui** — a Textual terminal monitor for a local/cloud model fleet. 27 headless source modules (excluding `__init__.py`) behind a 364-test hermetic suite; strict one-way pipeline (pure readers → pure formatters → app), frozen dataclass contracts, safe-default degradation. CI runs the full suite on every push. |
-| `skills/` | **24 generalized agent-discipline procedures** — evaluation integrity, model routing (the living-table method), the local-lane build loop, multi-agent code workflow, research dispatch/verification, memory ops, brain bookkeeping, protected-function guards, blocked-page retrieval, and more. Each encodes failure stories from real operation. The portable start-list is in [`adopt/20_skills.md`](adopt/20_skills.md); you are not expected to install 24. |
+| `skills/` | **25 generalized agent-discipline procedures** — evaluation integrity, model routing (the living-table method), the local-lane build loop, multi-agent code workflow, research dispatch/verification, memory ops, brain bookkeeping, protected-function guards, blocked-page retrieval, and more. Each encodes failure stories from real operation. The portable start-list is in [`adopt/20_skills.md`](adopt/20_skills.md); you are not expected to install 25. |
 | `templates/` | Copyable dispatch, honesty, pinned-environment, and research-artifact patterns. Templates are adoption patterns, not automatic enforcement. |
 | `_tools/` | The export pipeline's own gates — provenance wall-checker, secrets/personal-data scanner, and a **ref gate**, all mutation-proven (`--self-test`). The first two ask "is this tree safe to publish?"; the third asks the question they structurally cannot: **"what would a push actually publish?"** A history rewrite is only true of the branch you rewrote — this repo's own rewrite left a clean `main` beside two leftover refs still carrying the trailers and build artifacts the rewrite removed, one `push --all` away from being republished. Content gates scan a worktree; pushes carry refs. |
-| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 170 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus. `2 = UNMEASURED` dominates `1 = violation` throughout. |
-| `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, the verified-system-map pattern, and the [research-team](specs/research-team-protocol.md) and [rigor-spectrum](specs/rigor-spectrum.md) guides. |
+| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 170 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/hooks/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
+| `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, the verified-system-map pattern, and the [research-team](specs/research-team-protocol.md), [rigor-spectrum](specs/rigor-spectrum.md), and [honesty-stop-gate](specs/honesty-stop-gate.md) guides. |
 | `bench/` | **The two-box throughput operating log** — 55 measurements over 20 model tags, with sample sizes and device labels attached. See below. |
 
 ### fleet-tui, running
@@ -288,6 +288,19 @@ flowchart LR
     style X1 fill:#3a1a1a,stroke:#e63946
     style UM fill:#3a2a1a,stroke:#ffb347
 ```
+
+### The honesty stop gate — a guard that watches the agent's words
+
+The ladder above proves *artifacts* can fail visibly. One guard turns the same law on the agent's own
+claims: a [**Stop hook**](specs/honesty-stop-gate.md) that refuses to end a turn asserting live state
+("the job is running", "all three legs completed") the turn never measured. It reads the current turn,
+finds live-state claims in the prose and verification commands in the tool calls, and blocks when a
+claim has no same-turn, same-subject check — because reporting an *intention* as an *observation* feels
+identical from the inside and no advisory rule catches it. It carries its own teeth (`--self-test`
+proves it still blocks an unbacked claim and passes a backed one), and adapting it to another stack is
+a guided step, not a copy-paste: [`skills/honesty-stop-gate`](skills/honesty-stop-gate/SKILL.md) forces
+the adopting AI to confirm every verification command actually exists on the target box — a check
+pointed at a missing command is a stair to nowhere that reads as coverage and delivers none.
 
 ### Same teeth, different rung count
 

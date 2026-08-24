@@ -1,0 +1,35 @@
+{
+  "//": "Copy to honesty_gate.config.json (same dir) or point $HONESTY_GATE_CONFIG at it. Then run `honesty_stop_gate.py --check-config` — it flags any verification command whose binary does not exist on your box.",
+  "//claim_patterns": "How a live/background-state claim reads in YOUR domain. Regex fragments, OR-joined, matched case-insensitively inside word boundaries. Keep both families: RUNNING-type (is running / in progress / pending) and COMPLETION-type (has completed / is finished).",
+  "claim_patterns": [
+    "still running", "is running", "are running", "currently running",
+    "running in the background", "in flight", "now running",
+    "still (?:in progress|pending|working)",
+    "has(?:n'?t| not) (?:been )?started", "not yet started", "never started",
+    "(?:has|have|is|are|was|were)\\s+(?:completed|finished|(?:complete|done)(?=\\s*(?:[.;!?—–·•\\n]|$)))",
+    "(?:job|task|build|deploy|service|process)s?\\s+(?:are|is)\\s+(?:live|running|up)"
+  ],
+
+  "//completion_pattern": "Matches ONLY completion claims (linking verb + done/finished; the adjective-shaped words must be clause-final so 'is complete garbage' does not match). These, when they name no configured subject, are treated as in-turn prose whose output is already in the transcript. Do not drop the linking-verb requirement, or a bare 'Done,' opening a sentence will fire.",
+  "completion_pattern": "(?:has|have|is|are|was|were)\\s+(?:completed|finished|(?:complete|done)(?=\\s*(?:[.;!?—–·•\\n]|$)))",
+
+  "//verification_commands": "The commands on YOUR box that ACTUALLY OBSERVE live process/service state. THIS IS THE STAIR-TO-NOWHERE SURFACE — `--check-config` verifies each binary resolves here. The gate confirms such a command RAN and NAMED the subject; it does NOT read the command's output, so only list commands whose RUNNING is itself the observation (a process/service probe). File-existence reads (`ls`, `stat`) and log reads (`cat`/`tail` a .log) are deliberately NOT here: a log file exists whether or not the process is alive, so they read as coverage without proving liveness. Add them only if you understand you are asserting content/existence, not that something is running.",
+  "verification_commands": [
+    "pgrep\\b", "ps\\s+aux\\b", "ps\\s+-ef\\b",
+    "systemctl\\s+status\\b", "systemctl\\s+is-active\\b",
+    "docker\\s+ps\\b", "kubectl\\s+get\\b", "jobs(?:\\s|$)",
+    "curl\\b[^\\n]*(?:/health|/status)\\b"
+  ],
+
+  "//subjects": "The named things whose state you assert (your job/service/agent vocabulary). Reduced to the token before the first '-'. A verifying command must NAME the claim's subject to cover it — verifying one subject never licenses a claim about another. Prefer distinct single tokens over generic compounds ('build' and 'job' as separate subjects make 'build job' demand both be verified).",
+  "subjects": [
+    "job[\\w-]*", "task[\\w-]*", "build[\\w-]*", "deploy[\\w-]*",
+    "service[\\w-]*", "worker[\\w-]*", "process[\\w-]*", "container[\\w-]*"
+  ],
+
+  "//non_subjects": "Words that never name a subject alone, so 'it is still running' does not self-verify. A subjectless RUNNING claim ('both are still running') is treated as uncovered and blocks — it cannot pass off an unrelated probe.",
+  "non_subjects": ["the", "a", "an", "both", "it", "nothing", "none", "neither", "everything", "this", "that", "they", "these", "those"],
+
+  "//verify_hint": "One line shown in the block message naming how to verify on your stack.",
+  "verify_hint": "the command that observes this subject's real state (e.g. `pgrep -af <name>`, `systemctl status <svc>`, read the log/artifact)"
+}
