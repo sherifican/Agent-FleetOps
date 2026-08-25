@@ -72,7 +72,7 @@ def main():
             print(f"\n  {label}:")
             for val, n in counter.most_common():
                 print(f"    {n:3}  {val}")
-    print("\n  Read this as: which carve-outs are REAL and load-bearing, and is the 'ONLY orchestration'")
+    print("\n  Read this as: which carve-outs are REAL and critical, and is the 'ONLY orchestration'")
     print("  wording defensible? A carve-out used once is noise; one used constantly is the rule as lived.")
     return 0
 

@@ -103,10 +103,10 @@ v = vm.motion_verdict(base, base.copy()); check("identical frames -> STATIC", no
 v = vm.motion_verdict(base, np.clip(base + rng.normal(0, 1.0, base.shape), 0, 255).astype(np.float32))
 check("tiny codec noise -> STATIC", not vm.is_motion(*v))
 
-# ---------- 5. Thresholds are load-bearing ----------
-print("\n[5] THRESHOLDS load-bearing — a wrong value must change the verdict")
+# ---------- 5. Thresholds are critical ----------
+print("\n[5] THRESHOLDS critical — a wrong value must change the verdict")
 # A NOISELESS synthetic pan has resid == 0.0 exactly, so "ratio <= 0.0" passes and asserts nothing.
-# Use a realistic (noisy) pan, where ratio ~0.15, so the threshold is genuinely load-bearing.
+# Use a realistic (noisy) pan, where ratio ~0.15, so the threshold is genuinely critical.
 cur = np.clip(translate(base, 6, 0) + rng.normal(0, 4, base.shape), 0, 255).astype(np.float32)
 v = vm.motion_verdict(base, cur)
 assert vm.is_motion(*v), "fixture precondition: a realistic pan must be MOTION at default thresholds"

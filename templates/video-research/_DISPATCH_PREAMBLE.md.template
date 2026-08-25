@@ -3,11 +3,11 @@
 
 ## §1 — transcript-grounded extraction
 
-Read the transcript once. Give a concise overview, then list every load-bearing claim with its transcript anchor. Flag an uncertain parse rather than filling a gap from memory.
+Read the transcript once. Give a concise overview, then list every critical claim with its transcript anchor. Flag an uncertain parse rather than filling a gap from memory.
 
 ## §2 — per-claim verification
 
-For each load-bearing claim, state the claim and the evidence in the video separately. Use only sources retrieved in this run. Mark unsupported or conflicting claims clearly; a contradiction requires direct evidence.
+For each critical claim, state the claim and the evidence in the video separately. Use only sources retrieved in this run. Mark unsupported or conflicting claims clearly; a contradiction requires direct evidence.
 
 ## §3 — relevance and actionability
 

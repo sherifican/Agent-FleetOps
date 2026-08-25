@@ -49,7 +49,7 @@ SEM_BINS = int(os.environ.get("VI_SEM_BINS", "12"))
 # represents only itself. Measured consequence (2026-08-01, budget 140): lm-studio lost 2 of 7 published
 # frames while RETAINING 81% of candidates — not a budget shortfall, the objective actively preferring
 # typical frames over informative ones. 105 of our 109 published companions score 9-10, so the frames this
-# loses are load-bearing figures, which is the worst place for a residual failure.
+# loses are critical figures, which is the worst place for a residual failure.
 # lam=0 is pure coverage (the measured 90.9% baseline); lam=1 is pure novelty. Swept, not guessed.
 # ⛔ MEASURED AND REFUTED 2026-08-01 — default 0.0 (pure coverage). Swept on 5 real videos at budget 140:
 #     lam   0.0    0.25   0.5    0.75   1.0

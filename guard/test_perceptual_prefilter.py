@@ -96,11 +96,11 @@ def main():
         check("unreadable frame is KEPT, not silently dropped",
               len(kept3) == 2 and stats["unreadable"] == 1, f"kept={len(kept3)} {stats}")
 
-        # ---- 7. The threshold is LOAD-BEARING. At dist=64 everything matches; the filter must then
+        # ---- 7. The threshold is CRITICAL. At dist=64 everything matches; the filter must then
         #         collapse distinct frames — proving the knob actually drives behaviour rather than the
         #         result being an artifact of something else. -----------------------------------------
         kept4, dropped4, _ = vi._perceptual_prefilter(distinct, dist=64)
-        check("threshold is load-bearing: dist=64 collapses everything",
+        check("threshold is critical: dist=64 collapses everything",
               len(kept4) == 1, f"kept={len(kept4)} at dist=64 (vs {len(kept2)} at {vi.PHASH_DIST})")
 
         # ---- 8. THE ANTI-DRIFT PROPERTY (added 2026-08-02 — mutation PF2 survived without it).

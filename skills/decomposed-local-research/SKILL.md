@@ -15,7 +15,7 @@ A long agentic loop can exceed a local model's tool-call or context budget even 
 4. A bounded synthesis pass writes the verdict using only the prior stages; it introduces no new facts.
 
 ## Procedure
-- The orchestrator chooses the source and only load-bearing evidence URLs.
+- The orchestrator chooses the source and only critical evidence URLs.
 - Keep evidence packs small enough for the target context window; split or summarize source material when needed.
 - If needed evidence was not retrieved, add it and rerun retrieval rather than asking the model to guess.
 - Use discovery-capable research or a human review for open-ended source discovery and reliability-critical work.

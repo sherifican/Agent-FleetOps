@@ -137,7 +137,7 @@ sel_no, _ = vs.select(Vo, tso, budget=2, n_bins=1, ocr_w=0.0)
 sel_ocr, _ = vs.select(Vo, tso, budget=2, n_bins=1, tokens=toks, ocr_w=0.6)
 check("with OCR weight, the text-bearing frame is selected", 2 in sel_ocr,
       f"no-ocr={sel_no} ocr={sel_ocr}")
-check("OCR weight changes the outcome (the term is load-bearing)", sel_no != sel_ocr,
+check("OCR weight changes the outcome (the term is critical)", sel_no != sel_ocr,
       f"identical selections {sel_no}")
 
 # textless frames must NOT be punished — that is what the embedding term exists for

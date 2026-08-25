@@ -43,7 +43,7 @@ are different claims and the output must not blur them.
 
 `mutations=None` means the module-level `MUTATIONS` list.
 
-## The outcomes — five, and the distinctions are load-bearing
+## The outcomes — five, and the distinctions are critical
 
     HAS_TEETH    the mutation applied, the target property flipped ok True -> False,
                  and no other property flipped

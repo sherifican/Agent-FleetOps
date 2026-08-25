@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# readme_guard — refuse a commit that DELETES load-bearing README content.
+# readme_guard — refuse a commit that DELETES critical README content.
 # Every other gate in this repo asks "is bad content present?"; deletion passes all of them and even
 # makes the naming grep greener. This asks the opposite question. (Twice-burned 2026-08-22.)
 set -uo pipefail
@@ -13,4 +13,4 @@ miss=0
 for k in "${REQUIRED[@]}"; do
   grep -qF -- "$k" "$R" || { echo "readme_guard: MISSING required content: $k" >&2; miss=1; }
 done
-[ $miss -eq 0 ] && echo "readme_guard: all ${#REQUIRED[@]} load-bearing items present" || exit 1
+[ $miss -eq 0 ] && echo "readme_guard: all ${#REQUIRED[@]} critical items present" || exit 1

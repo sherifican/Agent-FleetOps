@@ -25,7 +25,7 @@ Ask, or infer from what is safely visible: what does this agent launch and then 
 
 **If this agent launches nothing in the background** — it works synchronously, its output is always in the transcript — say so and do NOT ship a running-claim gate: there are no subjects to guard, and an empty `subjects` list is a degenerate config. Either scope the config to completion-type claims only, or tell the user the gate has nothing to watch on this stack. Do not manufacture subjects to have something to configure.
 
-### 3. Discover and VERIFY the user's verification commands — the load-bearing step
+### 3. Discover and VERIFY the user's verification commands — the critical step
 For each way the user's agent could observe live state, find the actual command. Then **prove it exists on this box with `--check-config`, not by eye.**
 
 - Is there a process supervisor? `systemctl status` / `systemctl is-active` / `supervisorctl status` / `pm2 list`.
@@ -40,7 +40,7 @@ Write your candidate list into `honesty_gate.config.json`, then run:
 HONESTY_GATE_CONFIG=guard/honesty_gate.config.json python3 guard/honesty_stop_gate.py --check-config
 ```
 
-It fails on any command whose binary does not resolve on this box (a stair to nowhere) and on any empty load-bearing list. **A candidate it flags is dropped, and you tell the user it was dropped and why** — silent omission reads as "covered everything." If, after dropping unresolved commands, `verification_commands` would be empty, STOP and tell the user: the gate cannot function without at least one real probe — surface the gap rather than shipping a gate that can never verify. Do not proceed past a red `--check-config`.
+It fails on any command whose binary does not resolve on this box (a stair to nowhere) and on any empty required list. **A candidate it flags is dropped, and you tell the user it was dropped and why** — silent omission reads as "covered everything." If, after dropping unresolved commands, `verification_commands` would be empty, STOP and tell the user: the gate cannot function without at least one real probe — surface the gap rather than shipping a gate that can never verify. Do not proceed past a red `--check-config`.
 
 ### 4. Write the CLAIMS' regexes conservatively
 `claim_patterns` should cover how *this* agent phrases live-state claims (keep both running-type and completion-type families from the example). When unsure whether a phrase is a claim, leave it in — a false block is recoverable (run the check, delete, or label); a missed claim is the silent failure the gate exists to prevent. But do not add a pattern so broad it matches ordinary prose every turn — an always-firing gate gets disabled, which is the same as no gate.

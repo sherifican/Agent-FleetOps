@@ -255,7 +255,7 @@ def extract(text, *, id_registry=None, kind="leg"):
         # echoing it back). A property that fires on a third of a corpus that was never asked to
         # satisfy it is the "always fires" defect, which is as useless as one that never fires and
         # actively erodes trust in the rest of the guard.
-        # A FINAL is different: the hub card links from it, so there the link is load-bearing.
+        # A FINAL is different: the hub card links from it, so there the link is critical.
         found = "youtu.be/" in text or "youtube.com/watch" in text
         if kind != "final":
             return Property("has_source_link", True, found,

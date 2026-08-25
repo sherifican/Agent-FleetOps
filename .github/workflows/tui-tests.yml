@@ -25,7 +25,7 @@ jobs:
   ref-gate:
     runs-on: ubuntu-latest
     steps:
-      # fetch-depth: 0 is load-bearing — the ref gate scans FULL reachable history.
+      # fetch-depth: 0 is critical — the ref gate scans FULL reachable history.
       # At the default depth of 1 it would scan one commit and report "clean", which is
       # the check-that-cannot-fail failure mode this repo exists to argue against.
       - uses: actions/checkout@v4
@@ -37,7 +37,7 @@ jobs:
           python3 _tools/ref_gate.py --self-test
           python3 _tools/ref_gate.py .
           # readme_guard asks the INVERSE question from every other gate here: did
-          # load-bearing content DISAPPEAR? Deletion passes wall_check/scan_gate/ref_gate and
+          # critical content DISAPPEAR? Deletion passes wall_check/scan_gate/ref_gate and
           # even makes a naming scan greener. A delegated rewrite removed 55 lines on 2026-08-22
           # and every gate went green. (A guard with no caller is a script, not a gate.)
           bash _tools/readme_guard.sh

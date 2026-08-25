@@ -180,7 +180,7 @@ def test_video_ids_resolve_does_not_false_positive_on_prose():
 
 
 def test_has_source_link_is_judged_for_a_FINAL():
-    """A hub card links from the FINAL, so there the source URL is load-bearing."""
+    """A hub card links from the FINAL, so there the source URL is critical."""
     stripped = CLEAN.replace(f"https://youtu.be/{REAL_ID}", "(no link)")
     assert extract(CLEAN, id_registry=REGISTRY, kind="final")["has_source_link"].ok
     assert not extract(stripped, id_registry=REGISTRY, kind="final")["has_source_link"].ok

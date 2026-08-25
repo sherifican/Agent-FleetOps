@@ -32,7 +32,7 @@ In the kimi and claude readers in this same module, a `-p` token means PRINT mod
 PROFILE and takes a value. Do NOT copy the kimi mode logic. Reading `-p` as print here would mislabel
 every profile-based invocation.
 
-## Honesty rule (load-bearing — do not "improve" this)
+## Honesty rule (critical — do not "improve" this)
 
 Report only what the command line actually says.
 

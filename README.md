@@ -315,7 +315,7 @@ The laws are the same; consequence and reversibility decide the rung count. See 
 
 **If you only take one thing:** copy the five baseline practices in the rigor guide, then add rungs only for a named risk.
 
-## Two load-bearing skill patterns
+## Two critical skill patterns
 
 **A report is not an artifact** (from the dispatch/verification skills — both directions):
 

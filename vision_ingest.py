@@ -127,7 +127,7 @@ def _stage_a_budget(frames, budget=None):
     lacked was a BUDGET on A — the prefilter admitted however many frames survived it (364 on one video), and
     we scored all of them at 2 model calls each.
 
-    Binning is the load-bearing part, not the cap: it is a deterministic temporal prior that guarantees the
+    Binning is the critical part, not the cap: it is a deterministic temporal prior that guarantees the
     candidates span the whole video, which is the property a value-ranker cannot recover once the candidates
     are already clustered (see the first-third selection bug).
 

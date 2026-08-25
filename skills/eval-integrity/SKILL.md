@@ -266,7 +266,7 @@ silently swallowed as a retry). Fixed by single-sourcing the request SHAPE and t
 module + constants, which the probe now imports. **A copy of a call path is a fork with no merge** — and the
 sentence advising the copy is why the fork happened.
 
-## A FIDELITY CLAIM ("this mirrors / replicates the real X") is a load-bearing assertion nobody tests
+## A FIDELITY CLAIM ("this mirrors / replicates the real X") is a critical assertion nobody tests
 A comment or docstring asserting that an instrument reproduces production is a **testable proposition**, and
 it is worse than no comment at all, because it actively discourages the check. Two confirmed instances in two
 days on two machines: a throughput probe claiming *"replicates the REAL call body, only the named

@@ -14,7 +14,7 @@ If both pull in different directions, keep the location predictable (AI) and the
 ## Decision procedure (before writing any file)
 1. **Read the map first.** Check the nearest `AGENTS.md` (or equivalent context-map doc) and any `INDEX.md` for the directory's structure. Place into an existing folder if one fits.
 2. **Classify by pipeline stage / type**, then drop it in the matching folder (example scheme below).
-3. **Name it** descriptively: `STAGE_<slug>_<who-or-model>_<YYYY-MM-DD>.ext` where it helps grep (e.g. `RESULT_quant-test_<model>_2026-06-28.md`). Keep the stage prefix — it's load-bearing for routing.
+3. **Name it** descriptively: `STAGE_<slug>_<who-or-model>_<YYYY-MM-DD>.ext` where it helps grep (e.g. `RESULT_quant-test_<model>_2026-06-28.md`). Keep the stage prefix — it's critical for routing.
 4. **If no folder fits**, create a new typed sub-folder (don't invent a one-off at root) and **update the map** (`AGENTS.md` + `INDEX.md`) so the new category is discoverable. Updating the map is part of creating the category, not optional.
 5. **Heavy/cruft/superseded** (multi-MB logs, big zips, `*.bak`, raw machine dumps) → off the live tree to an archive location outside it, never left at a root.
 

@@ -34,7 +34,7 @@ extract = _rp.extract
 load_id_registry = _rp.load_id_registry
 _report_ids = getattr(_rp, "_report_ids", None)
 
-# --- outcomes: five plus the error case, and the distinctions are load-bearing -----------------------
+# --- outcomes: five plus the error case, and the distinctions are critical -----------------------
 
 HAS_TEETH = "HAS_TEETH"        # target flipped ok True->False, nothing else flipped
 OVERBROAD = "OVERBROAD"        # target flipped, collateral too — informational, not a failure

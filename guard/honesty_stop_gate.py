@@ -27,7 +27,7 @@ specific to YOUR stack live in CONFIG (a JSON file, schema in honesty_gate.confi
   - subjects             : the named things whose state you assert (jobs, services, …)
 Adapt those three, not the mechanism. Validate a config with `--check-config`: it flags
 any verification command whose binary does not resolve on this box (a stair to nowhere)
-and any empty load-bearing list. See specs/honesty-stop-gate.md and skills/honesty-stop-gate.
+and any empty required list. See specs/honesty-stop-gate.md and skills/honesty-stop-gate.
 
 TEETH. `--self-test` plants claims that MUST block (unbacked running claim; a claim about
 subject B backed only by a probe of subject A; a subjectless "both are still running"
@@ -44,7 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Keys whose empty value would DISABLE the gate (empty alternation → match-everything or
 # match-nothing). An empty one is ignored in favour of the default, never applied.
-LOAD_BEARING = ("claim_patterns", "verification_commands", "subjects")
+REQUIRED_LISTS = ("claim_patterns", "verification_commands", "subjects")
 
 DEFAULT_CONFIG = {
     "claim_patterns": [
@@ -92,9 +92,9 @@ def load_config():
                 for k, v in override.items():
                     if k not in DEFAULT_CONFIG:
                         continue
-                    # An empty load-bearing list disables the gate — ignore it and keep
+                    # An empty required list disables the gate — ignore it and keep
                     # the default rather than compile a match-everything/nothing regex.
-                    if k in LOAD_BEARING and (not isinstance(v, list) or not v):
+                    if k in REQUIRED_LISTS and (not isinstance(v, list) or not v):
                         continue
                     cfg[k] = v
     except Exception:
@@ -281,13 +281,13 @@ def block_message(bad, verify_hint):
 
 def check_config():
     """Validate the active config for stairs to nowhere: every verification command's
-    binary must resolve on THIS box, and no load-bearing list may be empty. Exit 0 clean,
+    binary must resolve on THIS box, and no required list may be empty. Exit 0 clean,
     1 if any problem — the adaptation skill makes passing this an acceptance gate."""
     cfg = load_config()
     problems = []
-    for k in LOAD_BEARING:
+    for k in REQUIRED_LISTS:
         if not cfg.get(k):
-            problems.append(f"load-bearing list '{k}' is empty — the gate would be disabled")
+            problems.append(f"required list '{k}' is empty — the gate would be disabled")
     for pat in cfg.get("verification_commands", []):
         # Head token = the binary the command starts with (strip regex noise).
         head = re.match(r"[A-Za-z0-9_./-]+", pat)
@@ -304,7 +304,7 @@ def check_config():
         print("Fix these before trusting the gate: drop unresolved commands, fill empty lists.")
         return 1
     print(f"check-config: OK — {len(cfg['verification_commands'])} verification command(s) resolve, "
-          f"{len(cfg['subjects'])} subject pattern(s), no empty load-bearing list")
+          f"{len(cfg['subjects'])} subject pattern(s), no empty required list")
     return 0
 
 

@@ -13,7 +13,7 @@ Use multiple independent research legs when current or external facts materially
 2. Read current feedback and constraints before dispatching.
 3. Send equivalent briefs to at least two suitable research workers. Require each to retrieve the live primary pages it cites.
 4. Store each leg as a separately named artifact under the project's documented convention.
-5. Reconcile into a final brief: compare each load-bearing claim, record confidence, and list unresolved points.
+5. Reconcile into a final brief: compare each critical claim, record confidence, and list unresolved points.
 
 ## Reconciliation rules
 - Agreement between independently sourced legs raises confidence but does not replace source inspection where stakes require it.
