@@ -45,8 +45,19 @@ not exceptional. The capability to push is shared, which makes **"who pushes" a 
 capability limit**; the integration discipline above is what makes shared write access safe instead of a
 clobber lottery.
 
-> **Provenance:** distilled from a live incident where two agents held push access to one repository. One
-> agent's push was rejected mid-task because the other had pushed a small change seconds earlier. The rejected
-> agent fetched, confirmed the incoming edit did not overlap its own, rebased on top, verified both changes
-> were present in the tree, and pushed a fast-forward — no work lost on either side. Generalized; identifiers
-> removed.
+## Why this exists
+
+Distilled from a live incident where **an agent and a human collaborator (the repository owner)** both held
+push access to one repository. The agent's push was rejected mid-task because the human had pushed a one-line
+change moments earlier. The agent fetched, confirmed the incoming edit did not overlap its own, rebased on top,
+verified both changes survived in the tree, and pushed a fast-forward — no work lost on either side.
+
+The agent-and-human case is the sharper one: a claim/driver lock can stop two *agents* from colliding, but it
+**cannot bind a human collaborator's own hands** — so *recovery* after a collision, not just *prevention* of
+one, is mandatory. (The incident was first written up with the wrong participant — "two agents" — which would
+have taught the wrong prevention; corrected here, which is itself the argument for recording provenance.)
+Generalized; identifiers removed.
+
+**Related:** `specs/driver-lock-protocol.md` is the *prevention* half — claim a region before writing so two
+agents don't collide. This skill is the *recovery* half — what to do once a collision has happened anyway,
+which a lock cannot prevent when one writer sits outside its authority.
