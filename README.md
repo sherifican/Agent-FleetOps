@@ -58,7 +58,7 @@ another machine). The commit history tells that story.
 
 ![fleet-tui monitoring a two-box fleet](docs/fleet_tui_screenshot.png)
 
-A live two-box fleet in one screen. Left column is the local box: health, the model kanban
+A live two-box fleet in one screen with resizable/minimize-able cards. Left column is the local box: health, the model kanban
 (in-flight / loaded / idle), lane governance, and artifact receipts. Right column is the second box
 reached over the LAN — its own GPU/thermal/memory readings, its scheduled jobs beside the local ones,
 posture alerts, inbox, and what was downloaded onto which box.
