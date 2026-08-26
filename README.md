@@ -370,6 +370,24 @@ numbers are labeled as measured on the reference setup.
 Related: ParaKit — the desktop application whose
 multi-agent development workflow drove most of these disciplines into existence.
 
+## Prior art & adaptations
+
+Not everything here was invented from scratch. Much of this repo's value is in **assembling, hardening,
+and generalizing** techniques — and several components are adapted from, or build on, existing
+open-source work. Each is credited inline where it lives; consolidated here:
+
+- **Odyssey Hub** (`odyssey_crawl_hub.py` and its editorial presentation) — the deterministic "the model
+  emits markdown, a renderer styles it" design and its visual treatment are **adapted from Odysseus**,
+  PewDiePie's multi-agent workspace tool (specifically its `visual_report.py`). The name deliberately
+  stays in that family; the data model and the fleet pipeline around it are ours.
+- **Solo-Rich Report** — the long-form writer scaffold is adapted from **Tongyi WebWeaver**.
+- **Leg-failure classification** — adapted from **opencode**'s retry classifier (`session/retry.ts`).
+- **`guard/` verification stack** — adapted from the `_breaker/` layer of the desktop application this
+  project was exported from.
+
+If we've adapted your work and the credit here is wrong or missing, open an issue — we'd rather correct
+it than leave it implicit.
+
 ## License
 
 MIT — see LICENSE.
