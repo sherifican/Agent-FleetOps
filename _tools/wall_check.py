@@ -57,7 +57,7 @@ def staged_files(staging: str):
             if f in ("STAGING_README.md",):
                 continue
             p = os.path.join(root, f)
-            yield os.path.relpath(p, staging)
+            yield os.path.relpath(p, staging).replace(os.sep, "/")
 
 def check(staging: str):
     hits = []
