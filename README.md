@@ -27,14 +27,14 @@ flowchart TD
     TP["teeth_prover <br/>can every guard actually fail?"] -->|proves| G
     G -->|"0 clean / 1 violation / 2 UNMEASURED <br/>(2 dominates 1)"| V{verdict}
     W --> C["curation loop <br/>EVOLVE - propose rule changes"]
-    C --> H["human gate <br/>approve / revise / reject"]
+    C --> H["user gate <br/>approve / revise / reject"]
     H --> A["deterministic apply <br/>exact-match or refuse"] --> D["second-model diff audit"] --> R["(git - every pass revertible)"]
     style TP fill:#1a3a2a,stroke:#39d36f
     style H fill:#3a2a1a,stroke:#ffb347
 ```
 
 Observation never mutates, writes serialize behind a lock, verification must be able to fail, and
-evolution of the rules themselves passes a human gate. The three loops share one substrate: everything is a file,
+evolution of the rules themselves passes a user gate. The three loops share one substrate: everything is a file,
 everything is diffable, everything is revertible.
 
 That rule is enforced on this repository itself: the export pipeline's secret scanner and
@@ -79,7 +79,7 @@ independence rule, receipt fields, failure handling, and security boundaries are
 
 | Role | Responsibility | Boundary |
 |---|---|---|
-| Orchestrator | Frames the question and keeps the second brief blind. | Judgment remains human/accountable. |
+| Orchestrator | Frames the question and keeps the second brief blind. | Judgment remains the user's, and accountable. |
 | Independent research legs | Retrieve evidence and retain separately named RESULT artifacts. | Agreement is not source verification. |
 | Reconciler + verifier | Preserves dissent, then checks claims against the evidence pack. | The verifier is not the producing leg. |
 | Actionability pass | Maps findings to the project’s closed vocabulary. | It does not turn a finding into truth. |
@@ -124,7 +124,7 @@ and invalid evaluation signals—not capabilities automatically granted by copyi
 
 ## Set it up with your own AI
 
-Clone this repository, then point your orchestrator at `adopt/README.md`. The agent will inventory the host, propose a local configuration from those observations, show a human the plan and diffs before any service, cron entry, or shell hook, and run the available verification steps. The adoption path degrades to a single box with no GPU or cloud CLI; absent capabilities are recorded rather than guessed. The `adopt/` documents are written for an agent with shell access.
+Clone this repository, then point your orchestrator at `adopt/README.md`. The agent will inventory the host, propose a local configuration from those observations, show the user the plan and diffs before any service, cron entry, or shell hook, and run the available verification steps. The adoption path degrades to a single box with no GPU or cloud CLI; absent capabilities are recorded rather than guessed. The `adopt/` documents are written for an agent with shell access.
 
 ```text
 Read adopt/README.md and follow it in order. Inventory this host before prescribing configuration. Show me the plan and diffs before installing any cron entry, service, or shell hook, then retain the literal verification output.
@@ -363,7 +363,7 @@ flowchart TD
 ## Provenance & sanitization
 
 Everything here was exported one-way from a private working system through a gated pipeline:
-mechanical sanitization → provenance wall-check → zero-hit secret/personal-data scan → human review
+mechanical sanitization → provenance wall-check → zero-hit secret/personal-data scan → user review
 per batch. Paths are genericized; network examples use RFC5737 documentation addresses; measured
 numbers are labeled as measured on the reference setup.
 
