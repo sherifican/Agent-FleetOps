@@ -4,13 +4,13 @@
 
 # Agent-FleetOps
 
-Pattern library for keeping local, cloud, and hybrid agent fleets honest, effective, and reliable.
+Pattern library for agent fleets: bind every check, count, and claim to a live target that can go red.
 It works on one box; the two-workstation setup that produced it is provenance, not a requirement.
 
 The organizing idea, applied everywhere here:
 
-> **A check that cannot fail is indistinguishable from a check that passes.**
-> Every guard ships with a way to prove it can go red.
+> **A report that cannot fail is indistinguishable from a report that passed.**
+> Bind every guard, test, count, path and status to a live target, and run the case that turns it red.
 
 This repo is a pattern library. You do not need two workstations.
 **Hand it to your AI:** clone it, then paste the block under **Set it up with your own AI**; the agent records missing GPUs and CLIs as `ABSENT`.
