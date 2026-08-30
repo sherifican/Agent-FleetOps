@@ -145,6 +145,41 @@ def test_selftest_reds_on_a_neutered_plant():
     assert rc == 1, "a selftest that cannot fail proves nothing —\n" + buf.getvalue()
 
 
+# ── the arm's OWN source is public-bound bytes too ──────────────────────────────────────────
+# Built by concatenation, per the module docstring: this file must stay clean in tracked bytes.
+SELF_QUOTE = "a person put it " + "him" + "self as " + chr(34) + "a planted quote" + chr(34)
+
+
+def _arm_source():
+    path = os.path.join(os.path.dirname(os.path.abspath(scrub_arm.__file__)), "scrub_arm.py")
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_arm_source_does_not_flag_itself():
+    """A rule DEFINITION must not read as an instance of the thing it looks for.
+
+    Fixed by construction (the pattern is assembled from pieces), never by excusing the file:
+    the companion test below proves a real instance in this same file is still caught.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        _corpus(d, {"scrub_arm.py": _arm_source()})
+        rc, out = _run(["--root", d])
+    assert rc == 0, "the arm's own source matches its own rules —\n" + out
+
+
+def test_a_real_self_attribution_inside_the_arm_source_is_still_caught():
+    src = _arm_source()
+    planted_line = len(src.splitlines()) + 1
+    with tempfile.TemporaryDirectory() as d:
+        _corpus(d, {"scrub_arm.py": src + "# " + SELF_QUOTE + "\n"})
+        rc, out = _run(["--root", d])
+    flags = [l.strip() for l in out.splitlines() if l.strip().startswith("\u26d4")]
+    assert rc == 1 and len(flags) == 1, "expected exactly the planted hit —\n" + out
+    assert "scrub_arm.py:%d" % planted_line in flags[0], out
+    assert "self-reference-attribution" in flags[0], out
+
+
 ALL = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

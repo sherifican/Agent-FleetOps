@@ -46,6 +46,12 @@ SKIP_DIRS = ("guard/tests/fixtures/",)  # committed plants — exercised by --se
 # placeholder names documentation legitimately uses; anything else after /home/ (or /Users/,
 # or the Windows profile dir) reads as a real account.
 _NEUTRAL = r"(?!user\b|<user>|username\b|example\b)"
+# The reflexive words and the opening quote are assembled from PIECES so that no source line
+# here spells out the thing its own rule looks for. This is an exemption BY CONSTRUCTION, not a
+# carve-out: no file and no directory is excused from the scan, and a real self-attributed quote
+# written anywhere in this file — including this one — is still caught. (Unit-gated.)
+_REFLEXIVE = r"\b(?:him|her)" + r"self\b"
+_QUOTE_OPEN = "[" + chr(34) + chr(0x201c) + "]"
 BASELINE = [
     ("private-material", "private-address-range",
      r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
@@ -57,7 +63,7 @@ BASELINE = [
      r"\b(?:(?:the owner|he|she)\s+(?:said|says|told|asked|wrote|picked|named|put it)"
      r"|the user\s+(?:said|told|asked|wrote|picked|named))\b[^\n]{0,40}[\"\u201c]"),
     ("quoted-speech", "self-reference-attribution",
-     r"\b(?:himself|herself)\b[^\"\n]{0,30}[\"\u201c]"),
+     _REFLEXIVE + r"[^\"\n]{0,30}" + _QUOTE_OPEN),
 ]
 
 

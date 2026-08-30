@@ -15,7 +15,10 @@ Usage: delegation_tally.py [--since 2026-08-03] [--repo /path]
 import collections, re, subprocess, sys
 
 HOOK_START = "2026-08-03"          # the day the commit-msg hook went in; nothing before it is attributable
-TRAILER = re.compile(r"^(Delegated-to|Claude-direct):\s*(.+?)\s*$", re.M)
+# `Authored-directly` is the tool-neutral name the hook asks for. The third alternative is the
+# name that trailer carried before 2026-08-30 and is kept for READING history only — dropping it
+# would silently re-bucket every earlier commit as untagged, which is a fabricated datum.
+TRAILER = re.compile(r"^(Delegated-to|Authored-directly|Claude-direct):\s*(.+?)\s*$", re.M)
 
 
 def main():
@@ -67,7 +70,7 @@ def main():
     if tagged:
         print(f"\n  DELEGATED {d_total}/{tagged} ({100*d_total//tagged}%)   "
               f"CLAUDE-DIRECT {c_total}/{tagged} ({100*c_total//tagged}%)")
-    for label, counter in (("Delegated-to", delegated), ("Claude-direct", direct)):
+    for label, counter in (("Delegated-to", delegated), ("Authored-directly", direct)):
         if counter:
             print(f"\n  {label}:")
             for val, n in counter.most_common():
