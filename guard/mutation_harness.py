@@ -45,11 +45,13 @@ GUARDS = {
     "semantic":  ("guard/test_semantic_selector.py",    "ALL CHECKS PASSED"),
     "spread":    ("guard/test_companion_spread.py",     "\nPASS"),
     "prefilter": ("guard/test_perceptual_prefilter.py", "PREFILTER HAS TEETH"),
+    "txn_mode":  ("guard/tests/test_artifact_txn_mode.py", "TXN MODE PRESERVED - ALL CHECKS PASSED"),
 }
 # files copied into the sandbox (guards + code under test), relative to REPO
 FILES = [
     "vision_ingest.py", "vision_semantic.py", "vision_motion.py",
     "vision_measure/replay_cascade.py",
+    "guard/artifact_txn.py",
 ] + [path for path, _ in GUARDS.values()]
 
 
@@ -322,6 +324,12 @@ MUTATIONS = [
       "'discrimination: distinct frames exceed the drop threshold' — is the VALUE pinned?",
       "os.environ.get(\"VI_PHASH_DIST\", \"6\")",
       "os.environ.get(\"VI_PHASH_DIST\", \"30\")"),
+    # ── artifact transaction: mode preservation ─────────────────────────────────────────────
+    M("TX1", "txn_mode", "guard/artifact_txn.py",
+      "mode-preservation chmod dropped — a 0755 target rewritten through the transaction returns 0644",
+      "'a rewrite preserves the target's permission bits' (0644 and 0700 likewise)",
+      "                    os.chmod(tmp_path, stat.S_IMODE(os.stat(path).st_mode))\n",
+      ""),
 ]
 
 

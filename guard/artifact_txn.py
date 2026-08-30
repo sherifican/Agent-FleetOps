@@ -1,5 +1,6 @@
 import os
 import shutil
+import stat
 from typing import Callable, List
 
 
@@ -63,6 +64,8 @@ class Transaction:
                 if os.path.exists(path):
                     prev_path = path + self.prev_suffix
                     shutil.copy2(path, prev_path)
+                    # os.replace hands the live path the TMP's mode; keep the target's bits.
+                    os.chmod(tmp_path, stat.S_IMODE(os.stat(path).st_mode))
                 
                 # Atomic replace: move tmp to live
                 os.replace(tmp_path, path)

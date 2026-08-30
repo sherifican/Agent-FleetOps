@@ -14,7 +14,7 @@ psc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(psc)
 
 TARGET = (os.environ.get("PASSBACK_OUTBOX", "~/comms/outbound") + "/replies/"
-          "REPLY_stale_artifact_and_missing_reply_2026-08-03.md")
+          + os.environ.get("PASSBACK_TEETH_TARGET", "REPLY_example.md"))  # EDIT ME: a reply you actually sent
 BACKUP = os.environ.get("TEETH_BACKUP", "/tmp/teeth_target.bak")
 
 

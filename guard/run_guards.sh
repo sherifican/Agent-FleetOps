@@ -37,7 +37,41 @@ python3 guard/contract_agreement.py; roll $?
 note "3. GUARD UNIT GATES — do the guards themselves still behave?"
 python3 -m pytest guard/tests/ -q; roll $?
 
-note "4. LEG LIVENESS"
+note "4. GUARD SELF-TESTS — every proof-carrying tool must prove itself"
+python3 guard/honesty_stop_gate.py --self-test; roll $?
+python3 guard/envelope_tap.py --selftest; roll $?
+if [ -f detect_poison.py ]; then
+  python3 guard/fetch_gate.py --selftest; roll $?
+else
+  echo "   NOTE: detect_poison.py (the adopter-supplied detector) is not present, so the fetch-gate"
+  echo "   selftest cannot run here. 2 = UNMEASURED — an absent check must be loud, never green."
+  roll 2
+fi
+PASSBACK_OUTBOX="${PASSBACK_OUTBOX:-$HOME/comms/outbound}"; export PASSBACK_OUTBOX
+PASSBACK_TEETH_FILE="$PASSBACK_OUTBOX/replies/${PASSBACK_TEETH_TARGET:-REPLY_example.md}"
+if [ -f "$PASSBACK_TEETH_FILE" ]; then
+  python3 guard/tests/teeth_passback_send_check.py; roll $?
+else
+  echo "   NOTE: no passback teeth target at \$PASSBACK_OUTBOX/replies (set PASSBACK_TEETH_TARGET"
+  echo "   to a reply you actually sent). 2 = UNMEASURED — the passback check did not run."
+  roll 2
+fi
+
+note "5. NEGATIVE CONTROL — the runner itself must be able to fail"
+echo "   A committed, deliberately broken config MUST read as broken. If it reads clean, every"
+echo "   green above is a light wired to nothing."
+nc_out="$(HONESTY_GATE_CONFIG=guard/tests/fixtures/honesty_gate.config.broken.json \
+   python3 guard/honesty_stop_gate.py --check-config 2>&1)"; nc_rc=$?
+if [ "$nc_rc" -eq 0 ] || ! printf '%s' "$nc_out" | grep -q "nonexistent-verifier-9f3a"; then
+  echo "   ⛔ the broken fixture was NOT detected for its OWN reason (rc=$nc_rc) — the runner has"
+  echo "   lost the ability to fail. A non-zero for an environmental reason does not count:"
+  printf '%s\n' "$nc_out"
+  roll 1
+else
+  echo "   broken fixture detected for its own named reason (rc=$nc_rc) — the runner can fail"
+fi
+
+note "6. LEG LIVENESS"
 if [ "$WITH_CANARY" = 1 ]; then
   python3 guard/leg_canary.py; roll $?
 else

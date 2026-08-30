@@ -55,8 +55,10 @@ below is the mechanism, generalized; numbers are from the reference deployment.
    result. Padding pressure is drift pressure.
 
 5. **The apply step is deterministic, not generative.** Approved intent → exact unique-match
-   search/replace → refuse on zero or multiple matches. The model that *decides* the edit never
-   free-hands the *application* of it. Zero-corruption by construction, at the cost of occasional
+   search/replace → refuse on zero or multiple matches. A CREATE proposal is applied as a
+   whole-file block — the complete content of the new file, written only when the target path does
+   not yet exist; an existing target is a refusal, never an overwrite. The model that *decides*
+   the edit never free-hands the *application* of it. Zero-corruption by construction, at the cost of occasional
    refusals that fall back to manual application.
 
 6. **A second model audits the diff.** Intent vs. applied change, MATCH/MISMATCH, from a model that

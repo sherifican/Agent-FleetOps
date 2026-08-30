@@ -1,0 +1,4 @@
+{
+  "//": "STANDING NEGATIVE CONTROL — this config is DELIBERATELY broken: its one verification command resolves nowhere. guard/run_guards.sh points --check-config at this file on every run and requires a non-zero exit. A runner that reads this file as clean has lost the ability to fail, and every green it prints is a light wired to nothing. Do not fix this file.",
+  "verification_commands": ["nonexistent-verifier-9f3a\\b"]
+}

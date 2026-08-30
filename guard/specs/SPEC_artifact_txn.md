@@ -46,7 +46,10 @@ whole subsystem exists to prevent.
 
 **commit()** — for every staged path, in a deterministic (sorted) order:
   1. if the live file exists, copy it to `path + prev_suffix` (copy, not move — the live file must stay
-     readable until the moment of replacement)
+     readable until the moment of replacement), and copy the live file's permission bits onto the
+     staged tmp — `os.replace` hands the live path the TMP's mode, so an executable rewritten through
+     the transaction would otherwise lose its `+x` silently. A path with no live file keeps the
+     process default (umask); the transaction invents no mode.
   2. `os.replace(tmp, path)` — atomic within a filesystem, so a reader never sees a partial file
 Returns the list of committed paths. If ANY step raises, immediately roll back every path already
 committed in THIS commit, remove leftover tmp files, and re-raise as TransactionError.
@@ -70,11 +73,16 @@ never had. Tmp files are always removed.
 - Text is written UTF-8 with `newline=""` so line endings survive round-trip unchanged. A tool that
   silently rewrites line endings has already cost a sibling system a false regression hunt.
 - No network, no clock in the committed content.
+- A rewrite preserves the target's permission bits: a 0755 target is still 0755 after commit
+  (0644 and 0700 likewise). The red case is real, not hypothetical: tmp+replace hands the target
+  the tmp's default mode, and executables rewritten through such a transaction lose `+x`.
 
 ## Verification
 
-Gate: `../guard/tests/test_artifact_txn.py` — do NOT edit it.
+Gate: `../guard/tests/test_artifact_txn.py` and `../guard/tests/test_artifact_txn_mode.py` — do NOT
+edit them. The mode gate's red demo is mutation TX1 in `../guard/mutation_harness.py` (drop the
+chmod line; the gate must go red).
 
-    cd .. && python3 -m pytest guard/tests/test_artifact_txn.py -q
+    cd .. && python3 -m pytest guard/tests/test_artifact_txn.py guard/tests/test_artifact_txn_mode.py -q
 
 Must be fully green. Do not finish on red.
