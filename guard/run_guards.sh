@@ -40,6 +40,7 @@ python3 -m pytest guard/tests/ -q; roll $?
 note "4. GUARD SELF-TESTS — every proof-carrying tool must prove itself"
 python3 guard/honesty_stop_gate.py --self-test; roll $?
 python3 guard/envelope_tap.py --selftest; roll $?
+python3 guard/scrub_arm.py --selftest; roll $?
 if [ -f detect_poison.py ]; then
   python3 guard/fetch_gate.py --selftest; roll $?
 else
@@ -71,7 +72,17 @@ else
   echo "   broken fixture detected for its own named reason (rc=$nc_rc) — the runner can fail"
 fi
 
-note "6. LEG LIVENESS"
+note "6. PUBLIC-BYTE SCRUB — no private material in public-bound bytes"
+echo "   Two pattern classes: private material and quoted speech. A rule name generalizes;"
+echo "   a quoted person does not — removal is the only fix, so the arm catches it pre-publish."
+python3 guard/scrub_arm.py --profile "${SCRUB_PROFILE:-adopter}"; roll $?
+if [ "${SCRUB_PROFILE:-adopter}" = "adopter" ]; then
+  echo "   NOTE: adopter profile = the shipped generic baseline only. A maintainer with a private"
+  echo "   overlay (kept OUTSIDE the repo) runs SCRUB_PROFILE=maintainer SCRUB_OVERLAY=<path>;"
+  echo "   under that profile an absent overlay is CANNOT_CHECK (2), never a pass."
+fi
+
+note "7. LEG LIVENESS"
 if [ "$WITH_CANARY" = 1 ]; then
   python3 guard/leg_canary.py; roll $?
 else

@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# commit-msg — require a delegation trailer on every commit. Backlog D20, MEASUREMENT PHASE.
+# commit-msg — require a delegation trailer on every commit: one line naming who did the work,
+# an agent or a person, so delegation is recordable and the question can be settled from data.
 #
-# WHY A HOOK AND NOT A RULE: the owner picked "measure first, then decide", and named the risk himself —
-# "I stop writing it after a week". That is not a hypothetical here. "Writing a file into fleet-to-win/ is
-# not sending it" was written 2026-07-28 and failed twice anyway. A rule that depends on remembering is not
-# a mechanism, and this whole subsystem exists because of that difference.
+# WHY A HOOK AND NOT A RULE: a rule that depends on someone remembering to follow it is not a
+# mechanism — written conventions here have failed silently before. The hook makes the omission
+# loud at the moment it happens.
 #
-# WHAT IT MEASURES: HARD DELEGATE says Claude does ONLY orchestration/dispatch. ~Half of recent commits are
-# work done directly, but "no delegation trace" != "not delegated" — no trace convention existed, so BOTH
-# readings of the rule survived the same evidence. That unfalsifiability is the actual defect. This makes
-# the distinction recordable so the rule can be settled from data instead of from either of our impressions.
+# WHAT IT MEASURES: "no delegation trace" is not the same fact as "not delegated" — while no trace
+# convention exists, both readings survive the same evidence, so a delegation rule cannot be
+# settled either way. That unfalsifiability is the defect this hook removes: the trailer makes the
+# distinction recordable.
 #
-# ★ THE VALUES ARE DELIBERATELY FREE-TEXT. This is the MEASUREMENT phase — closing the carve-out list now
-# would presuppose the answer we are trying to measure, and a list ending in "or other orchestration work"
-# would pass every commit by construction (zero information). Let the real reasons accumulate, THEN decide
-# which are legitimate.
+# ★ THE VALUES ARE DELIBERATELY FREE-TEXT. This is the measurement phase — closing the carve-out
+# list now would presuppose the answer being measured, and a list ending in "or other work" would
+# pass every commit by construction (zero information). Let the real reasons accumulate, THEN
+# decide which are legitimate.
 #
-# It REJECTS. It never auto-fills a trailer — a hook that invents the datum it is collecting is the
-# dry-run-that-writes defect, and we have fixed two of those this week.
+# It REJECTS. It never auto-fills a trailer — a hook that invents the datum it is collecting is
+# the dry-run-that-writes defect.
 #
 # Install: guard/hooks/install.sh   ·   Read the results: guard/delegation_tally.py
 msg_file="$1"
@@ -38,11 +38,11 @@ cat >&2 <<'EOF'
 
   Add exactly one line to the commit message:
 
-      Delegated-to: <leg>            e.g. qwen3-coder via aider-edit · codex-terra · gemma4:26b
+      Delegated-to: <who>            e.g. a local coder model via its edit harness · codex · grok
       Claude-direct: <why>           e.g. integration/wiring · guard code · owner comms · memory write
 
-  This is the D20 MEASUREMENT phase (started 2026-08-03), not an enforced policy — the values are free
-  text on purpose, so the real distribution decides the rule instead of us guessing it now.
+  This is the measurement phase, not an enforced policy — the values are free text on purpose,
+  so the real distribution decides the rule instead of a guess made now.
 
   If a commit genuinely does not fit either, say so in the value rather than picking the closer one:
       Claude-direct: unclear — mixed, mostly reviewing a delegated draft

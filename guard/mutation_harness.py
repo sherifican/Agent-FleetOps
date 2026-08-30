@@ -46,12 +46,15 @@ GUARDS = {
     "spread":    ("guard/test_companion_spread.py",     "\nPASS"),
     "prefilter": ("guard/test_perceptual_prefilter.py", "PREFILTER HAS TEETH"),
     "txn_mode":  ("guard/tests/test_artifact_txn_mode.py", "TXN MODE PRESERVED - ALL CHECKS PASSED"),
+    "scrub":     ("guard/tests/test_scrub_arm.py",     "SCRUB ARM HAS TEETH - ALL CHECKS PASSED"),
 }
 # files copied into the sandbox (guards + code under test), relative to REPO
 FILES = [
     "vision_ingest.py", "vision_semantic.py", "vision_motion.py",
     "vision_measure/replay_cascade.py",
     "guard/artifact_txn.py",
+    "guard/scrub_arm.py",
+    "guard/tests/fixtures/scrub_plant.txt",
 ] + [path for path, _ in GUARDS.values()]
 
 
@@ -330,6 +333,29 @@ MUTATIONS = [
       "'a rewrite preserves the target's permission bits' (0644 and 0700 likewise)",
       "                    os.chmod(tmp_path, stat.S_IMODE(os.stat(path).st_mode))\n",
       ""),
+    # ── scrub arm: private material in public-bound bytes ───────────────────────────────────
+    M("SA1", "scrub", "guard/scrub_arm.py",
+      "maintainer profile with an ABSENT overlay returns a PASS instead of CANNOT_CHECK",
+      "'an absent overlay is CANNOT_CHECK (2), never a pass' — else every fresh clone reads green",
+      "            print(\"reads clean — the silent-clear problem inside its own fix. exit 2.\")\n"
+      "            return 2",
+      "            print(\"reads clean — the silent-clear problem inside its own fix. exit 2.\")\n"
+      "            return 0"),
+    M("SA2", "scrub", "guard/scrub_arm.py",
+      "private-address baseline branch disabled — a planted address is no longer caught",
+      "'every baseline rule flags its plant' — the private-material class, address rule",
+      "r\"\\b(?:10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\"",
+      "r\"\\b(?:10X\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\""),
+    M("SA3", "scrub", "guard/scrub_arm.py",
+      "unix home-path branch disabled — a planted home directory is no longer caught",
+      "'every baseline rule flags its plant' — the private-material class, home-path rule",
+      "r\"(?:/home/|/Users/|C:\\\\Users\\\\)\"",
+      "r\"(?:/homeX/|/Users/|C:\\\\Users\\\\)\""),
+    M("SA4", "scrub", "guard/scrub_arm.py",
+      "quoted-speech person-attribution subjects disabled — a quoted person ships silently",
+      "'every baseline rule flags its plant' — the quoted-speech class",
+      "(?:the owner|he|she)",
+      "(?:the ownerX|heX|sheX)"),
 ]
 
 
