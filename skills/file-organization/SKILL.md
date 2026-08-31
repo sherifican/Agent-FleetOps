@@ -45,11 +45,16 @@ A second tree used for human↔agent coordination can route by *kind* instead of
 The no-loose-files rule has exactly three exception classes, and each must stay checkable:
 
 1. **Tool-required anchors** — files a tool, contract, or ecosystem addresses at a fixed root path
-   (`pyproject.toml`, `package.json`, `LICENSE`, `README.md`, a contract doc other tooling reads by
-   fixed path, VCS dotfiles).
+   (`pyproject.toml`, `package.json`, `LICENSE`, `README.md`, VCS dotfiles). This class is the
+   ECOSYSTEM's list, not any one repository's root listing. A repository that has its own
+   fixed-path contract file DECLARES it, with a reason, in `guard/org_anchors.txt` — and each
+   declaration is checked, so the extension point cannot quietly become a blanket allow-list.
 2. **Runnable entry points named in the README** — a root script is legitimate only while the
    README names it; discoverability is the licence, and a root entry point the README never
-   mentions is a stray whatever it does.
+   mentions is a stray whatever it does. "Named" means a **whole token** on a line that is not a
+   **prohibition**: a substring test licenses any file whose name is a suffix of a name the README
+   does use (`leg_contract.py` riding on `check_leg_contract.py`), and it reads "never commit
+   `scratch_dump.log`" as an endorsement — which turns the README into an allow-list inverter.
 3. **Directories** — their internal organization is governed by the rules above, not the root rule.
 
 Everything else at a root is a stray. Arm: `guard/org_lint.py` goes red on a stray root file

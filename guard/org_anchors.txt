@@ -1,0 +1,13 @@
+# org_anchors.txt — THIS repository's own class-1 anchors, declared and checked.
+#
+# guard/org_lint.py ships the ECOSYSTEM's fixed-path anchor set (README, LICENSE, build
+# manifests, VCS dotfiles). A repository that genuinely has its own fixed-path contract
+# file names it here instead of having its root listing hardcoded into a public linter.
+#
+# Format:  FILENAME: why a tool or contract addresses this exact root path
+#
+# Every line is CHECKED — a declaration naming a file that is not at the root, or carrying
+# no reason, is reported by the linter. That is what keeps this from becoming a blanket
+# allow-list: adding a line is an edit under review, and a line that stops being true
+# fails loudly instead of quietly widening the exception.
+STAGING_README.md: the export-staging contract; the staging pipeline reads it at this fixed root path
