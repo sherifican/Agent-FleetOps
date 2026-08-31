@@ -22,6 +22,7 @@ license: MIT
 
 ## Safeguards
 - Use an independent model or evidence gate for consequential claims.
+- Route code-review / audit work to the best model on the fastest capable GPU, and re-derive that pick when hardware or roster changes — a pinned model name in a routing document goes stale silently (`templates/roster-check.sh.template` is the arm that catches it). Keep model reasoning/thinking ON for audit passes, under a termination guard (a token budget or a bounded prompt); disabling it is a tagged, measured fallback for a run that fails to terminate, or a stated security choice — never a default.
 - Route sensitive topics only to workers suitable for them under the deployment's documented policy and capability limits.
 - Measure actual step budgets on the reference setup; treat such measurements as local observations, not universal model guarantees.
 - Keep validation separate from evaluation answer keys. A validator transfers to new work only when it checks a real task property.

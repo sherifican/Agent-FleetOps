@@ -1,6 +1,6 @@
 ---
 name: protected-function-guard
-description: Use before merging any patch that touches a project's small set of protected core functions, their private helpers, or their call sites — or any validation/test script whose model/pipeline config might have drifted from the current reference. Flags direct body edits, wrapper or call-site changes that effectively alter behavior, and config mistakes (wrong sample rate, bin count, class count, or class layout). Returns a structured VERDICT (Approved or Concern or Do not merge) with file:line evidence per finding. This is a read-only guardrail run by a local coding model and spot-verified by the orchestrator; it never modifies code. Invoke when the user says "guard this patch", "protected function check", "did this patch touch any core paths", "approve merge", or pastes a patch summary or changed-files list.
+description: Use before merging any patch that touches a project's small set of protected core functions, their private helpers, or their call sites — or any validation/test script whose model/pipeline config might have drifted from the current reference. Flags edits that NAME a protected function, its private helpers, or its call sites — the scope a text search can actually establish — plus config mistakes (wrong sample rate, bin count, class count, or class layout); removed calls, re-ordered call sequences, and wrappers that never name the function are surfaced as review prompts, not detected classes. Returns a structured VERDICT (Approved or Concern or Do not merge) with file:line evidence per finding; the verdict is STATIC — never the ship verdict, which belongs to the test-and-verify step. This is a read-only guardrail run by a local coding model and spot-verified by the orchestrator; it never modifies code. Invoke when the user says "guard this patch", "protected function check", "did this patch touch any core paths", "approve merge", or pastes a patch summary or changed-files list.
 ---
 
 # Protected Function Guard
@@ -47,6 +47,11 @@ Also flag:
 - Added post-processing that effectively changes their behavior
 - Removed validation guards or assertions
 
+Of these, only edits that NAME a protected function or helper are what the text-search procedure
+below can DETECT. The wrapper, call-order, post-processing, and removed-call classes are real
+risks a grep cannot establish — treat them as prompts for the reviewer reading the full diff (or
+add AST-level arms); a clean grep does not clear them.
+
 ## Pipeline Config Guard
 
 Flag any validation or detector script using stale assumptions about the model/pipeline it exercises. Typical drift axes (define the current reference values once, in a spec doc, and keep the doc and the code comment next to the model spec in sync):
@@ -57,7 +62,7 @@ Flag any validation or detector script using stale assumptions about the model/p
 - Class layout/order — anything other than the current model's documented layout
 - Stale reports already marked unreliable in the project's detection/model notes
 
-Reference values belong in TWO surfaces that must update together if the model is ever re-exported: the spec doc, and an inline comment in the core module next to the model's input spec.
+Reference values have ONE canonical owner — the spec doc. The inline comment in the core module next to the model's input spec POINTS at that owner instead of restating the values: two surfaces that must update together eventually will not, and a pointer cannot drift.
 
 ## Procedure
 
@@ -103,7 +108,9 @@ If the user pasted a plan summary or a `PLAN_*.md` exists:
 
 Use EXACTLY ONE of:
 
-- `VERDICT: Approved` — no protected surfaces touched and no config risks found.
+- `VERDICT: Approved` — no protected surfaces touched and no config risks found by this STATIC
+  pass. Approved is never the ship verdict: the test suite and runtime verification run in their
+  own step (see `skills/multi-agent-code-workflow`), and a merge needs both.
 - `VERDICT: Concern` — something needs owner/driver attention but may be acceptable.
 - `VERDICT: Do not merge` — protected function changed without approval, OR validation is measuring the wrong pipeline.
 
@@ -145,7 +152,7 @@ VERDICT: Approved | Concern | Do not merge
 
 6. **Different major versions may carry different protected lists.** If the project has a rewrite-in-progress with its own enforced rules, defer audits of that tree to those checks; this guard's list applies only to the version it was defined for.
 
-7. **Don't run the test suite.** The guard is read-only static analysis. Runtime verification belongs to a separate ship-verification step or an owner-run smoke test.
+7. **Don't run the test suite.** The guard is read-only static analysis. Runtime verification belongs to a separate ship-verification step or an owner-run smoke test — which is also why this guard's `Approved` can never stand in for that step's verdict.
 
 ## Verification
 

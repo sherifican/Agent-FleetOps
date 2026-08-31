@@ -12,6 +12,16 @@ edit, or warn an agent that its cached view became stale after a concurrent
 save. This protocol adds a small repository-local coordination record and a
 write-time integrity check for those live-collision cases.
 
+## Shipped default: one coder per repository
+
+The concurrent paths below are a reference design. The shipped, gated default is simpler: **one
+coder per repository.** An edit pass opening against a working tree that carries another job's
+dirty files refuses to start — commit or stash between passes — and the refusal names only real
+paths, verbatim from the version-control status: a refusal that fabricates paths teaches its
+operator to ignore refusals. Enforcement and gate: `guard/one_writer_gate.py` and
+`guard/tests/test_one_writer_gate.py` (the gate proves the refusal fires on a foreign dirty file
+and that every path a refusal names actually exists).
+
 ## The lock file
 
 Place one lock file at the repository root. The concrete origin used
@@ -64,6 +74,13 @@ replacing it.
 
 ## Strict isolation for concurrent region claims
 
+> **Reference design — not shipped.** This section and the write-time region re-hash below
+> describe the origin protocol. The lock schema above carries no lock-time hash field, so the
+> re-hash cannot be implemented from this document alone; completing it needs the hash
+> algorithm, a region locator, and a lock-time digest per claimed region in the schema, plus a
+> two-writer test (an agent's own prior write passes; a foreign write halts). Until an adopter
+> completes that, the shipped one-coder default above is the supported path.
+
 Two agents may edit one file concurrently only when all of these conditions
 hold:
 
@@ -97,6 +114,9 @@ Apply these rules in order:
 5. If both use `regions` but isolation fails, stop and surface the unsafe
    overlap.
 
+> Paths 4–5 belong to the reference design marked above; under the shipped one-coder default a
+> second concurrent claim never arises.
+
 The source describes serialization and user-directed recovery. It does not
 document a fork-and-reconcile mechanism. Accordingly, this specification does
 not prescribe one; its implementation status cannot be established here.
@@ -114,7 +134,8 @@ Before every write to a locked file, perform all applicable checks:
 3. For `regions` claims, re-hash each claimed region before the write. If a
    region's current hash differs from the stored lock-time hash and that
    change was not made by the current agent, stop, write a halt sentinel, and
-   surface the situation.
+   surface the situation. (This step needs a lock-time digest the schema above
+   does not carry — see the reference-design note.)
 
 The origin calls the lock the cross-agent source of truth and calls this
 integrity check the safety net for cases the lock process can miss—for example,
@@ -178,6 +199,10 @@ or a non-region conflict that passes the stated claim checks; those cases are
 outside the documented guarantees.
 
 ## Minimal adoption guide
+
+Adopt the shipped default first — one coder per repository, enforced by the dirty-tree refusal
+(`guard/one_writer_gate.py`). The numbered steps below are the reference design; implementing
+steps 2–5 requires closing the schema gap noted above.
 
 For a two-agent team, implement the following in order:
 

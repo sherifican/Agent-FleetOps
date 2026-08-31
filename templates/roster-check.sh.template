@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# TEMPLATE ONLY — replace every <...> placeholder (or export both variables) before use.
+#
+# roster_check — fail when the routing table names a model the live roster does not serve.
+#
+# A routing table is a LIVING document, and the roster it routes onto moves underneath it:
+# models get pulled, renamed, or requantized, and a row pointing at a model that is no
+# longer served fails at DISPATCH time — mid-task, unattended. This arm moves that failure
+# to CHECK time. Run it in CI beside the guards, and after any roster change.
+#
+# ROUTING_MODELS_FILE — one model tag per line (# comments allowed). Derive it from the
+#   model names your routing table's rows point at, and keep it beside the table so a row
+#   edit and a list edit travel together.
+# ROSTER_CMD — a command whose stdout lists one SERVED model tag per line (for example,
+#   your serving runtime's `list` subcommand piped through awk to the tag column).
+#
+# Exit codes: 0 every routed model is served · 1 at least one routed model is MISSING
+# from the live roster (each named) · 2 CANNOT CHECK (no list file, or the roster command
+# failed or returned nothing — an empty roster cannot prove absence, so it is never a
+# red and never a pass).
+set -eu
+
+ROUTING_MODELS_FILE=${ROUTING_MODELS_FILE:-'<ROUTING_MODELS_FILE>'}
+ROSTER_CMD=${ROSTER_CMD:-'<ROSTER_CMD>'}
+
+if [ "$ROUTING_MODELS_FILE" = '<ROUTING_MODELS_FILE>' ] || [ "$ROSTER_CMD" = '<ROSTER_CMD>' ]; then
+  printf '%s\n' 'Replace <ROUTING_MODELS_FILE> and <ROSTER_CMD> (or export both); this template is not runnable as-is.' >&2
+  exit 2
+fi
+if [ ! -f "$ROUTING_MODELS_FILE" ]; then
+  printf 'CANNOT CHECK — no routing-models file at %s\n' "$ROUTING_MODELS_FILE" >&2
+  exit 2
+fi
+
+if ! roster="$(sh -c "$ROSTER_CMD")"; then
+  printf '%s\n' 'CANNOT CHECK — the roster command failed; a failed lookup is not an empty roster.' >&2
+  exit 2
+fi
+if [ -z "$roster" ]; then
+  printf '%s\n' 'CANNOT CHECK — the roster command returned nothing; an empty answer cannot prove absence.' >&2
+  exit 2
+fi
+
+missing=0
+checked=0
+while IFS= read -r tag; do
+  case "$tag" in ''|'#'*) continue ;; esac
+  checked=$((checked + 1))
+  if ! printf '%s\n' "$roster" | grep -Fxq "$tag"; then
+    printf 'MISSING from the live roster: %s (named by the routing table)\n' "$tag"
+    missing=1
+  fi
+done < "$ROUTING_MODELS_FILE"
+
+if [ "$checked" -eq 0 ]; then
+  printf '%s\n' 'CANNOT CHECK — the routing-models file names no models; a zero-model check proves nothing.' >&2
+  exit 2
+fi
+if [ "$missing" -ne 0 ]; then
+  printf '%s\n' 'ROSTER CHECK FAILED — fix the routing table or restore the model; do not let the row outlive the roster.'
+  exit 1
+fi
+printf 'roster check clean — every routed model (%s checked) is served\n' "$checked"

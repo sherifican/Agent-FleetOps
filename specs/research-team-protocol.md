@@ -23,7 +23,10 @@ absence, source URLs or evidence-pack hash, artifact path/hash, verifier verdict
 Run at least two evidence legs from separate briefs. Do not show the second leg the first RESULT, its
 notes, or the orchestrator’s preferred conclusion. Retain each RESULT even when the worker exits
 nonzero, inspect the artifact, then classify it as absent, partial, invalid, or acceptable. One FINAL
-is a reconciled artifact with provenance and dissent—not proof that the conclusion is true.
+is a reconciled artifact with provenance and dissent—not proof that the conclusion is true. Lint
+each outgoing brief with `guard/brief_scan.py` before dispatch and rewrite a flagged brief; a
+clean scan is only as wide as the scanner's pattern list, so the structural independence above
+remains mandatory either way.
 
 For video research, keep the six bucket names—`Flagship-App`, `Local-Models`, `Fleet-Ops`,
 `Tooling-Infra`, `Research-Pipeline`, and `Memory`—lockstep in `ACTIONABLE_ADDENDUM.md`,
@@ -51,6 +54,8 @@ consensus as evidence.
 | Vocabulary drift | `guard/contract_agreement.py` | one contract surface diverges | Pre-dispatch/release guard; not source verification. |
 | Guard teeth | `guard/teeth_prover.py` | planted defect makes a covered guard red | Guard-suite proof, not research-source verification. |
 | Own-leg-as-adversary | retained artifact plus independent verification | report contradicts artifact or another leg | Operating pattern, not an enforced guard. |
+| Correlated-error gate | `guard/reconcile_gate.py` | an all-agree record with an unverified shared premise is refused ACT | Runs on the reconcile record before action; not source verification. |
+| Hypothesis-leak tripwire | `guard/brief_scan.py` | a brief stating the expected answer is flagged | Pre-dispatch lint; catches the explicit leak only, never proves independence. |
 
 The associated skills are failure-mode procedures: `research-dispatch` addresses premise leakage and
 weak retrieval; `dual-model-reconciliation` addresses consensus laundering; `research-verification`

@@ -21,8 +21,11 @@ below is the mechanism, generalized; numbers are from the reference deployment.
    AUDIT SUB-AGENT — reads a recent-activity digest + the durable sources;
         │            emits PROPOSALS (create/update/hygiene), each with rationale + dedup evidence
         ▼
-   HUMAN-ADJACENT GATE — the orchestrator approves / revises / rejects each proposal;
-        │                rejects are LOGGED for calibration, not discarded
+   REVIEW GATE — verifier/dry-run runs FIRST, then a PANEL of independent models votes;
+        │        disagreement goes to the operator with dissent preserved;
+        │        agreement follows the adopter's policy — ACCEPT: apply · FILTER: forward
+        │        to the operator (rule 11; both are valid, the adopter picks one);
+        │        rejects are LOGGED for calibration, not discarded
         ▼
    DETERMINISTIC APPLY — approved edits become exact search/replace specs;
         │               a spec that does not match EXACTLY ONCE is refused, never fuzzy-applied
@@ -80,6 +83,17 @@ below is the mechanism, generalized; numbers are from the reference deployment.
 10. **Hygiene is a separate, mechanical lane.** Broken links, stale paths, index gaps — safe to
     auto-apply and clearly labeled as such. Substantive content changes never ride the hygiene lane.
 
+11. **Rule-base changes are panel-reviewed, and the vote comes AFTER the verifier.** A change to
+    skills, operating rules, or accepted drift passes a panel of INDEPENDENT models — one model's
+    approval is not acceptance. Whatever verifier or dry-run exists runs BEFORE the vote (a vote on
+    unverified material is refused), and panel disagreement goes to the operator with the dissent
+    preserved. Whether unanimous panel agreement may itself ACCEPT the change, or the panel only
+    FILTERS — rejecting or forwarding to an accountable human — is a deployment policy the adopter
+    sets explicitly; both policies produce the same pass record, and `guard/curation_gate.py`
+    rejects that record under either policy when it shows a one-model approval, a vote before
+    verification, or a disagreement without an operator verdict
+    (gate: `guard/tests/test_curation_gate.py`).
+
 ## Failure modes this design answers
 
 | Failure | Answered by |
@@ -90,10 +104,11 @@ below is the mechanism, generalized; numbers are from the reference deployment.
 | The gate rubber-stamps | rejects log = a measurable gate record |
 | One instance's view overwrites another's | git as ground truth; parallel sessions label non-canonical output and never bulk-write shared memory |
 | The applier "improves" the edit | apply is search/replace, not generation; second-model diff audit |
+| One approver's blind spot becomes policy | panel of independent models + `guard/curation_gate.py` — rejects one-model approval, vote-before-verification, and unresolved disagreement |
 
 ## Minimal adoption
 
 A single agent + human can run this with: a git repo for the rule base, a line-count watcher, one
-audit prompt that outputs structured proposals, a human approval step, and a script that applies
-exact matches or refuses. The two components most tempting to skip — the rejects log and the
+audit prompt that outputs structured proposals, a review step (verifier first, then the
+panel/operator gate of rule 11), and a script that applies exact matches or refuses. The two components most tempting to skip — the rejects log and the
 rebaseline — are the two that prevent the quiet failure modes.

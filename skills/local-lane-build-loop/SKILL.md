@@ -15,7 +15,11 @@ tasks without fighting the framework's event loop or runtime:
 
 1. **Pure headless modules.** Read inputs (files, shell-outs, APIs) → return records. **Zero framework
    imports.** Unit-testable against fixtures with no live system. The pattern that works: small `read_*()`
-   readers each wrapped in `try/except` returning a **safe default** (never raise) + a **pure `build_*()`
+   readers each wrapped in `try/except` returning a **distinguishable safe default** (never raise — and never collapse
+   cannot-read into looks-empty: the returned record carries a status, `ok` / `empty` /
+   `missing` / `permission` / `parse-error`, so a consumer can tell a VALID empty observation
+   from a source it could not read; reference `guard/reader_record.py`, gated by
+   `guard/tests/test_reader_record.py`) + a **pure `build_*()`
    composer** (no I/O) + a `status()` convenience that calls the readers → the composer.
 2. **Dumb pure formatters.** Records → display strings. No I/O, no state.
 3. **The framework app layer.** Layout, timers, bindings, modals, the paint loop. This is the part the
@@ -93,6 +97,21 @@ them.
   `[tags]` break column alignment — and a too-long cell that gets hard-truncated can silently drop its color
   markup and read as plain gray. Shorten the display string to fit; never assume styling survived.
 
+## Local coder EDIT protocol (how the lane touches files)
+
+- **Dense existing blocks: small byte-exact hunks.** Ask for the smallest search/replace-style hunk
+  with its context stated exactly; an edit that does not match exactly once is refused, never
+  fuzzy-applied.
+- **A NEW file: one whole-file block.** Generation is safe where there is nothing to clobber; the
+  whole-file form is the CREATE path, not the edit path.
+- **Escalate after N artifact-verified failures.** When the same edit has failed N times — failures
+  verified against the artifact, not taken from the lane's own report — hand the task to a
+  tool-using builder instead of re-prompting. N is a PARAMETER measured on your own coder (the
+  reference setup measured 3); re-measure it when the lane's model changes.
+- **One coder per repository.** Two lanes editing one tree collide silently; the shipped default is
+  a dirty-tree refusal at edit-pass start — see `specs/driver-lock-protocol.md` (shipped default)
+  and `guard/one_writer_gate.py`.
+
 ## Working agreements that kept the lane honest
 - **Never leave the suite red.** Every change stays green; a visible change gets verified by rendering, not
   just by tests. See [[eval-integrity]] for the audit discipline the gate itself deserves.
@@ -100,5 +119,7 @@ them.
   `[qol]` bullets naming what shipped (and the failure a fix closes).
 - **Bump a visible VERSION marker per shipped wave** if the app shows one. On the reference setup the marker
   silently drifted behind two shipped waves, so a relaunch couldn't visually confirm fresh code was running
-  — the version marker is the proof-of-fresh-build signal, and it only works if you bump it in the same
-  commit as the wave.
+  — the version marker is the TRIGGER to verify, never the proof: a marker is a claim the
+  artifact makes about itself, exactly as stale as the artifact. On a bump, verify per
+  [[verify-running-build]] (marker-diff the deployed files, prove the process reloaded, bind
+  both to the serving PID). Bump it in the same commit as the wave so the trigger fires.

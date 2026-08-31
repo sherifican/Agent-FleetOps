@@ -105,6 +105,8 @@ Most findings belong on a card. A finding earns a standalone richly-presented pa
 | `SPEC_solo_rich_report.md` + solo-rich template | Contract + template |
 | `SPEC_odyssey_hub.md` | Design guidance for a DIFFERENT hub (its RAW/RECONCILED data model is NOT the video hub) |
 | `stage_video_research.py` + `video_backlog_diff.py` | Runnable, adapter-config required (EDIT ME markers + VIDEO_ROOT) |
+| `check_leg_contract.py` + `actionable_rollup.py` | Runnable — RESULT-contract check and per-project actionability rollup |
+| `vision_ingest.py` / `vision_motion.py` / `vision_semantic.py` | Root pipeline modules addressed by fixed path from `guard/` and `guard/mutation_harness.py`; exercised by the guard layer, not standalone entry points |
 | Deterministic hub/solo-rich renderers | Not supplied yet (follow-up) |
 
 ### Security and delivery integrity
@@ -136,7 +138,9 @@ Read adopt/README.md and follow it in order. Inventory this host before prescrib
 rather than a slope — a model either fits or it doesn't:
 
 - **One 16 GB card** covers everything up to the `gemma4:26b-a4b-it-qat` tier (15 GB of weights,
-  **100 tok/s** measured, and the model this fleet audits code with). LFM2.5-8B (5.2 GB),
+  **100 tok/s** measured — the tier the audit lane ran in when these charts were made; the review leg itself
+  is re-derived as hardware and roster change, best model on the fastest capable GPU, never
+  pinned to one tag). LFM2.5-8B (5.2 GB),
   Ornith-9B (5.6 GB), gemma4:12b (7.6 GB) and deepseek-r1:14b (9.0 GB) all fit comfortably, with
   room left for KV cache. **This is the honest minimum** — most of the useful lanes live here.
 - **The second card buys the 30–35B tier.** qwen3.6:35b-a3b is 23 GB of weights and occupies
@@ -178,7 +182,13 @@ loaded as 5435 / 5315 MiB across both, while `lfm:8b` at 5.2 GB stayed on a sing
 this fleet routes work: swapping the audit lane from a 30.7B dense model to a 25.2B MoE averaged
 **+348%** across three tasks *at equal-or-better seeded-bug recall* — the smaller model also found **more** seeded bugs
 (5/5 vs 4/5, 18/18 vs 16/18). Speculative decoding on the same model averaged **+13%**. Routing beats
-flag-tuning here, and the gap is an order of magnitude.
+flag-tuning here, and the gap is an order of magnitude. The lane has since been re-derived on
+newer hardware under the standing rule — the best model on the fastest capable GPU, thinking on
+for audit passes — where a dense 27B came within ~6% on throughput of the 25.2B-parameter MoE
+(tagged `26b`) on the same device (58.8 vs 62.2 tok/s, same audit prompt, timed with the
+serving runtime's per-run stats, e.g. `ollama run <tag> --verbose`). The dense model is the
+slower of the two and is chosen for audit quality, not speed. The A/B rows above remain as
+the evidence the rule rests on.
 
 The two red rows stay red: a claimed MoE-offload speed-up **did not reproduce** at either offload
 level. A record that only keeps its wins is not a record.

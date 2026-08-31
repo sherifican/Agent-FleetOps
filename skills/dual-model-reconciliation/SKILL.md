@@ -52,8 +52,9 @@ After ALL backbone models return their individual reports for the same task.
 - **§1 — Transcript / Source** (merged; normally identical across models — note any divergence).
 - **§2 — Verification** (merged per-claim table). Columns:
   `| Claim | Final verdict | Evidence (source URL) | Source confidence | Found by |`
-  where **Found by** = `A (model)` / `B (model)` / `both`. Every row shows where the info came
-  from AND which model produced it.
+  where **Found by** names any leg subset — `A` / `B` / `C` / `A+B` / `A+C` / `B+C` / `all`
+  (the column must be able to attribute EVERY combination; a two-value vocabulary cannot
+  attribute three legs). Every row shows where the info came from AND which model(s) produced it.
 - **§3 — Reconciliation** (the reliability layer — procedure below). *(Recommended order: put
   reconciliation here as §3, relevance as §4 — verification → reconciliation → "so what for us"
   reads cleanest, with the value payoff last.)*
@@ -64,7 +65,10 @@ After ALL backbone models return their individual reports for the same task.
 1. **ALIGN** — match each claim across all reports.
 2. **CLASSIFY each claim:**
    - ✅ **AGREE / UNANIMOUS** — all backbones, same verdict. If all cite *independent*
-     sources → 🟢 highest confidence (safe to act on).
+     sources → 🟢 highest confidence. **Agreement is still not verification** — it is exactly
+     what a shared unchecked premise produces: correlated error. ACT additionally requires the
+     shared premise to pass a verifier that CAN fail, wherever one can exist
+     (`guard/reconcile_gate.py` refuses an ACT whose shared premises are unverified).
    - ⚠️ **SPLIT** — different verdicts or conflicting evidence. **RESOLVE to ground
      truth:** do an independent lookup, pick the correct verdict, record the trail
      AND which model(s) were right. **Never** let a split silently default to one
@@ -76,7 +80,9 @@ After ALL backbone models return their individual reports for the same task.
      UNANIMOUS; treat as 🟢 once resolved, 🟡 if resolution is ambiguous.
 
 3. **CONFIDENCE MAP** (at-a-glance for the coordinator):
-   - 🟢 **ACT** — all agree + independent source, OR resolved majority.
+   - 🟢 **ACT** — all agree + independent sources + every shared premise verified (where no
+     verifier can exist, the record says so explicitly), OR a resolved majority under the same
+     premise rule.
    - 🟡 **PROVISIONAL** — single-model, vendor self-report, or partial.
    - 🔴 **HOLD** — unresolved split or unsubstantiated → do NOT act; explicitly flagged
      for the human.
@@ -107,6 +113,15 @@ either highly contested or poorly documented — flag it explicitly.
 - **Anti-fabrication** throughout — never invent a source, verdict, or "which model said it."
 - A SPLIT is not resolved until a ground-truth source settles it OR it's explicitly marked
   🔴 HOLD (unresolved) for the human.
+- **Record TWO verdicts per resolved claim — the CONCLUSION verdict and the MECHANISM verdict**
+  (is the reason sound?), separately. A true conclusion protects a false reason from scrutiny;
+  keeping them apart stops a right-answer-wrong-mechanism claim from banking credibility for
+  its premise (`guard/reconcile_gate.py` requires both on any acted claim).
+- **Never hand a leg the hypothesis — ask it to REFUTE.** A brief that leaks the expected
+  answer converts N independent legs into N echoes. Lint outgoing briefs with
+  `guard/brief_scan.py`: a tripwire for the explicit leak — a clean scan is only as wide as its
+  pattern list, so the structural isolation (separate briefs, no first-leg output in the
+  second) stays mandatory.
 
 ## Who runs it
 Currently the **coordinator (the orchestrating agent with full system context)** — reconciliation

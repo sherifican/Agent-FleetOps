@@ -1,6 +1,6 @@
 ---
 name: guard-target-correctness
-description: Check that a guard watches the RIGHT predicate, not merely that it can fail. Invoke when writing or reviewing any guard, check, gate, metric, or assertion — especially one written in response to an incident. teeth_prover proves a guard is REACHABLE and mutation_harness kills DECLARED mutations; both are bounded by the input shapes you already thought of. This procedure enumerates the equivalence class the predicate claims to cover and finds the members it silently excludes, which is where the next incident lives.
+description: Check that a guard watches the RIGHT predicate, not merely that it can fail. Invoke when writing or reviewing any guard, check, gate, metric, or assertion — especially one written in response to an incident. teeth_prover proves a guard is REACHABLE and mutation_harness kills DECLARED mutations; both are bounded by the input shapes you already thought of. This procedure enumerates the equivalence class the predicate claims to cover and finds the members it silently excludes, which is where the next incident lives. Covers BOTH directions: a predicate too NARROW, and a guard so WIDE it is switched off socially — never-fires and always-fires are the same defect.
 license: MIT
 ---
 
@@ -60,6 +60,24 @@ gated the "this job is genuinely running" confirmation — so a variant-tagged j
 its lease would not be protected, and it became eligible for eviction mid-task. The predicate (byte
 equality) was narrower than the concept (same model), and a correctness guarantee rested on the gap.
 
+## The other direction — a guard that is too WIDE
+
+Everything above is the predicate that is too narrow. The mirror failure is the guard that flags
+everything: nobody deletes it — it is switched off *socially*. Its alerts get acknowledged on
+reflex, then batched, then ignored, and the end state is no guard at all. A guard that never fires
+and a guard that always fires are the same defect: zero information.
+
+So: **measure the population before the invariant lands.** Run the candidate predicate over the
+live corpus it will police and read flagged/scanned before the guard ships. Pin the corpus in a
+manifest first, so the denominator cannot drift under the measurement; a predicate flagging more
+than a configured share of that pinned corpus (default: half) fails its own review. And breadth
+alone is not a pass — the review also names the labelled positives it checked, because a guard can
+be narrow and still wrong.
+
+Arm: `guard/population_arm.py` runs a candidate checker over a pinned corpus manifest, records
+flagged/scanned, and fails the review when the share exceeds the ceiling or a labelled positive is
+missed. Gate: `guard/tests/test_population_arm.py`.
+
 ## The procedure
 
 For each guard, in writing:
@@ -78,6 +96,10 @@ For each guard, in writing:
    finding. This is a table, not a feeling.
 5. **Check what the guard does on a trip.** Counting an invalid value is not rejecting it. If the concept
    says the input is invalid, something must refuse it, not merely tally it.
+
+6. **Measure the population before the invariant lands.** Run the candidate predicate over the
+   pinned corpus it will police (`guard/population_arm.py`): record flagged/scanned, fail the
+   review over the ceiling, and name the labelled positives checked.
 
 ## When the field name lies
 
@@ -99,6 +121,9 @@ rather than by the rule holding — check structure, not substrings.
 - [ ] Every disagreement is either fixed or recorded as a known, accepted gap — not left implicit.
 - [ ] Where the concept implies invalidity, something **rejects**; a counter alone is fail-open.
 - [ ] The guard asserts on behavior, not on the presence of a named field.
+- [ ] The candidate ran over the PINNED live corpus; flagged/scanned is recorded and under the
+      configured ceiling (default: half the corpus).
+- [ ] The review names the labelled positives it checked — breadth alone is not a pass.
 
 ## Related
 
@@ -107,3 +132,5 @@ rather than by the rule holding — check structure, not substrings.
   worth declaring.
 - `skills/verify-running-build` — the same failure in deploy gates: a marker present in both builds is a
   predicate that cannot discriminate.
+- `guard/population_arm.py` (+ its gate `guard/tests/test_population_arm.py`) — the too-WIDE arm:
+  breadth over a pinned corpus, with labelled positives.

@@ -40,6 +40,21 @@ This is one working scheme for a research-workspace tree; treat it as a template
 
 A second tree used for human↔agent coordination can route by *kind* instead of stage — e.g. `coordination/` for handoffs/instructions/requests, `research-briefs/` for briefs, `setup-docs/` for setup documentation — with the same rule that loose files at the root are forbidden and designated anchor files stay.
 
+## Exception classes — the ONLY files allowed loose at a root
+
+The no-loose-files rule has exactly three exception classes, and each must stay checkable:
+
+1. **Tool-required anchors** — files a tool, contract, or ecosystem addresses at a fixed root path
+   (`pyproject.toml`, `package.json`, `LICENSE`, `README.md`, a contract doc other tooling reads by
+   fixed path, VCS dotfiles).
+2. **Runnable entry points named in the README** — a root script is legitimate only while the
+   README names it; discoverability is the licence, and a root entry point the README never
+   mentions is a stray whatever it does.
+3. **Directories** — their internal organization is governed by the rules above, not the root rule.
+
+Everything else at a root is a stray. Arm: `guard/org_lint.py` goes red on a stray root file
+(gate: `guard/tests/test_org_lint.py`); run it in CI so an exception class cannot widen silently.
+
 ## TOOLING RULE (so the structure can deepen without breaking)
 Any script that READS artifacts by pattern must use a **recursive glob** — `glob.glob(f"{BASE}/**/FINAL_*.md", recursive=True)`, not `{BASE}/FINAL_*.md`. This is what lets files live in sub-folders (or deeper, later) without breaking readers. (Learned during a reorg: several reader scripts had to be patched exactly this way.) When you MOVE files, run a path-chain audit: grep tooling for hardcoded old paths; fix any specific-file ref; verify generated HTML asset links still resolve.
 

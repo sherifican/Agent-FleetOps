@@ -28,6 +28,12 @@ Pattern: pin model and effort in the invocation, clear inherited tuning variable
 
 **The defect this prevents:** an ambient effort variable silently raised every child dispatch to the most expensive tier, breaking a cost cap until detected. Pin settings per invocation and echo the effective values.
 
+## `roster-check.sh.template`
+
+Pattern: reads a one-tag-per-line routing-models file and a roster command, and fails when the routing table names a model the live roster does not serve; a failed or empty roster lookup is CANNOT CHECK, never a pass and never a red.
+
+**The defect this prevents:** a routing table is a living document and the roster moves underneath it; a row that outlives its model fails at dispatch time, unattended. This arm moves that failure to check time. Gate: `guard/tests/test_roster_check.py` runs the template against a fake roster missing a routed model and requires the red.
+
 ## Video-research templates
 
 - `video-research/_DISPATCH_PREAMBLE.md.template` — the shared transcript, verification, relevance, and standout method.
