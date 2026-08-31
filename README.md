@@ -179,16 +179,20 @@ loaded as 5435 / 5315 MiB across both, while `lfm:8b` at 5.2 GB stayed on a sing
 ![Peak throughput per model](bench/01_peak_throughput.png)
 
 **Before / after.** Six A/B pairs measured on the same box, same task. The finding that changed how
-this fleet routes work: swapping the audit lane from a 30.7B dense model to a 25.2B MoE averaged
-**+348%** across three tasks *at equal-or-better seeded-bug recall* — the smaller model also found **more** seeded bugs
-(5/5 vs 4/5, 18/18 vs 16/18). Speculative decoding on the same model averaged **+13%**. Routing beats
-flag-tuning here, and the gap is an order of magnitude. The lane has since been re-derived on
-newer hardware under the standing rule — the best model on the fastest capable GPU, thinking on
-for audit passes — where a dense 27B came within ~6% on throughput of the 25.2B-parameter MoE
-(tagged `26b`) on the same device (58.8 vs 62.2 tok/s, same audit prompt, timed with the
-serving runtime's per-run stats, e.g. `ollama run <tag> --verbose`). The dense model is the
-slower of the two and is chosen for audit quality, not speed. The A/B rows above remain as
-the evidence the rule rests on.
+this fleet routes work: swapping the audit lane from the then-incumbent 30.7B dense model to a 25.2B
+MoE averaged **+348%** across three tasks *at equal-or-better seeded-bug recall* — the smaller model
+also found **more** seeded bugs (5/5 vs 4/5 on one seed set, 18/18 vs 16/18 on the other). Read that
+headline as a **mean of three tasks** and a lane-level effect, not a per-task guarantee; the per-run
+rows are the record, the average is a summary of them. Speculative decoding on the same model
+averaged **+13%**. Routing beats flag-tuning here, and the gap is an order of magnitude.
+
+The lane has since been re-derived on newer hardware under the standing rule: the best model on the
+fastest capable GPU, thinking on for audit passes. The current pick is a different dense model from
+the 30.7B replaced above — a dense 27B, which came within ~6% on throughput of the 25.2B-parameter
+MoE (tagged `26b`) on the same device: 58.8 vs 62.2 tok/s, same audit prompt, timed with the serving
+runtime's per-run stats (e.g. `ollama run <tag> --verbose`). The dense model is the slower of the two
+and is chosen for audit quality, not speed. The A/B rows above remain as the evidence the rule rests
+on.
 
 The two red rows stay red: a claimed MoE-offload speed-up **did not reproduce** at either offload
 level. A record that only keeps its wins is not a record.
