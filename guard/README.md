@@ -19,7 +19,28 @@ staleness check could never fire. That defect is why the dry run now returns `2`
 | Teeth-prover | `python3 guard/teeth_prover.py` | 10 planted mutations; every guard proves it can fail |
 | Contract agreement | `python3 guard/contract_agreement.py` | all four vocabulary surfaces agree (validator · addendum · rollup · preamble) |
 | Guard unit gates | `pytest guard/tests/ -q` | 309 tests, hermetic |
+| Documented counts | `python3 guard/doc_count_drift.py` | every count written into prose or the banner matches what it describes |
+| Rendered banner | `python3 guard/banner_render.py` | the PNG keeps its transparent corners and was rendered from the SVG in the tree |
 | Full runner | `guard/run_guards.sh` | the above in order; leg-liveness dry-run returns `2 = UNMEASURED` by design |
+
+### Regenerating the banner
+
+**Run `docs/render_banner.sh`. Do not render the banner by hand.**
+
+The banner SVG has rounded corners, which survive into the PNG only if the render keeps a
+transparent ground. A headless browser defaults to an opaque white page: it silently drops the
+alpha channel and paints those corners white, which on a dark README reads as four white notches.
+The output is still the right size, still the right picture, and still commits cleanly — nothing
+about it looks wrong except the thing you were not looking at.
+
+That happened twice. Both times the render was retyped from memory and
+`--default-background-color=00000000` was the flag that went missing. The second time it survived a
+positive control, because the control render carried the flag and the shipped render did not —
+proving a renderer works is not the same as proving the command you shipped with works.
+
+So the invocation lives in the script and the property is checked by the guard, which also records
+which SVG the PNG came from. Edit the SVG without re-rendering and the guard goes red on staleness
+rather than letting a stale image ship.
 
 ## What fail-closes without private data — deliberately
 
