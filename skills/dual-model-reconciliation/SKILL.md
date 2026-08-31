@@ -121,7 +121,12 @@ either highly contested or poorly documented — flag it explicitly.
   answer converts N independent legs into N echoes. Lint outgoing briefs with
   `guard/brief_scan.py`: a tripwire for the explicit leak — a clean scan is only as wide as its
   pattern list, so the structural isolation (separate briefs, no first-leg output in the
-  second) stays mandatory.
+  second) stays mandatory. The patterns match leak SHAPES, not keywords: the bare word
+  "hypothesis" appears in every instruction telling you not to leak one — including this
+  bullet — so a scanner keyed to it flags the rule as a violation of itself. A match is also
+  suppressed when a negation precedes it on the line, or when it sits inside a quoted or
+  inline-code span, because a brief that FORBIDS a phrasing has to be able to write it down.
+  That last suppression is an evasion route, and naming it is the honest form of a tripwire.
 
 ## Who runs it
 Currently the **coordinator (the orchestrating agent with full system context)** — reconciliation
