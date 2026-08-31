@@ -237,7 +237,7 @@ loaded as 5435 / 5315 MiB across both, while `lfm:8b` at 5.2 GB stayed on a sing
 
 ![Peak throughput per model](bench/01_peak_throughput.png)
 
-**Before / after.** Nine A/B pairs, grouped by what actually changed between the two runs: the
+**Before / after.** Seven A/B pairs, grouped by what actually changed between the two runs: the
 model, a flag on one model, or the device it landed on. Each pair holds the rest constant, and the
 deltas below are the ones the chart already shows.
 
@@ -246,11 +246,9 @@ corroborate (21 → 100), the 9.3K-tok artifact (19 → 90), and the 5-seeded-bu
 Group mean **+348.3%**. Seeded-bug recall on the two sets the chart labels: 18/18 vs 16/18 and 5/5 vs
 4/5; the long-artifact row is quality parity. Auditor wall-clock on the 5-bug set: 41.2s → 20.5s.
 
-Same-model tuning, five rows: **+13.1%** speculative decoding on qwen3-coder:30b (95.6 → 108.1
-tok/s, n=2, same prompt); **−1.4%** and **−5.6%** on llama.cpp `pp2048` prefill (stock vs MoE-offload
-accelerator, -ngl 8 and 24); and an expert-pruned qwen3.8-flash-next at **+2.4%** decode and
-**+13.7%** `pp512` prefill, both inside this box's noise floor — stock's own two prefill runs spread
-12%, so that pair is not separable from noise. Group mean **+4.4%**. Decode was not the prefill
+Same-model tuning, three rows: **+13.1%** speculative decoding on qwen3-coder:30b (95.6 → 108.1
+tok/s, n=2, same prompt), and **−1.4%** and **−5.6%** on llama.cpp `pp2048` prefill (stock vs
+MoE-offload accelerator, -ngl 8 and 24). Group mean **+2.0%**. Decode was not the prefill
 measurement; the claimed offload win did not reproduce. The two red rows stay red.
 
 Placement is its own group, one row: the same prompt and the same model on a different device.

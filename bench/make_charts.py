@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Fleet throughput composite via Vega-Lite + vl-convert. MEASURED DATA ONLY."""
-import json, vl_convert as vlc
+import json, math, vl_convert as vlc
 
 BG, FG, MUTED, GRID = "#12141a", "#e8eaf0", "#98a0b3", "#2a2f3a"
 FAM = {"qwen": "#4cc9f0", "gemma": "#b5179e", "ornith": "#f7b801", "lfm": "#43e97b",
@@ -20,9 +20,8 @@ peak = [
     ("Ornith-1.0-9B",          67.0, "ornith",   "5.6 GB · Q4_K_M · 9B dense · single run"),
     ("qwen3.8:27b-devicepinned", 56.4, "qwen",   "box-b · dgpu-b · device-pinned build · n=1"),
     ("gemma4:12b",             54.0, "gemma",    "7.6 GB · Q4_K_M · 11.9B dense · max of 3 conditions"),
-    ("qwen3.8:27b",            74.6, "qwen",     "Radeon AI PRO R9700 31GB · same-prompt device matrix · n=1"),
-    ("qwen3.8-flash-next-pruned", 23.5, "qwen",  "Radeon 8060S iGPU · expert-pruned · decode · n=2 · dumped"),
-    ("qwen3.8-flash-next-stock", 22.96, "qwen",  "Radeon 8060S iGPU · stock 512-expert · decode · n=2"),
+    ("qwen3.8:27b",            74.6, "qwen",     "box-b · dgpu-b · same-prompt device matrix · n=1"),
+    ("qwen3.8-flash-next-stock", 22.96, "qwen",  "box-b · igpu · official 512-expert release · decode · n=2"),
     ("qwen3:14b",             42.49, "qwen",     "Q4_K_M · 14B · ollama · single run"),
     ("deepseek-r1:14b",       42.37, "deepseek", "9.0 GB · Q4_K_M · 14.8B · single run"),
     ("muse-glimmer",           33.8, "other",    "box-b · igpu · llama-server spec-decode · n=3"),
@@ -92,8 +91,6 @@ ab = [
     ("qwen3-coder:30b · spec-decode ngram-mod",    95.6, 108.1, "tune", "same model + same prompt"),
     ("Ornith-35B-A3B · MoE accel (-ngl 8) · PREFILL pp2048",       115.7, 114.1, "tune", "claimed win did NOT reproduce"),
     ("Ornith-35B-A3B · MoE accel (-ngl 24) · PREFILL",      199.9, 188.7, "tune", "claimed win did NOT reproduce"),
-    ("qwen3.8-flash-next · expert prune · DECODE",   22.96,  23.50, "tune", "+2.4% is inside this box's ~6-10% noise floor"),
-    ("qwen3.8-flash-next · expert prune · PREFILL pp512",  312.64, 355.45, "tune", "stock's OWN two runs spread 12% — not separable"),
     ("qwen3.8:27b · 2×16GB over PCIe → one 32GB card", 21.8, 74.6, "place", "same prompt, same model · different device"),
 ]
 p2 = []
@@ -125,11 +122,35 @@ sub2 = (f"mean of the {len(pos)} that improved: +{sum(pos)/len(pos):.1f}%   ·  
         # figure cannot be read as a per-run guarantee.
         f"same-model tuning (mean of {len(tune)}): {sum(tune)/len(tune):+.1f}%")
 
+
+def tps_axis(values, step=50):
+    """An x-domain that always contains its data, with ticks every `step`.
+
+    This was hardcoded to [0, 250]. A row measured at 355 tok/s then drew past the
+    last labelled tick, into unlabelled space: the reader can see the point but
+    cannot read its value. A hand-set axis bound is one more number that does not
+    recompute when the data moves.
+    """
+    top = max(values)
+    hi = max(int(math.ceil(top / step) * step), step)
+    # A value landing exactly on the bound draws its marker half outside the plot,
+    # which reads as clipped even though the number is in range. Give it one step.
+    if hi - top < step * 0.05:
+        hi += step
+    # A domain that does not cover its data understates the size of what it plots,
+    # so the chart must refuse to render rather than mislead.
+    assert hi >= top, f"axis domain {hi} does not cover the largest value {top}"
+    return {"domain": [0, hi]}, {"tickCount": hi // step}
+
+
 AX = {"labelColor": FG, "titleColor": FG, "gridColor": GRID, "domainColor": GRID,
       "tickColor": GRID, "labelFontSize": 11, "titleFontSize": 12}
 order = [m for m, *_ in peak]
 
 ROWH1 = 34
+PEAK_SCALE, PEAK_TICKS = tps_axis([r["tps"] for r in p1])
+AB_SCALE, AB_TICKS = tps_axis([r["hi"] for r in p2] + [r["lo"] for r in p2])
+
 p1_text = {
     "width": 400, "height": len(peak) * ROWH1,
     "data": {"values": p1},
@@ -153,7 +174,7 @@ p1_bars = {
         {"mark": {"type": "bar", "height": 17, "cornerRadiusEnd": 3},
          "encoding": {"x": {"field": "tps", "type": "quantitative",
                             "title": "peak generation / decode  (tokens per second)",
-                            "scale": {"domain": [0, 250]}, "axis": {"tickCount": 6}},
+                            "scale": PEAK_SCALE, "axis": PEAK_TICKS},
                       "color": {"field": "family", "type": "nominal",
                                 "scale": {"domain": list(FAM), "range": [FAM[k] for k in FAM]},
                                 "legend": {"title": "family", "labelColor": FG, "titleColor": FG,
@@ -199,7 +220,7 @@ p2_plot = {
     "layer": [
         {"mark": {"type": "rule", "size": 3, "color": "#3a4152"},
          "encoding": {"x": {"field": "lo", "type": "quantitative", "title": "tokens per second",
-                            "scale": {"domain": [0, 250]}, "axis": {"tickCount": 6}},
+                            "scale": AB_SCALE, "axis": AB_TICKS},
                       "x2": {"field": "hi"}}},
         {"mark": {"type": "point", "filled": True, "size": 140, "color": "#6b7280"},
          "encoding": {"x": {"field": "before", "type": "quantitative"}}},
