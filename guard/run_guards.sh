@@ -54,6 +54,12 @@ note "4. GUARD SELF-TESTS — every proof-carrying tool must prove itself"
 python3 guard/honesty_stop_gate.py --self-test; roll $?
 python3 guard/envelope_tap.py --selftest; roll $?
 python3 guard/scrub_arm.py --selftest; roll $?
+python3 guard/population_arm.py --selftest; roll $?
+python3 guard/one_writer_gate.py --selftest; roll $?
+python3 guard/reconcile_gate.py --selftest; roll $?
+python3 guard/brief_scan.py --selftest; roll $?
+python3 guard/curation_gate.py --selftest; roll $?
+python3 guard/org_lint.py --selftest; roll $?
 if [ -f detect_poison.py ]; then
   python3 guard/fetch_gate.py --selftest; roll $?
 else
@@ -107,6 +113,11 @@ else
   echo "   fabricated ALIVE state and reported a PASS, so the staleness check could never fire."
   echo "   Run with --with-canary (or the daily cron) for real liveness."
 fi
+
+note "8. REPO SHAPE — no stray files at the repository root"
+echo "   Exception classes (skills/file-organization): tool-required anchors; runnable entry"
+echo "   points named in the README; directories. Everything else at the root is a stray."
+python3 guard/org_lint.py; roll $?
 
 note "RESULT"
 # One machine-readable line, so the step accounting can be asserted instead of eyeballed.
