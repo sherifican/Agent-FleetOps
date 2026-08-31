@@ -68,7 +68,7 @@ would notice if the documented claim stopped being true.
 ## Why this beats a wiki
 
 A wiki answers "what did someone once believe?" This answers "what was true on the stamp date, and
-would we notice if it changed?" For agent fleets the difference is operational: agents plan against
+would a change be noticed?" For agent fleets the difference is operational: agents plan against
 the map, and an agent planning against stale topology produces confidently wrong work. The linter
 turns that from a silent hazard into a red flag on the exact section that drifted.
 

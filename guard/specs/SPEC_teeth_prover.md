@@ -4,9 +4,9 @@ Write the file COMPLETELY at `../guard/teeth_prover.py`.
 
 ## Why this exists
 
-Every guard we own was written after its incident, and nothing tests that any of them still works. That
+Every guard this repo owns was written after its incident, and nothing tests that any of them still works. That
 is how you get a check that never fires — not by writing a bad check, but by writing a good check whose
-input shape later moved. Our `grep -c … || echo 0` monitor was silently inert for its entire life. A
+input shape later moved. This repo's `grep -c … || echo 0` monitor was silently inert for its entire life. A
 sister system shipped the identical class: a line-ending mismatch left **26 of 28 mutations bound to
 nothing**, while the harness cheerfully reported "28/28 guards have teeth."
 

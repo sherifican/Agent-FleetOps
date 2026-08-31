@@ -1,6 +1,6 @@
 """research_properties.py — deterministic property extractor for nondeterministic research artifacts.
 
-The research pipeline emits LLM prose that cannot be diffed against a golden baseline. Instead we
+The research pipeline emits LLM prose that cannot be diffed against a golden baseline. Instead I
 extract deterministic PROPERTIES of the text (stable functions of an unstable artifact) and watch
 those. This module is the foundation consumed by the teeth-prover, the stage-closure checker and
 the regression differ.
@@ -17,7 +17,7 @@ import sys
 from dataclasses import dataclass
 
 # The vocabularies have exactly ONE owner: check_leg_contract.py in the parent directory.
-# If this import fails we raise ImportError at module import time — deliberately. Falling back to
+# If this import fails this module raises ImportError at module import time — deliberately. Falling back to
 # a local copy is the exact drift bug this subsystem exists to prevent.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from check_leg_contract import BUCKETS, ACTIONS, BANNED, PRIOS, PROJECTS, RATINGS  # noqa: E402

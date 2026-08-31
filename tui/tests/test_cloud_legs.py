@@ -114,7 +114,7 @@ def test_active_cloud_legs_includes_antigravity_dispatch():
 def test_external_cloud_procs_detects_agy_as_antigravity(monkeypatch):
     from fleet_tui.sources import cloud_legs
 
-    # reset the 15s subprocess cache so our monkeypatched pgrep is actually consulted
+    # reset the 15s subprocess cache so the monkeypatched pgrep is actually consulted
     cloud_legs._ext_cache["t"] = 0.0
     cloud_legs._ext_cache["v"] = []
 

@@ -56,9 +56,9 @@ After ALL backbone models return their individual reports for the same task.
   (the column must be able to attribute EVERY combination; a two-value vocabulary cannot
   attribute three legs). Every row shows where the info came from AND which model(s) produced it.
 - **§3 — Reconciliation** (the reliability layer — procedure below). *(Recommended order: put
-  reconciliation here as §3, relevance as §4 — verification → reconciliation → "so what for us"
+  reconciliation here as §3, relevance as §4 — verification → reconciliation → "so what for this stack"
   reads cleanest, with the value payoff last.)*
-- **§4 — Relevance & Value to Us** (merged).
+- **§4 — Relevance & Value to This Stack** (merged).
 
 ## §3 Reconciliation procedure (dual and tri)
 

@@ -68,7 +68,7 @@ def fleet_research(args) -> None:
         
         if args.action == "list":
             # For now, just say list is not implemented
-            # We could implement it later to check existing research runs if needed 
+            # This could be implemented later to check existing research runs if needed 
             handle_error("list action not implemented for research")
         else:
             # Run research with slug (required) and question (joined)

@@ -6,7 +6,7 @@ don't get any made up outputs / fake comparisons / context overloads / empty ret
 two ways to be silently wrong are mirror images and BOTH look like a working filter from the outside:
 
     always-matches  -> drops every frame  -> "0 frames to score", pipeline starves
-    never-matches   -> drops no frame     -> the filter is INERT, we pay 10x for nothing
+    never-matches   -> drops no frame     -> the filter is INERT, the pipeline pays 10x for nothing
 
 Reporting only "N dropped" cannot distinguish a real filter from either.  So this proves BOTH directions
 against REAL frames on disk: it must FIRE on duplicates and must NOT fire on genuinely different frames.

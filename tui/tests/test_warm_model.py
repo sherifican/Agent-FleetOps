@@ -43,7 +43,7 @@ async def test_warm_modal_lists_cold_models_and_launches(monkeypatch):
         # warm the first cold model
         modal.on_button_pressed(_FakeEvent("warm-0"))
 
-    # the app's background refresh may also Popen (crontab -l etc.) during the test → filter for OUR call
+    # the app's background refresh may also Popen (crontab -l etc.) during the test → filter for this test's call
     ollama_calls = [list(a) for a in launched if list(a[:2]) == ["ollama", "run"]]
     assert ollama_calls, f"no ollama warm launched (captured: {launched})"
     argv = ollama_calls[0]

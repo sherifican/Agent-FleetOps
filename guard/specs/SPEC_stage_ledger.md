@@ -77,7 +77,7 @@ Returns `(violations, unmeasured)`, both lists of strings.
 `UNMEASURED: <stage> — declared but never recorded`.
 
 An unmeasured stage is NOT a violation and NOT a pass. It is its own category with its own exit code,
-because "it failed" and "we never looked" need different responses.
+because "it failed" and "never looked" need different responses.
 
 ## Exit codes (main)
 

@@ -3,7 +3,7 @@ combos actually work over time. Pure append-only JSONL; summary() aggregates per
 
 A rating = {target, up (👍/👎), note, speed_s (wall-clock, MEASURED), ts}. Speed is real (from the dispatch's
 file mtimes); STEPS are deliberately NOT invented here — a trustworthy step count needs the runner to emit
-one, which we don't have yet (honest gap, tracked for later).
+one, which is not built yet (honest gap, tracked for later).
 """
 import json
 import os

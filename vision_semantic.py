@@ -36,7 +36,7 @@ import numpy as np
 
 EMBED_MODEL = os.environ.get("VI_EMBED_MODEL", "openai/clip-vit-base-patch32")
 
-# Temporal COVERAGE is a property of the video, not of how much we are willing to spend, so the bin count is
+# Temporal COVERAGE is a property of the video, not of how much spend is allowed, so the bin count is
 # FIXED and independent of the budget. Coupling them (n_bins = budget, the first version) made recall
 # NON-MONOTONE: raising the budget re-partitioned the timeline, so budget 80 was not budget 60 plus twenty
 # more frames — it was a different question. Measured 2026-08-01: lm-studio 5/7 -> 4/7 -> 4/7 and
@@ -48,7 +48,7 @@ SEM_BINS = int(os.environ.get("VI_SEM_BINS", "12"))
 # a talking-head frame that represents 50 near-identical frames always outbids a unique diagram that
 # represents only itself. Measured consequence (2026-08-01, budget 140): lm-studio lost 2 of 7 published
 # frames while RETAINING 81% of candidates — not a budget shortfall, the objective actively preferring
-# typical frames over informative ones. 105 of our 109 published companions score 9-10, so the frames this
+# typical frames over informative ones. 105 of the 109 published companions score 9-10, so the frames this
 # loses are critical figures, which is the worst place for a residual failure.
 # lam=0 is pure coverage (the measured 90.9% baseline); lam=1 is pure novelty. Swept, not guessed.
 # ⛔ MEASURED AND REFUTED 2026-08-01 — default 0.0 (pure coverage). Swept on 5 real videos at budget 140:
@@ -224,11 +224,11 @@ def select_union(vectors, timestamps, budget, tokens=None, n_bins=None, ocr_w=0.
     """SHIPPING CONFIGURATION: the union of a coverage-only and a coverage+OCR selection.
 
     Neither arm is good enough alone and a single tuned weight is worse than both, because the right weight
-    depends on whether a video's value lives in TEXT or in DIAGRAMS — and that is a property of the video we
-    have no reliable cheap way to detect (the video-level triage that tried was refuted). The two arms fail
+    depends on whether a video's value lives in TEXT or in DIAGRAMS — and that is a property of the video with
+    no reliable cheap way to detect (the video-level triage that tried was refuted). The two arms fail
     on DIFFERENT videos, so their union sidesteps the question entirely.
 
-    MEASURED 2026-08-01, 6 videos, budget 140, against frames we actually published:
+    MEASURED 2026-08-01, 6 videos, budget 140, against frames actually published:
         coverage only (ocr_w=0)   90.9%   (misses text-bearing UI: lm-studio 5/7)
         coverage+OCR  (ocr_w=0.5) 81.8%   (misses diagrams in text-heavy video: tencent 4/10)
         UNION                     95.5%   42/44, five of six videos perfect, 36% of vision calls saved

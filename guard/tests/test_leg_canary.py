@@ -66,7 +66,7 @@ def test_rc_is_recorded_as_evidence_even_though_it_is_not_the_verdict():
 
 
 def test_the_kimi_quota_shape_is_DEAD_not_UNMEASURED():
-    """kimi's cap presents as rc=1 with empty stdout AND empty stderr. We asked and got a wrong answer."""
+    """kimi's cap presents as rc=1 with empty stdout AND empty stderr. The probe asked and got a wrong answer."""
     assert probe(L, runner=runner_returning(1, "")).outcome == "DEAD"
 
 

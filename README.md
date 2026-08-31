@@ -473,7 +473,7 @@ open-source work. Each is credited inline where it lives; consolidated here:
 - **Odyssey Hub** (`odyssey_crawl_hub.py` and its editorial presentation) — the deterministic "the model
   emits markdown, a renderer styles it" design and its visual treatment are **adapted from Odysseus**,
   PewDiePie's multi-agent workspace tool (specifically its `visual_report.py`). The name deliberately
-  stays in that family; the data model and the fleet pipeline around it are ours.
+  stays in that family; the data model and the fleet pipeline around it are this repo's.
 - **Solo-Rich Report** — the long-form writer scaffold is adapted from **Tongyi WebWeaver**.
 - **Leg-failure classification** — adapted from **opencode**'s retry classifier (`session/retry.ts`).
 - **`guard/` verification stack** — adapted from the `_breaker/` layer of the desktop application this

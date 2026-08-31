@@ -4,7 +4,7 @@
 # Adapted from a peer agent's `_breaker/` guard stack (2026-07-31). The transferable part was
 # the META-harness: machinery that keeps invariants honest, not the invariants themselves.
 #
-# ORDER MATTERS. The teeth-prover runs FIRST because every result below it is worth nothing until we
+# ORDER MATTERS. The teeth-prover runs FIRST because every result below it is worth nothing until I
 # know the guards can actually fail. A green light from an unproven guard is a green light wired to
 # nothing — that is the single most expensive failure mode in the sibling system's history.
 #
@@ -50,6 +50,8 @@ echo "   A count written into prose is a surface too, and it does not recompute 
 python3 guard/doc_count_drift.py; roll $?
 echo "   So is a rendered image: the banner PNG must still match the SVG it came from."
 python3 guard/banner_render.py; roll $?
+echo "   And the published voice is a surface: this repo is written by one person."
+python3 guard/voice_check.py; roll $?
 
 note "3. GUARD UNIT GATES — do the guards themselves still behave?"
 python3 -m pytest guard/tests/ -q; roll $?
@@ -67,6 +69,7 @@ python3 guard/org_lint.py --selftest; roll $?
 python3 guard/reader_record.py --selftest; roll $?
 python3 guard/doc_count_drift.py --selftest; roll $?
 python3 guard/banner_render.py --selftest; roll $?
+python3 guard/voice_check.py --selftest; roll $?
 # The PID binder's self-test needs a live child process and /proc. Where there is no /proc
 # it returns 2 = UNMEASURED on its own, which is correct: the mechanism was not exercised.
 python3 guard/verify_running_build_pid.py --selftest; roll $?

@@ -33,7 +33,7 @@ print("SEMANTIC SELECTOR GUARD")
 print("=" * 78)
 
 # ---------- 1. TEETH: a lone novel frame must be selected ----------
-print("\n[1] FINDS the novel frame (the one we must never fail to look at)")
+print("\n[1] FINDS the novel frame (the one that must never be missed)")
 d = 32
 base = rng.normal(0, 1, d)
 V = list(cluster(base, 40))                 # 40 near-identical frames

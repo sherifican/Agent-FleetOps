@@ -3,7 +3,7 @@
 
 A cap decides what gets DELETED, so this guard has to prove the change in both directions: that it
 actually fires (content raises the cap), that it cannot fire the wrong way (never below the old rule),
-and that the old rule really was the flat thing we replaced — otherwise "we fixed it" is unfalsifiable.
+and that the old rule really was the flat thing that was replaced — otherwise "we fixed it" is unfalsifiable.
 
 Run: python3 guard/test_companion_cap.py
 """

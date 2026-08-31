@@ -9,7 +9,7 @@ so the two aren't in lockstep and it reads as organic 'breathing'. Glow uses onl
 """
 
 # Spinner registry: name -> list of frame STRINGS (a frame may be multi-char, e.g. Rich's 'bouncingBar').
-# Our hand-picked ones come first, then Rich's bundled catalog (~70 more) is folded in — Rich is already a
+# The hand-picked ones come first, then Rich's bundled catalog (~70 more) is folded in — Rich is already a
 # dependency, so this is a big, SAFE expansion (no fragile external plugin; cf. the textual-terminal miss).
 _CUSTOM = {
     "braille":    "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",   # the classic CLI spinner

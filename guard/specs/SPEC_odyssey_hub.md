@@ -11,7 +11,7 @@ This matters because the source of the design — Odysseus's own `visual_report.
 way: the LLM emits markdown, and a renderer turns it into the styled page. Style therefore cannot drift
 per-model, and presentation stops being something a model can get wrong.
 
-**It is INCREMENTAL by construction.** We will keep adding crawl files over months. Re-running the
+**It is INCREMENTAL by construction.** I will keep adding crawl files over months. Re-running the
 script must pick up every file currently on disk and rebuild the page. Never hard-code a file list.
 
     INPUT   <research-root>/odysseus_crawl/raw/*.md

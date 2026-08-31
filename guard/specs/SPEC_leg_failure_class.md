@@ -4,7 +4,7 @@ Write the file COMPLETELY at `../guard/leg_failure_class.py`.
 
 ## Why
 
-Our dispatch loop (`dispatch_video_research.sh:109-115`) is `for attempt in 1 2` with **no delay and
+This repo's dispatch loop (`dispatch_video_research.sh:109-115`) is `for attempt in 1 2` with **no delay and
 no classification** — every failure retried identically. Two measured costs:
 
 - **2026-07-31:** kimi's Allegretto quota cap burned both attempts. The cap presents as `rc=1` with
@@ -13,8 +13,8 @@ no classification** — every failure retried identically. Two measured costs:
   is the actual remedy, so every retry *delays the fix*.
 
 Adapted from opencode's `packages/opencode/src/session/retry.ts:75` — *not retryable AND not 5xx →
-stop*. We deliberately took ONLY that decision rule. Its header-driven timing and its 2s–30s
-exponential backoff were rejected: we are subprocess wrappers with no access to HTTP headers, and our
+stop*. This repo deliberately took ONLY that decision rule. Its header-driven timing and its 2s–30s
+exponential backoff were rejected: these are subprocess wrappers with no access to HTTP headers, and this repo's
 unit of work is a 5–25 minute CLI run, against which a 30-second cap is inert.
 
 **A decision rule ports across architectures. Timing constants do not.**

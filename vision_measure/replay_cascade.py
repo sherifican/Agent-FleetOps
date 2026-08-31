@@ -33,9 +33,9 @@ labelled as the ceiling it is.
 TWO DENOMINATORS, NEVER MIXED (the lesson that killed the filter work and revived this one):
   ON-DISK    109 companions in `companions.json` across 34 videos. HISTORICAL: written by runs, most of
              them under the PRE-2026-08-01 duration-only cap. This is the denominator for "how often did
-             the auditor actually rescue something we published".
+             the auditor actually rescue something published".
   PROSPECTIVE the selection the SHIPPED adaptive cap would make from the same records today. This is the
-             denominator for "what would the cascade cost us going forward".
+             denominator for "what would the cascade cost going forward".
 A rate quoted over one and a cost quoted over the other are not comparable, so both are printed side by
 side with their own totals and never summed together.
 

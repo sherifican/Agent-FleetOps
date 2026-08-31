@@ -65,7 +65,7 @@ once to `ps -eo pid,args` — either is fine, but it must be behind the 15 secon
 
 **Fallback.** If no invocation argv is found but a process with comm `kimi-code` exists (via
 `pgrep -x kimi-code`), emit ONE record for it with the default model and mode "session" — kimi is
-running but we cannot see how it was started. Never emit nothing when kimi is demonstrably up.
+running but how it was started cannot be seen. Never emit nothing when kimi is demonstrably up.
 
 **De-duplication.** One record per invocation. The `kimi-code` child of an invocation already
 counted must NOT produce a second row.

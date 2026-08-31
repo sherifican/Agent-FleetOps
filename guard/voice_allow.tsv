@@ -1,0 +1,20 @@
+# voice_allow.tsv — files whose first-person-plural words are DATA, not voice.
+#
+# guard/voice_check.py keeps the published prose first-person singular. A few files
+# legitimately CONTAIN that vocabulary: a scanner built to detect appeals to consensus
+# has to carry the phrases it detects, and its fixtures have to use them or the scanner
+# would never be proved able to fire. Rewriting those would break the guard while leaving
+# every test green, because the fixtures would have been rewritten to match it.
+#
+# Every line here is CHECKED. A file listed with no remaining matches is reported as a
+# stale exemption, so this cannot quietly widen into a blanket permission.
+#
+# Format:  PATH<TAB>why the words in this file are data rather than voice
+guard/brief_scan.py	the leak-detector's own rule ids, regexes and quoted example briefs; the docstrings quote those same patterns
+guard/tests/test_brief_scan.py	fixtures the scanner must fire on and mandated-language fixtures it must NOT fire on
+guard/mutation_harness.py	mutation strings that are byte-copies of brief_scan's rule literals; changing them unbinds the mutation
+guard/test_companion_cap.py	a quoted example phrase ("we fixed it") illustrating the unfalsifiable claim this guard exists to prevent
+guard/test_perceptual_prefilter.py	a verbatim quotation of the owner's words when he approved the sampling rate
+tui/tests/test_posture.py	a captured upstream version report used as a fixture; its bytes are the input under test
+guard/voice_check.py	carries the detection vocabulary as its own matching pattern
+guard/voice_allow.tsv	the reasons here quote the very phrases they exempt

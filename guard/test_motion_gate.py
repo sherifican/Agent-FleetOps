@@ -63,7 +63,7 @@ for dx, dy in [(3, 0), (6, 0), (0, 3), (-5, 2), (12, -4), (2, 2)]:
           "" if got else f"dx={v[0]} dy={v[1]} resid/raw={v[2]/max(v[3],1e-9):.3f}")
 
 # ---------- 2. NOT OVERBROAD: silent on new content in place ----------
-print("\n[2] SILENT on new content (true negatives — the frames we must never lose)")
+print("\n[2] SILENT on new content (true negatives — the frames that must never be lost)")
 # (a) a slide change: the bright block's content is replaced, nothing translates
 slide = base.copy(); slide[20:40, 30:90] = 20.0
 v = vm.motion_verdict(base, slide); check("slide element replaced -> STATIC", not vm.is_motion(*v),

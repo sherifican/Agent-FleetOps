@@ -15,7 +15,7 @@ def _restore_anim_globals():
     and calls anim.set_colors()/set_style() — MUTATING the module-global palette (anim._colors, e.g.
     model->magenta) and spinner (anim._active_frames). Those globals feed widgets/format.py, so an
     app-mounting test that happens to sort BEFORE test_format would leak the custom palette and break
-    format assertions that expect the defaults (this actually bit us when test_dispatch_presets was added).
+    format assertions that expect the defaults (this actually bit the suite when test_dispatch_presets was added).
     Snapshot + restore around each test so order never matters.
     """
     saved_colors = copy.deepcopy(anim._colors)

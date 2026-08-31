@@ -31,7 +31,7 @@ source_artifacts: [<FINAL>, <RESULT>, <captured media>]
 |---|---|---|---|---|---|
 | <item> | <bucket> | <action> | <P0|P1|P2> | <n/N legs> | <anchor> |
 
-## WHAT WE ALREADY DO
+## WHAT THIS STACK ALREADY DOES
 
 <honest placement against the current stack>
 

@@ -150,7 +150,7 @@ def _iter_proc_cmdlines():
                 # Skip unreadable processes
                 continue
     except (OSError, IOError):
-        # If we can't read /proc at all, return empty iterator
+        # If /proc can't be read at all, return empty iterator
         return
 
 
@@ -299,12 +299,12 @@ def _codex_variant_from_argv(argv) -> tuple:
             break
         i += 1
     
-    # If we found a profile, look it up or capitalize it
+    # If a profile was found, look it up or capitalize it
     if via == "profile" and raw:
         label = CODEX_PROFILE_DISPLAY.get(raw.lower(), raw.capitalize())
         return (label, via)
     
-    # If we found a model, use it as the label
+    # If a model was found, use it as the label
     if via == "model" and raw:
         return (raw, via)
     
@@ -519,7 +519,7 @@ def _is_kimi_invocation(argv) -> bool:
 
 def _is_bare_kimi_code(argv) -> bool:
     """True for the flag-less child the wrapper spawns: the entire argv is the single token 'kimi-code'.
-    Such a process proves kimi is up but tells us nothing about how it was started."""
+    Such a process proves kimi is up but reveals nothing about how it was started."""
     return len(argv) == 1 and os.path.basename(argv[0]) == "kimi-code"
 
 
@@ -585,7 +585,7 @@ def read_kimi_procs() -> list:
                 continue
 
         if not procs and bare_children:
-            # kimi is demonstrably up but we cannot see how it started -> default model, session.
+            # kimi is demonstrably up but how it started cannot be seen -> default model, session.
             pid = bare_children[0][0]
             procs.append({
                 "pid": pid,

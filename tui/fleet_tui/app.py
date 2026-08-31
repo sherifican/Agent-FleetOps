@@ -25,7 +25,7 @@ def _tighten_svg(svg: str) -> str:
     the docked footer (the window is usually much taller than the content). Keeps the window frame.
     Also hardens font fallback: Rich embeds Fira Code (via CDN), which ISN'T installed here + lacks
     block/box glyphs when the CDN can't be reached (an offline image viewer) → panel borders + plot
-    marks render as tofu boxes. We inject the locally-installed 'DejaVu Sans Mono' (full box-drawing +
+    marks render as tofu boxes. The app injects the locally-installed 'DejaVu Sans Mono' (full box-drawing +
     block-element coverage) into the fallback chain so screenshots render cleanly in ANY viewer."""
     try:
         # font-fallback hardening (do this first; independent of the crop) — add DejaVu before generic mono

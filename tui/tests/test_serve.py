@@ -20,7 +20,7 @@ def test_main_builds_server_with_our_python_and_module(monkeypatch):
 
     monkeypatch.setattr(serve, "Server", _FakeServer)
     serve.main()
-    assert "-m fleet_tui" in captured["command"]        # serves our package
+    assert "-m fleet_tui" in captured["command"]        # serves this package
     assert captured["host"] == "0.0.0.0" and captured["port"] == 8011
     assert captured["served"] is True                   # main() actually calls serve()
 

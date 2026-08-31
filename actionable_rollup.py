@@ -244,13 +244,13 @@ def render(items):
             if not ps:
                 continue
             ps.sort(key=lambda r: (apos.get(r["action"], 99), r["item"].lower()))
-            label = {"P0": "P0 — bears on a decision we are making NOW",
+            label = {"P0": "P0 — bears on a decision being made NOW",
                      "P1": "P1 — clear win, no urgency",
                      "P2": "P2 — interesting, speculative payoff",
                      "—": "Unprioritised (pre-2026-07-30 rows — triage these)"}[p]
             out.append(f"### {label}  ({len(ps)})")
             out.append("")
-            out.append("| Item | Action | What it is | Why it matters to us | Source | Video |")
+            out.append("| Item | Action | What it is | Why it matters to this stack | Source | Video |")
             out.append("|---|:---:|---|---|:---:|---|")
             for r in ps:
                 flag = " ⚠bucket" if r["bucket_inferred"] else ""

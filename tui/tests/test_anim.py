@@ -11,7 +11,7 @@ def test_spin_cycles():
 
 
 def test_rich_catalog_loaded():
-    # our custom set is present AND Rich's bundled spinners folded in → a big catalog for the menu
+    # the custom set is present AND Rich's bundled spinners folded in → a big catalog for the menu
     for k in ("braille", "arc", "bar"):
         assert k in anim.SPINNERS
     assert len(anim.SPINNERS) > 40                       # ~5 custom + ~70 from Rich
