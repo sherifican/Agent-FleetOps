@@ -20,7 +20,9 @@ peak = [
     ("Ornith-1.0-9B",          67.0, "ornith",   "5.6 GB · Q4_K_M · 9B dense · single run"),
     ("qwen3.8:27b-devicepinned", 56.4, "qwen",   "box-b · dgpu-b · device-pinned build · n=1"),
     ("gemma4:12b",             54.0, "gemma",    "7.6 GB · Q4_K_M · 11.9B dense · max of 3 conditions"),
-    ("qwen3.8:27b",           54.35, "qwen",     "box-b · dgpu-b · quant unknown · n=2"),
+    ("qwen3.8:27b",            74.6, "qwen",     "Radeon AI PRO R9700 31GB · same-prompt device matrix · n=1"),
+    ("qwen3.8-flash-next-pruned", 23.5, "qwen",  "Radeon 8060S iGPU · expert-pruned · decode · n=2 · dumped"),
+    ("qwen3.8-flash-next-stock", 22.96, "qwen",  "Radeon 8060S iGPU · stock 512-expert · decode · n=2"),
     ("qwen3:14b",             42.49, "qwen",     "Q4_K_M · 14B · ollama · single run"),
     ("deepseek-r1:14b",       42.37, "deepseek", "9.0 GB · Q4_K_M · 14.8B · single run"),
     ("muse-glimmer",           33.8, "other",    "box-b · igpu · llama-server spec-decode · n=3"),
@@ -90,6 +92,9 @@ ab = [
     ("qwen3-coder:30b · spec-decode ngram-mod",    95.6, 108.1, "tune", "same model + same prompt"),
     ("Ornith-35B-A3B · MoE accel (-ngl 8) · PREFILL pp2048",       115.7, 114.1, "tune", "claimed win did NOT reproduce"),
     ("Ornith-35B-A3B · MoE accel (-ngl 24) · PREFILL",      199.9, 188.7, "tune", "claimed win did NOT reproduce"),
+    ("qwen3.8-flash-next · expert prune · DECODE",   22.96,  23.50, "tune", "+2.4% is inside this box's ~6-10% noise floor"),
+    ("qwen3.8-flash-next · expert prune · PREFILL pp512",  312.64, 355.45, "tune", "stock's OWN two runs spread 12% — not separable"),
+    ("qwen3.8:27b · 2×16GB over PCIe → one 32GB card", 21.8, 74.6, "place", "same prompt, same model · different device"),
 ]
 p2 = []
 for lab, b, a, grp, note in ab:
@@ -109,9 +114,11 @@ pos = [r["delta"] for r in p2 if r["delta"] > 0]
 neg = [r["delta"] for r in p2 if r["delta"] <= 0]
 swap = [r["delta"] for r in p2 if r["group"] == "swap"]
 tune = [r["delta"] for r in p2 if r["group"] == "tune"]
+place = [r["delta"] for r in p2 if r["group"] == "place"]
 sub2 = (f"mean of the {len(pos)} that improved: +{sum(pos)/len(pos):.1f}%   ·   "
         f"mean of the {len(neg)} that did not: {sum(neg)/len(neg):.1f}%   ·   "
         f"model-swap group: +{sum(swap)/len(swap):.1f}%   ·   "
+        f"placement (same prompt, different device): +{sum(place)/len(place):.1f}%   ·   "
         # `pos[-1]` reported the single winning tune row as if it were the class average:
         # the other two same-model tunes are -1.4% and -5.6%, so the honest tune mean is ~+2%.
         f"same-model tuning (mean of {len(tune)}): {sum(tune)/len(tune):+.1f}%")
@@ -203,9 +210,10 @@ p2_plot = {
     ],
 }
 panel2 = {
-    "title": {"text": "Before / after — every A/B measured here, same box, same task",
+    "title": {"text": "Before / after — every A/B measured here, same task on both sides",
               "subtitle": [sub2,
-                           "Grey dot = before. Coloured dot = after. Two of six are negatives: a claimed MoE-offload speed-up that did not reproduce."],
+                           f"Grey dot = before. Coloured dot = after. {len(neg)} of {len(p2)} are negatives. "
+        f"Rows marked PREFILL are prompt-processing, not decode — the two axes are not comparable."],
               "anchor": "start", "color": FG, "fontSize": 17, "subtitleColor": MUTED,
               "subtitleFontSize": 11.5},
     "hconcat": [p2_text, p2_plot], "spacing": 14,

@@ -71,6 +71,57 @@ panel shows exactly which dependencies are behind.
 
 *Hostnames, LAN addresses and box nicknames are redacted (grey boxes); every reading is real. The header shows a newer in-house build than the `tui/` sources exported here.*
 
+### The same fleet from a phone
+
+The monitor also serves over the home LAN, so the whole fleet is readable from a phone browser on the
+same network — token-gated, loopback plus LAN only, never exposed publicly. It is the same data the
+terminal shows, re-laid-out for a narrow screen: cards stack, the model kanban becomes sections, and
+the wide tables scroll rather than truncate.
+
+**Local and cloud legs in one view.** Twenty-three local model tags across two boxes, four cloud legs
+in session, and the best measured rate per model per box — the same `box-a` / `box-b` split the
+throughput log above uses.
+
+<img src="docs/mobile/mirror-models-local-and-cloud.png" width="380" alt="Phone view: MODELS panel showing in-flight, loaded and idle local tags, four cloud legs in session, and best tok/s per box">
+
+**A remote box, in full.** The second box reported over the LAN: uptime, kernel, CPU and memory,
+runtime service state, sidecars, and both of its GPUs with their separate thermal and power readings.
+
+<img src="docs/mobile/mirror-host-panel.png" width="380" alt="Phone view: the second box's host panel with link, system, runtime, sidecar and dual-GPU sections">
+
+<details>
+<summary><b>More panels from the same session — click to expand</b></summary>
+
+<br>
+
+These are the remaining views from the same capture session: governance and lane tables, downloads,
+receipts, inbox and alerts, and the per-box job and device panels. They are included for completeness
+rather than because each needs commentary.
+
+<p>
+<img src="docs/mobile/mirror-panel-01.png" width="300">
+<img src="docs/mobile/mirror-panel-02.png" width="300">
+<img src="docs/mobile/mirror-panel-03.png" width="300">
+<img src="docs/mobile/mirror-panel-04.png" width="300">
+<img src="docs/mobile/mirror-panel-05.png" width="300">
+<img src="docs/mobile/mirror-panel-06.png" width="300">
+<img src="docs/mobile/mirror-panel-07.png" width="300">
+<img src="docs/mobile/mirror-panel-08.png" width="300">
+<img src="docs/mobile/mirror-panel-09.png" width="300">
+<img src="docs/mobile/mirror-panel-10.png" width="300">
+<img src="docs/mobile/mirror-panel-11.png" width="300">
+<img src="docs/mobile/mirror-panel-12.png" width="300">
+</p>
+
+</details>
+
+*Host names, LAN addresses and box nicknames are substituted, not masked: the address bar reads
+`box-a.lan` and remote addresses use the RFC 5737 documentation range, which is the same replacement
+this repository's own publish scanner treats as sanctioned. Every reading is real. As with the
+terminal screenshot above, this is a newer in-house build than the `tui/` sources exported here — the
+exported `tui/fleet_tui/serve.py` wraps `textual-serve` and gives an adopter the same
+serve-to-the-LAN capability, not this exact layout.*
+
 ## Research team
 
 Research is a chain of inspectable artifacts, not an answer a model says confidently. The roles,
