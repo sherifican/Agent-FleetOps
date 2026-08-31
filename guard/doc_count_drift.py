@@ -100,7 +100,7 @@ def measure_bench_tags(root):
 
 # ---------------------------------------------------------------- claim sites
 
-def _claims_guard_suite(line):
+def _claims_guard_suite(line, rel):
     """A count of THIS suite: the repo's own term for it, or a line that runs it."""
     out = [int(m.group(1)) for m in
            re.finditer(r"(\d+)\s+hermetic\s+unit\s+gates?", line, re.I)]
@@ -109,20 +109,100 @@ def _claims_guard_suite(line):
     return out
 
 
-def _claims_bench_rows(line):
+def _claims_bench_rows(line, rel):
     return ([int(m.group(1)) for m in
-             re.finditer(r"(\d+)\s+measurements\b", line, re.I)] +
+             re.finditer(r"(\d+)\s+measure(?:ments|d rows)\b", line, re.I)] +
             [int(m.group(1)) for m in
              re.finditer(r"\|\s*Total measurements\s*\|\s*\*{0,2}(\d+)\*{0,2}\s*\|", line, re.I)])
 
 
-def _claims_bench_tags(line):
+def _claims_bench_tags(line, rel):
     return [int(m.group(1)) for m in re.finditer(r"(\d+)\s+model tags\b", line, re.I)]
 
 
-def _claims_tui_suite(line):
+def _claims_tui_suite(line, rel):
     return [int(m.group(1)) for m in
             re.finditer(r"(\d+)[- ]test hermetic suite", line, re.I)]
+
+
+def _count_files(root, rel_dir, pred):
+    d = os.path.join(root, rel_dir)
+    if not os.path.isdir(d):
+        return None, f"{rel_dir} is not present"
+    return len([f for f in os.listdir(d) if pred(f)]), None
+
+
+def measure_protocol_specs(root):
+    return _count_files(root, "specs", lambda f: f.endswith(".md"))
+
+
+def measure_skills(root):
+    d = os.path.join(root, "skills")
+    if not os.path.isdir(d):
+        return None, "skills/ is not present"
+    return len([s for s in os.listdir(d)
+                if os.path.isfile(os.path.join(d, s, "SKILL.md"))]), None
+
+
+def measure_adoption_steps(root):
+    return _count_files(root, "adopt",
+                        lambda f: re.match(r"^\d+_.*\.md$", f) is not None)
+
+
+def measure_guards(root):
+    """Modules that can actually go red in a run: what the runner invokes, plus the
+    script-guards the mutation harness drives. Counting `guard/*.py` instead would count
+    shared helpers that no run can turn red, which is not what the banner claims."""
+    rg = os.path.join(root, "guard", "run_guards.sh")
+    mh = os.path.join(root, "guard", "mutation_harness.py")
+    try:
+        with open(rg, encoding="utf-8") as fh:
+            invoked = set(re.findall(r"python3 guard/([a-z_]+)\.py", fh.read()))
+        with open(mh, encoding="utf-8") as fh:
+            scripts = set(re.findall(r'\("guard/(test_[a-z_]+)\.py"', fh.read()))
+    except OSError:
+        return None, "the runner or the mutation harness could not be read"
+    if not invoked:
+        return None, "no invocations found in the runner — the pattern may have gone stale"
+    return len(invoked | scripts), None
+
+
+def measure_repo_tests(root):
+    """Both hermetic suites. Skipped whenever either half cannot be fully collected."""
+    g, gn = measure_guard_suite(root)
+    u, un = measure_tui_suite(root)
+    if g is None:
+        return None, gn
+    if u is None:
+        return None, un
+    return g + u, None
+
+
+# These labels are ordinary English, so they are read only where the number OPENS the
+# statement — the shape a banner stat has, and the shape a passing mention does not.
+# Unanchored, "<n> guards" matched a quoted anecdote about a DIFFERENT system's harness
+# ("28/28 guards have teeth") and reported it as this repo's guard count drifting.
+def _stat(label):
+    pat = re.compile(rf"^\s*(\d+)\s+{label}\b", re.I)
+
+    def finder(line, rel):
+        m = pat.match(line)
+        return [int(m.group(1))] if m else []
+    return finder
+
+
+_claims_protocol_specs = _stat("protocol specs")
+_claims_skills = _stat("skills")
+_claims_adoption_steps = _stat("adoption steps")
+_claims_guards = _stat("guards")
+
+
+def _claims_repo_tests(line, rel):
+    # "<n> tests" is far too common in prose to match everywhere, so this claim is read
+    # only off the banner, where the label is the whole sentence.
+    if not rel.endswith(".svg"):
+        return []
+    return _stat("tests")(line, rel)
 
 
 # (name, instrument, claim-finder, canonical phrasing). The fourth entry exists so the
@@ -138,14 +218,38 @@ CHECKS = [
      lambda n: f"{n} model tags"),
     ("fleet-tui suite", measure_tui_suite, _claims_tui_suite,
      lambda n: f"behind a {n}-test hermetic suite"),
+    ("protocol specs", measure_protocol_specs, _claims_protocol_specs,
+     lambda n: f"{n} protocol specs"),
+    ("guards that can go red", measure_guards, _claims_guards,
+     lambda n: f"{n} guards"),
+    ("skills", measure_skills, _claims_skills, lambda n: f"{n} skills"),
+    ("adoption steps", measure_adoption_steps, _claims_adoption_steps,
+     lambda n: f"{n} adoption steps"),
+    ("both hermetic suites", measure_repo_tests, _claims_repo_tests,
+     lambda n: f"{n} tests"),
 ]
 
 
 # ---------------------------------------------------------------- the sweep
 
+TEXT_NODE = re.compile(r">([^<>]+)</text>")
+
+
+def _svg_lines(text):
+    """An SVG banner states a count in one <text> node and its subject in the next.
+
+    Neither element is a sentence, so a line-oriented sweep reads them as two unrelated
+    fragments and matches nothing — which is how the most public surface in the repo went
+    unchecked while every number on it drifted. Pairing consecutive nodes reconstructs the
+    claim the reader actually sees.
+    """
+    nodes = [n.strip() for n in TEXT_NODE.findall(text)]
+    return [f"{a} {b}" for a, b in zip(nodes, nodes[1:])]
+
+
 def _docs(root):
     try:
-        out = subprocess.run(["git", "ls-files", "-z", "*.md"], cwd=root,
+        out = subprocess.run(["git", "ls-files", "-z", "*.md", "*.svg"], cwd=root,
                              capture_output=True, text=True, timeout=60)
         if out.returncode == 0 and out.stdout.strip("\0"):
             return [f for f in out.stdout.split("\0") if f]
@@ -155,7 +259,7 @@ def _docs(root):
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d != ".git"]
         for fn in filenames:
-            if fn.endswith(".md"):
+            if fn.endswith((".md", ".svg")):
                 found.append(os.path.relpath(os.path.join(dirpath, fn), root))
     return sorted(found)
 
@@ -174,9 +278,10 @@ def check(root=ROOT, measured=None):
             continue
         try:
             with open(full, encoding="utf-8", errors="replace") as fh:
-                docs.append((rel, fh.read().splitlines()))
+                body = fh.read()
         except OSError:
             continue
+        docs.append((rel, _svg_lines(body) if rel.endswith(".svg") else body.splitlines()))
 
     lines, worst, verified = [], 0, 0
     for name, instrument, claimer, _plant in CHECKS:
@@ -197,7 +302,7 @@ def check(root=ROOT, measured=None):
         sites = [(rel, i, c)
                  for rel, body in docs
                  for i, line in enumerate(body, 1)
-                 for c in claimer(line)]
+                 for c in claimer(line, rel)]
         if not sites:
             lines.append(f"   UNMEASURED  {name}: measured {n}, but no documented count "
                          f"matched any known phrasing — this check verified nothing")
@@ -269,9 +374,24 @@ def _selftest():
 
     with tempfile.TemporaryDirectory() as td:
         doc = pathlib.Path(td) / "DOC.md"
+        svg = pathlib.Path(td) / "DOC.svg"
 
         def rc_for(text, measured=None):
+            """Plant the same claims in both shapes a real surface uses.
+
+            Some claims are read only off a banner, so a fixture that wrote prose alone
+            left those checks with nothing to compare and turned every case UNMEASURED —
+            on a machine where they could run. The SVG mirrors the banner: the count in
+            one text node, its subject in the next.
+            """
             doc.write_text(text)
+            nodes = []
+            for line in text.splitlines():
+                m = re.match(r"^\s*(\d+)\s+(.*)$", line)
+                if m:
+                    nodes.append(f"<text>{m.group(1)}</text>")
+                    nodes.append(f"<text>{m.group(2)}</text>")
+            svg.write_text("<svg>" + "".join(nodes) + "</svg>")
             return check(td, measured=measured or sim)[0]
 
         case("every count correct passes (green)", rc_for(doc_for()) == 0)
