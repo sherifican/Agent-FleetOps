@@ -4,6 +4,8 @@
 
 # Agent-FleetOps
 
+**So you wanna run an AI Fleet without it turning into a hallucination circus? I've put together a generalized version of my collection of skills and tools, please use as you see fit. I hope it helps!**
+
 Pattern library for agent fleets: bind every check, count, and claim to a live target that can go red (fail).
 It works on one box; the two-workstation setup that produced it is provenance, not a requirement.
 
