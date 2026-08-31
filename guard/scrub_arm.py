@@ -20,9 +20,12 @@ OVERLAY FORMAT: one Python regex per line, matched case-insensitively per line o
   `#` starts a comment; prefix a line with `quoted-speech:` to file it under that class
   (default class is private-material).
 
-CORPUS: tracked files under --root (`git ls-files` — public-bound bytes are what git will
-  publish). Outside a git tree it walks the directory instead and says so. The committed plant
-  under guard/tests/fixtures/ is EXCLUDED from the scan and exercised by --selftest.
+CORPUS: the INDEX under --root (`git ls-files -s`) — names AND bytes both come from what git
+  will publish, so a value staged for commit cannot hide behind a worktree file that was edited
+  afterwards. A symlink is scanned as the path it STORES, not as the file it points at. Outside a
+  git tree it walks the directory instead and says so. Bytes that fail to decode are still
+  scanned (UTF-16 in both byte orders, then latin-1): a decode failure is a fact about the
+  decoder, never evidence the bytes are clean. Only the committed plant is exempt, BY NAME.
 
 SELF-TEST (--selftest): runs the baseline over the committed plant fixture and requires every
   baseline rule to flag at least one PLANT: line and zero CLEAN: control lines — teeth and
@@ -39,7 +42,11 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLANT = os.path.join(HERE, "tests", "fixtures", "scrub_plant.txt")
-SKIP_DIRS = ("guard/tests/fixtures/",)  # committed plants — exercised by --selftest, never scanned
+# EXEMPTIONS ARE FILES, NAMED ONE BY ONE — never a directory prefix. A prefix is a hidey-hole:
+# every future file under it inherits the exemption silently, so a private address planted in any
+# other fixture would be invisible. Only the committed plant, which exists to be caught by
+# --selftest, is excused, and it is excused by NAME.
+SKIP_FILES = ("guard/tests/fixtures/scrub_plant.txt",)
 
 # ── the shipped generic baseline ────────────────────────────────────────────────────────────
 # (class, rule, regex) — case-insensitive, applied per line. Home paths allow the neutral
@@ -89,44 +96,116 @@ def load_overlay(path):
 
 
 def corpus(root):
-    p = subprocess.run(["git", "-C", root, "ls-files"], capture_output=True, text=True)
+    """The entries git will publish: (rel, git-mode, blob-id) from the INDEX.
+
+    The names and the BYTES must come from the same place. Reading names from the index and
+    bytes from the worktree lets a value that is staged for commit ship while the scan reads a
+    file that was overwritten afterwards — the scan would be about a version nobody publishes.
+    """
+    p = subprocess.run(["git", "-C", root, "ls-files", "-s", "-z"],
+                       capture_output=True, text=True)
     if p.returncode == 0 and p.stdout.strip():
-        rels, mode = p.stdout.splitlines(), "tracked files (git ls-files)"
-    else:
-        rels = []
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d != ".git"]
-            for f in filenames:
-                rels.append(os.path.relpath(os.path.join(dirpath, f), root))
-        mode = "directory walk (not a git tree — untracked bytes are scanned too)"
-    return sorted(r.replace(os.sep, "/") for r in rels), mode
+        entries = []
+        for rec in p.stdout.split("\0"):
+            if not rec:
+                continue
+            meta, _, rel = rec.partition("\t")
+            bits = meta.split()
+            if len(bits) < 3:
+                continue
+            entries.append((rel.replace(os.sep, "/"), bits[0], bits[1]))
+        return sorted(entries), "index entries (git ls-files -s — the bytes git will publish)"
+
+    entries = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        for f in filenames:
+            full = os.path.join(dirpath, f)
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            entries.append((rel, "120000" if os.path.islink(full) else "100644", None))
+    return sorted(entries), "directory walk (not a git tree — untracked bytes are scanned too)"
+
+
+def _blob_bytes(root, blob_ids):
+    """Read every blob in one `git cat-file --batch` pass. Missing ids simply do not come back;
+    the caller reports those as unreadable rather than counting them clean."""
+    ids = sorted({b for b in blob_ids if b})
+    if not ids:
+        return {}
+    p = subprocess.run(["git", "-C", root, "cat-file", "--batch"],
+                       input=("\n".join(ids) + "\n").encode(), capture_output=True)
+    out, got, i = p.stdout, {}, 0
+    while i < len(out):
+        nl = out.find(b"\n", i)
+        if nl < 0:
+            break
+        head = out[i:nl].decode("utf-8", "replace").split()
+        if len(head) != 3 or head[1] != "blob":
+            break                     # missing / not a blob: leave it absent, never assume empty
+        size = int(head[2])
+        got[head[0]] = out[nl + 1:nl + 1 + size]
+        i = nl + 1 + size + 1
+    return got
+
+
+def _views(data):
+    """Every reading of these bytes that could carry a private string.
+
+    A file is NEVER dropped for failing to decode. A decoder saying no is a fact about the
+    decoder, not evidence that the bytes are clean: latin-1 and UTF-16 files carrying ASCII-
+    compatible addresses used to be skipped and the run still returned 0. latin-1 cannot fail,
+    so every file gets scanned in at least one view; NUL-carrying bytes are additionally read
+    as UTF-16 in both byte orders, which is how a BOM-less UTF-16 address becomes visible.
+    """
+    views = []
+    try:
+        views.append(data.decode("utf-8"))
+    except UnicodeDecodeError:
+        pass
+    if b"\0" in data:
+        for codec in ("utf-16-le", "utf-16-be"):
+            views.append(data.decode(codec, "replace"))
+    fallback = data.decode("latin-1")
+    if fallback not in views:
+        views.append(fallback)
+    return views
 
 
 def scan(root, rules):
-    rels, mode = corpus(root)
+    entries, mode = corpus(root)
     compiled = _compile(rules)
-    hits, unreadable = [], []
-    scanned = skipped = 0
-    for rel in rels:
-        if any(rel.startswith(s) for s in SKIP_DIRS):
-            skipped += 1
+    blobs = _blob_bytes(root, [b for _, _, b in entries])
+    found, unreadable = {}, []
+    scanned = exempt = 0
+    for rel, gitmode, blob in entries:
+        if rel in SKIP_FILES:
+            exempt += 1
             continue
-        path = os.path.join(root, rel)
-        try:
-            with open(path, encoding="utf-8") as fh:
-                text = fh.read()
-        except UnicodeDecodeError:
-            skipped += 1          # binary — not public TEXT; images get their own gate at the port
+        if gitmode == "160000":       # a submodule pointer: a commit id, no bytes of ours
             continue
-        except OSError as e:
-            unreadable.append((rel, str(e)))
-            continue
+        if blob is not None:
+            if blob not in blobs:
+                unreadable.append((rel, "blob %s could not be read from the object store" % blob[:12]))
+                continue
+            data = blobs[blob]
+        else:
+            path = os.path.join(root, rel)
+            try:
+                # A symlink's public bytes are the PATH IT STORES — following it scans some other
+                # file's content and never looks at the link text itself.
+                data = (os.readlink(path).encode("utf-8", "surrogateescape")
+                        if os.path.islink(path) else open(path, "rb").read())
+            except OSError as e:
+                unreadable.append((rel, str(e)))
+                continue
         scanned += 1
-        for n, line in enumerate(text.splitlines(), 1):
-            for cls, name, cre in compiled:
-                if cre.search(line):
-                    hits.append((rel, n, cls, name, line.strip()[:120]))
-    return hits, scanned, skipped, unreadable, mode
+        for text in _views(data):
+            for n, line in enumerate(text.splitlines(), 1):
+                for cls, name, cre in compiled:
+                    if cre.search(line):
+                        found.setdefault((rel, n, cls, name), line.strip()[:120])
+    hits = [(rel, n, cls, name, frag) for (rel, n, cls, name), frag in sorted(found.items())]
+    return hits, scanned, exempt, unreadable, mode
 
 
 def selftest(plant_path):
@@ -184,9 +263,9 @@ def main(argv=None):
             return 2
         rules += load_overlay(args.overlay)
 
-    hits, scanned, skipped, unreadable, mode = scan(args.root, rules)
-    print("scrub arm — profile=%s · %s · %d file(s) scanned, %d skipped (fixtures/binary)"
-          % (args.profile, mode, scanned, skipped))
+    hits, scanned, exempt, unreadable, mode = scan(args.root, rules)
+    print("scrub arm — profile=%s · %s · %d file(s) scanned, %d exempt by name (committed plant)"
+          % (args.profile, mode, scanned, exempt))
     for rel, n, cls, name, frag in hits:
         print("  ⛔ %s:%d [%s/%s] %s" % (rel, n, cls, name, frag))
     for rel, err in unreadable:

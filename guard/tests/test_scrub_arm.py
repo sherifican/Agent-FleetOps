@@ -16,6 +16,7 @@ harness anchors on.
 import contextlib
 import io
 import os
+import subprocess
 import sys
 import tempfile
 
@@ -120,11 +121,22 @@ def test_adopter_profile_does_not_require_overlay():
     assert rc == 0, out
 
 
-def test_fixture_dir_is_excluded_from_scan():
+def test_only_the_named_plant_is_exempt_other_fixtures_are_scanned():
+    """REPLACES test_fixture_dir_is_excluded_from_scan, which pinned the defect.
+
+    That test asserted a DIRECTORY-prefix exemption as intended behaviour, so a private address
+    planted in any other fixture was invisible and the suite called that correct. The exemption
+    is now per-file: the committed plant is excused by name, and every other fixture is scanned
+    like any other tracked file.
+    """
     with tempfile.TemporaryDirectory() as d:
-        _corpus(d, {"guard/tests/fixtures/plantish.txt": "at %s\n" % ADDR, "doc.md": "clean\n"})
+        _corpus(d, {"guard/tests/fixtures/other_fixture.txt": "at %s\n" % ADDR,
+                    "guard/tests/fixtures/scrub_plant.txt": "PLANT: at %s\n" % ADDR,
+                    "doc.md": "clean\n"})
         rc, out = _run(["--root", d])
-    assert rc == 0, "the committed-plant dir must be excluded from the scan —\n" + out
+    assert rc == 1 and "other_fixture.txt" in out, \
+        "a private address in a non-plant fixture must be caught —\n" + out
+    assert "scrub_plant.txt" not in out, "the named plant is the ONLY exemption —\n" + out
 
 
 def test_selftest_green_on_the_committed_plant():
@@ -178,6 +190,78 @@ def test_a_real_self_attribution_inside_the_arm_source_is_still_caught():
     assert rc == 1 and len(flags) == 1, "expected exactly the planted hit —\n" + out
     assert "scrub_arm.py:%d" % planted_line in flags[0], out
     assert "self-reference-attribution" in flags[0], out
+
+
+# ── bytes that do not decode are still bytes git will publish (B4) ──────────────────────────
+ADDR2 = "192." + "168.1.7"
+
+
+def _write_bytes(d, rel, data):
+    with open(os.path.join(d, rel), "wb") as fh:
+        fh.write(data)
+
+
+def test_latin1_bytes_carrying_a_private_address_are_not_skipped():
+    with tempfile.TemporaryDirectory() as d:
+        _write_bytes(d, "legacy.txt", ("caf\u00e9 host at %s\n" % ADDR).encode("latin-1"))
+        rc, out = _run(["--root", d])
+    assert rc != 0, "a file that failed to decode was reported CLEAN —\n" + out
+    assert rc == 1 and "private-address-range" in out, out
+
+
+def test_utf16_bytes_carrying_a_private_address_are_not_skipped():
+    for codec in ("utf-16", "utf-16-le", "utf-16-be"):
+        with tempfile.TemporaryDirectory() as d:
+            _write_bytes(d, "wide.txt", ("peer at %s\n" % ADDR2).encode(codec))
+            rc, out = _run(["--root", d])
+        assert rc == 1 and "private-address-range" in out, codec + ":\n" + out
+
+
+def test_a_file_that_cannot_be_READ_is_still_unmeasured():
+    """The distinction the B4 fix must not blur: a decode failure is not an IO failure.
+
+    Bytes that arrive but do not decode get scanned. Bytes that never arrive are UNMEASURED (2),
+    because nobody looked at them.
+    """
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return                     # root reads anything; the permission bit proves nothing here
+    with tempfile.TemporaryDirectory() as d:
+        _corpus(d, {"locked.md": "clean\n"})
+        os.chmod(os.path.join(d, "locked.md"), 0)
+        try:
+            rc, out = _run(["--root", d])
+        finally:
+            os.chmod(os.path.join(d, "locked.md"), 0o600)
+    assert rc == 2 and "UNMEASURED" in out, out
+
+
+# ── the corpus and the bytes must be the same version (B5) ──────────────────────────────────
+def _new_git_tree(d):
+    for args in (("init", "-q"), ("config", "user.email", "gate@example.invalid"),
+                 ("config", "user.name", "gate")):
+        subprocess.run(["git", "-C", d, *args], check=True, capture_output=True)
+
+
+def test_staged_bytes_are_scanned_not_the_overwritten_worktree():
+    with tempfile.TemporaryDirectory() as d:
+        _new_git_tree(d)
+        _corpus(d, {"staged.md": "reachable at %s here\n" % ADDR})
+        subprocess.run(["git", "-C", d, "add", "staged.md"], check=True, capture_output=True)
+        _corpus(d, {"staged.md": "public text only\n"})   # worktree hides what is staged
+        rc, out = _run(["--root", d])
+    assert rc == 1 and "staged.md" in out and "private-address-range" in out, \
+        "the scan read the worktree, not the bytes git will publish —\n" + out
+
+
+def test_a_symlink_is_scanned_as_the_path_it_stores():
+    with tempfile.TemporaryDirectory() as d:
+        _new_git_tree(d)
+        _corpus(d, {"notes.md": "clean\n"})
+        os.symlink(HOME_UNIX, os.path.join(d, "shortcut"))
+        subprocess.run(["git", "-C", d, "add", "-A"], check=True, capture_output=True)
+        rc, out = _run(["--root", d])
+    assert rc == 1 and "shortcut" in out and "home-path" in out, \
+        "a symlink's public bytes are its stored path —\n" + out
 
 
 ALL = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
