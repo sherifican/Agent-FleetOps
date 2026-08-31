@@ -119,8 +119,10 @@ sub2 = (f"mean of the {len(pos)} that improved: +{sum(pos)/len(pos):.1f}%   ·  
         f"mean of the {len(neg)} that did not: {sum(neg)/len(neg):.1f}%   ·   "
         f"model-swap group: +{sum(swap)/len(swap):.1f}%   ·   "
         f"placement (same prompt, different device): +{sum(place)/len(place):.1f}%   ·   "
-        # `pos[-1]` reported the single winning tune row as if it were the class average:
-        # the other two same-model tunes are -1.4% and -5.6%, so the honest tune mean is ~+2%.
+        # `pos[-1]` reported the single winning tune row as if it were the class average.
+        # The tune group carries its losers too (-1.4%, -5.6%), so the mean is computed over
+        # every tune row rather than quoted from the best one; `len(tune)` is printed so the
+        # figure cannot be read as a per-run guarantee.
         f"same-model tuning (mean of {len(tune)}): {sum(tune)/len(tune):+.1f}%")
 
 AX = {"labelColor": FG, "titleColor": FG, "gridColor": GRID, "domainColor": GRID,

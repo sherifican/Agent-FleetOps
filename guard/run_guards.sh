@@ -46,6 +46,8 @@ python3 guard/teeth_prover.py; roll $?
 
 note "2. CONTRACT AGREEMENT — do all surfaces state the same contract?"
 python3 guard/contract_agreement.py; roll $?
+echo "   A count written into prose is a surface too, and it does not recompute itself."
+python3 guard/doc_count_drift.py; roll $?
 
 note "3. GUARD UNIT GATES — do the guards themselves still behave?"
 python3 -m pytest guard/tests/ -q; roll $?
@@ -61,6 +63,7 @@ python3 guard/brief_scan.py --selftest; roll $?
 python3 guard/curation_gate.py --selftest; roll $?
 python3 guard/org_lint.py --selftest; roll $?
 python3 guard/reader_record.py --selftest; roll $?
+python3 guard/doc_count_drift.py --selftest; roll $?
 # The PID binder's self-test needs a live child process and /proc. Where there is no /proc
 # it returns 2 = UNMEASURED on its own, which is correct: the mechanism was not exercised.
 python3 guard/verify_running_build_pid.py --selftest; roll $?

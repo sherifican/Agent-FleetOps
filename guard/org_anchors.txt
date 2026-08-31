@@ -11,3 +11,4 @@
 # allow-list: adding a line is an edit under review, and a line that stops being true
 # fails loudly instead of quietly widening the exception.
 STAGING_README.md: the export-staging contract; the staging pipeline reads it at this fixed root path
+conftest.py: pytest addresses this exact root path to configure collection for the whole tree; it is the only place that can keep the collector out of guard/'s script-guards

@@ -14,7 +14,7 @@ The organizing idea, applied everywhere here:
 
 This repo is a pattern library. You do not need two workstations.
 **Hand it to your AI:** clone it, then paste the block under **Set it up with your own AI**; the agent records missing GPUs and CLIs as `ABSENT`.
-**Read it yourself:** the specs and guards are the same teeth, written so a check can go red.
+**Read it yourself:** read the specs for the operating contracts; run the guards for checks that can go red.
 Start with `eval-integrity`, `generate-review-fix-loop`, and `model-routing-table`; the [minimum viable slice](adopt/README.md#minimum-viable-slice) explains the rest.
 
 ## How the pieces fit
@@ -27,15 +27,16 @@ flowchart TD
     TP["teeth_prover <br/>can every guard actually fail?"] -->|proves| G
     G -->|"0 clean / 1 violation / 2 UNMEASURED <br/>(2 dominates 1)"| V{verdict}
     W --> C["curation loop <br/>EVOLVE - propose rule changes"]
-    C --> H["user gate <br/>approve / revise / reject"]
+    C --> H["review panel <br/>verifier first, then independent-model vote"]
     H --> A["deterministic apply <br/>exact-match or refuse"] --> D["second-model diff audit"] --> R["(git - every pass revertible)"]
     style TP fill:#1a3a2a,stroke:#39d36f
     style H fill:#3a2a1a,stroke:#ffb347
 ```
 
 Observation never mutates, writes serialize behind a lock, verification must be able to fail, and
-evolution of the rules themselves passes a user gate. The three loops share one substrate: everything is a file,
-everything is diffable, everything is revertible.
+evolution of the rules themselves passes a review panel (verifier first, then independent-model vote). The three loops share one substrate: recorded artifacts and rule changes are file-backed and
+diffable. Git-tracked edits are revertible; model calls, live fleet activity, and external actions
+(services, cron, shell hooks) need their own rollback.
 
 That rule is enforced on this repository itself: the export pipeline's secret scanner and
 never-publish wall-checker each carry planted-mutation self-tests, and both caught real defects in
@@ -50,9 +51,9 @@ another machine). The commit history tells that story.
 | `skills/` | **Generalized agent-discipline procedures** — evaluation integrity, model routing (the living-table method), the local-lane build loop, multi-agent code workflow, research dispatch/verification, memory ops, brain bookkeeping, protected-function guards, blocked-page retrieval, and more. Each encodes failure stories from real operation. The portable start-list is in [`adopt/20_skills.md`](adopt/20_skills.md); you are not expected to install them all. |
 | `templates/` | Copyable dispatch, honesty, pinned-environment, and research-artifact patterns. Templates are adoption patterns, not automatic enforcement. |
 | `_tools/` | The export pipeline's own gates — provenance wall-checker, secrets/personal-data scanner, and a **ref gate**, all mutation-proven (`--self-test`). The first two ask "is this tree safe to publish?"; the third asks the question they structurally cannot: **"what would a push actually publish?"** A history rewrite is only true of the branch you rewrote — this repo's own rewrite left a clean `main` beside two leftover refs still carrying the trailers and build artifacts the rewrite removed, one `push --all` away from being republished. Content gates scan a worktree; pushes carry refs. |
-| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 218 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
+| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 309 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
 | `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, the verified-system-map pattern, and the [research-team](specs/research-team-protocol.md), [rigor-spectrum](specs/rigor-spectrum.md), and [honesty-stop-gate](specs/honesty-stop-gate.md) guides. |
-| `bench/` | **The two-box throughput operating log** — 55 measurements over 20 model tags, with sample sizes and device labels attached. See below. |
+| `bench/` | **The two-box throughput operating log** — 67 measurements over 22 model tags, with sample sizes and device labels attached. See below. |
 
 ### fleet-tui, running
 
@@ -188,31 +189,37 @@ Read adopt/README.md and follow it in order. Inventory this host before prescrib
 **What you'd actually need to reproduce this.** The tier that matters is VRAM, and it is a cliff
 rather than a slope — a model either fits or it doesn't:
 
-- **One 16 GB card** covers everything up to the `gemma4:26b-a4b-it-qat` tier (15 GB of weights,
-  **100 tok/s** measured — the tier the audit lane ran in when these charts were made; the review leg itself
-  is re-derived as hardware and roster change, best model on the fastest capable GPU, never
-  pinned to one tag). LFM2.5-8B (5.2 GB),
-  Ornith-9B (5.6 GB), gemma4:12b (7.6 GB) and deepseek-r1:14b (9.0 GB) all fit comfortably, with
-  room left for KV cache. **This is the honest minimum** — most of the useful lanes live here.
-- **The second card buys the 30–35B tier.** qwen3.6:35b-a3b is 23 GB of weights and occupies
-  **25.1 GiB** once loaded, so it spans both cards — directly confirmed by loading it: Ornith-35B
-  sits at 11839 / 11323 MiB and GLM-4.7-Flash at 11447 / 10789 MiB, both across the pair, because
-  neither fits in one 16 GiB card at all. Ornith-35B and qwen3-coder:30b are the same
-  story. On decode those two-card rows land at ~105–115 tok/s (the higher figures that used to sit here were prompt-processing, not decode).
+- **One 16 GB card is not sized from weight files.** On Box A, named models in this band have weight
+  files of 5.2–15 GB: LFM2.5-8B (5.2), Ornith-9B (5.6), gemma4:12b (7.6), deepseek-r1:14b (9.0),
+  gemma4:26b-a4b-it-qat (15). Do not infer 16 GiB fit or KV-cache headroom from those sizes — the
+  third chart is the evidence: a 9 GB model (`deepseek-r1:14b`) occupies **17.0 GiB** loaded. Use the
+  CSV's measured loaded footprint at the intended context length. `gemma4:26b-a4b-it-qat`,
+  `qwen3-coder:30b`, and `gemma4:31b-it-qat` all have `device=dgpu-a` rows in the same log; one-card
+  placement is a measured run property, not a weight-size guarantee. The review leg is re-derived as
+  hardware and roster change (best model on the fastest capable GPU, never pinned to one tag). This
+  export does not establish a general minimum configuration.
+- **The second 16 GB card** is what this dual-5060-Ti box needed for the ~18–23 GB-weight MoEs.
+  `qwen3.6:35b-a3b` is 23 GB of weights and occupies **25.1 GiB** loaded (CSV split 13675 / 12025
+  MiB). That measured footprint exceeds one 16 GiB card; the third chart plots it. Same two-card
+  pattern, different totals: Ornith-35B 11839 / 11323 MiB; GLM-4.7-Flash 11447 / 10789 MiB.
+  `qwen3-coder:30b` and `gemma4:31b-it-qat` ran on one card (`device=dgpu-a`) in the same CSV — they
+  are not the two-card story. A single 32 GB card is a different layout. On decode the two-card rows
+  land at ~105–115 tok/s (the higher figures that used to sit here were prompt-processing, not
+  decode).
 - **Budget for runtime overhead, not just weights** — it does not scale with model size. See the
   third chart: one 9 GB model occupies 17.0 GiB loaded, summed across both cards.
 - **CPU is not the bottleneck** for GPU-resident inference; it matters for loading and for the
   orchestration around the models. System RAM matters more than core count — 32 GB is adequate but
   not generous once several services and a browser are running alongside.
 - Model weights are large. Hundreds of GB of models and working state on the internal NVMe here (not inventoried in this export).
-- **Neither the platform nor the PCIe links need to be top-shelf.** This is an AM4 board (MSI B550
-  Tomahawk Max) feeding one card at **PCIe 4.0 x8** and the other at **PCIe 3.0 x4**, with the
-  deliberately mismatched DRAM above settling at 2933 MT/s. Every **box-a** number in the charts was measured
-  through exactly those links; the cross-box and device-split panels also carry box-b values, which
-  run on that machine's own unified-memory path. Once weights are resident, decode traffic barely touches the bus —
-  the choked links show up as slower model *loads*, not slower *inference* — and even the models
-  that span both cards hit their published rates across a 3.0 x4 link. Mismatched, mainstream,
-  lane-starved hardware is sufficient; the VRAM cliff above is the only spec that gates anything.
+- **Box A is an AM4 board (MSI B550 Tomahawk Max)** feeding one card at **PCIe 4.0 x8** and the
+  other at **PCIe 3.0 x4**, with the deliberately mismatched DRAM above settling at 2933 MT/s. Every
+  **box-a** number in the charts was measured through exactly those links; the cross-box and
+  device-split panels also carry box-b values, which run on that machine's own unified-memory path.
+  This log has no x16 or different-platform control, so it cannot say what the links do or do not
+  slow, and it cannot call the VRAM cliff the only gate. VRAM is the hard fit/no-fit cliff on this
+  log. RAM, serving stack (CUDA vs Vulkan/RADV), and which device the run landed on also move the
+  rates.
 
 This operating log now records `box-a` and `box-b`: different vendors, serving stacks, and device
 paths. Every CSV row has `box`, `device`, `quant`, `serving_stack`, `quality_score`, `verdict` columns —
@@ -229,24 +236,43 @@ loaded as 5435 / 5315 MiB across both, while `lfm:8b` at 5.2 GB stayed on a sing
 
 ![Peak throughput per model](bench/01_peak_throughput.png)
 
-**Before / after.** Six A/B pairs measured on the same box, same task. The finding that changed how
-this fleet routes work: swapping the audit lane from the then-incumbent 30.7B dense model to a 25.2B
-MoE averaged **+348%** across three tasks *at equal-or-better seeded-bug recall* — the smaller model
-also found **more** seeded bugs (5/5 vs 4/5 on one seed set, 18/18 vs 16/18 on the other). Read that
-headline as a **mean of three tasks** and a lane-level effect, not a per-task guarantee; the per-run
-rows are the record, the average is a summary of them. Speculative decoding on the same model
-averaged **+13%**. Routing beats flag-tuning here, and the gap is an order of magnitude.
+**Before / after.** Nine A/B pairs, grouped by what actually changed between the two runs: the
+model, a flag on one model, or the device it landed on. Each pair holds the rest constant, and the
+deltas below are the ones the chart already shows.
+
+Model-swap (30.7B dense → 25.2B MoE): **+376.2%** / **+373.7%** / **+295.1%** tok/s on 18-issue
+corroborate (21 → 100), the 9.3K-tok artifact (19 → 90), and the 5-seeded-bug review (20.4 → 80.6).
+Group mean **+348.3%**. Seeded-bug recall on the two sets the chart labels: 18/18 vs 16/18 and 5/5 vs
+4/5; the long-artifact row is quality parity. Auditor wall-clock on the 5-bug set: 41.2s → 20.5s.
+
+Same-model tuning, five rows: **+13.1%** speculative decoding on qwen3-coder:30b (95.6 → 108.1
+tok/s, n=2, same prompt); **−1.4%** and **−5.6%** on llama.cpp `pp2048` prefill (stock vs MoE-offload
+accelerator, -ngl 8 and 24); and an expert-pruned qwen3.8-flash-next at **+2.4%** decode and
+**+13.7%** `pp512` prefill, both inside this box's noise floor — stock's own two prefill runs spread
+12%, so that pair is not separable from noise. Group mean **+4.4%**. Decode was not the prefill
+measurement; the claimed offload win did not reproduce. The two red rows stay red.
+
+Placement is its own group, one row: the same prompt and the same model on a different device.
+`qwen3.8:27b` runs 21.8 → 74.6 tok/s (**+242.2%**) moving off two 16 GB cards over PCIe onto a single
+32 GB card. Nothing about the model or its flags changed, which is why it is not in either group
+above.
+
+The model-swap group's mean tok/s lift (~4.5×) is larger than that spec-decode lift (~1.13×) by about
+4×. The two interventions did not share a task set; that comparison is the chart's group split.
 
 The lane has since been re-derived on newer hardware under the standing rule: the best model on the
 fastest capable GPU, thinking on for audit passes. The current pick is a different dense model from
-the 30.7B replaced above — a dense 27B, which came within ~6% on throughput of the 25.2B-parameter
-MoE (tagged `26b`) on the same device: 58.8 vs 62.2 tok/s, same audit prompt, timed with the serving
-runtime's per-run stats (e.g. `ollama run <tag> --verbose`). The dense model is the slower of the two
-and is chosen for audit quality, not speed. The A/B rows above remain as the evidence the rule rests
-on.
+the 30.7B replaced above — a dense 27B. On the same review prompt, same discrete card, measured
+2026-08-29 20:31: 58.8 tok/s (dense 27B) vs 62.2 tok/s (25.2B MoE tagged `26b`), within ~6%, timed
+with the serving runtime's per-run stats (e.g. `ollama run <tag> --verbose`). The run count on those
+CSV rows is blank because it was not recorded. That ~6% is this audit prompt only. The
+peak-throughput chart, on the same card, shows the MoE at 109.0 tok/s and the dense model at 58.8 — a
+different condition, nearly 2×. With reasoning enabled, seeded-bug review on this pair scored 5/5 and
+the run surfaced seven further real bugs, at 1.8–4.6× wall time. The dense model is the slower of the
+two on the audit prompt and is the audit pick on that quality result, not on speed. The 31b→26b A/B
+rows above are the evidence the routing-swap first rested on; they are a different dense model.
 
-The two red rows stay red: a claimed MoE-offload speed-up **did not reproduce** at either offload
-level. A record that only keeps its wins is not a record.
+A record that only keeps its wins is not a record.
 
 ![Before and after](bench/02_before_after.png)
 
@@ -344,12 +370,16 @@ it needs no discrete card at all.
 ```mermaid
 flowchart LR
     S([run_guards.sh]) --> T1["1. teeth_prover <br/>plant defects, expect red"]
-    T1 -->|HAS_TEETH| T2["2. contract_agreement <br/>four surfaces, one vocabulary"]
+    T1 -->|HAS_TEETH| T2["2. surface agreement <br/>one vocabulary, counts match the suite"]
     T1 -->|VACUOUS / OVERBROAD| X1["STOP - a guard that cannot fail <br/>certifies nothing below it"]
-    T2 --> T3["3. unit gates <br/>170 hermetic tests"]
-    T3 --> T4[4. leg liveness]
-    T4 -->|probed| OK([0 clean])
-    T4 -->|dry-run| UM(["2 UNMEASURED <br/>louder than a violation"])
+    T2 --> T3["3. unit gates <br/>hermetic; count emitted by the runner"]
+    T3 --> T4["4. guard self-tests"]
+    T4 --> T5["5. negative control"]
+    T5 --> T6["6. public-byte scrub"]
+    T6 --> T7["7. leg liveness"]
+    T7 -->|dry-run: wiring only| UM(["2 UNMEASURED <br/>louder than a violation"])
+    T7 --> T8["8. repo shape"]
+    T8 --> OK([result])
     style X1 fill:#3a1a1a,stroke:#e63946
     style UM fill:#3a2a1a,stroke:#ffb347
 ```
