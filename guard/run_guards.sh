@@ -60,6 +60,14 @@ python3 guard/reconcile_gate.py --selftest; roll $?
 python3 guard/brief_scan.py --selftest; roll $?
 python3 guard/curation_gate.py --selftest; roll $?
 python3 guard/org_lint.py --selftest; roll $?
+python3 guard/reader_record.py --selftest; roll $?
+# The PID binder's self-test needs a live child process and /proc. Where there is no /proc
+# it returns 2 = UNMEASURED on its own, which is correct: the mechanism was not exercised.
+python3 guard/verify_running_build_pid.py --selftest; roll $?
+# The roster arm is a TEMPLATE, so its proof is its gate rather than a --selftest flag: the
+# gate runs the template unedited against fake rosters. Wiring the gate here keeps the
+# "every proof-carrying tool proves itself" step honest for it too.
+python3 guard/tests/test_roster_check.py; roll $?
 if [ -f detect_poison.py ]; then
   python3 guard/fetch_gate.py --selftest; roll $?
 else
@@ -117,7 +125,15 @@ fi
 note "8. REPO SHAPE — no stray files at the repository root"
 echo "   Exception classes (skills/file-organization): tool-required anchors; runnable entry"
 echo "   points named in the README; directories. Everything else at the root is a stray."
-python3 guard/org_lint.py; roll $?
+# UNCONDITIONAL on purpose, and it is not the same kind of step as the gated ones above.
+# The fetch-gate and passback checks are OPTIONAL INTEGRATIONS: they need something an
+# adopter supplies, and without it there is nothing to run. This one needs only a README,
+# which every clone of this repository has — so there is no configuration to be absent and
+# nothing to skip.
+# WHAT IT LINTS: THIS repository's root, not an adopter's project. Point it at your own
+# tree with ORG_LINT_ROOT=/path/to/your/repo (or --root); the exception classes travel, the
+# subject does not. A green here says this repo's root is clean and says nothing about yours.
+python3 guard/org_lint.py --root "${ORG_LINT_ROOT:-.}"; roll $?
 
 note "RESULT"
 # One machine-readable line, so the step accounting can be asserted instead of eyeballed.
