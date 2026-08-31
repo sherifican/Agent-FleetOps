@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# TEMPLATE ONLY — replace every <...> placeholder (or export both variables) before use.
+# TEMPLATE ONLY — replace every <...> placeholder (or export the variables) before use.
 #
 # roster_check — fail when the routing table names a model the live roster does not serve.
 #
@@ -8,30 +8,82 @@
 # longer served fails at DISPATCH time — mid-task, unattended. This arm moves that failure
 # to CHECK time. Run it in CI beside the guards, and after any roster change.
 #
-# ROUTING_MODELS_FILE — one model tag per line (# comments allowed). Derive it from the
-#   model names your routing table's rows point at, and keep it beside the table so a row
-#   edit and a list edit travel together.
+# ⚠ IT READS THE ROUTING TABLE. The first version of this arm trusted a separately
+# maintained list of tags, and so never read the document it claimed to police. Measured:
+# with a routing table naming `model-alpha:7b` and `model-beta:26b`, a hand-kept list
+# containing only alpha, and a roster serving only alpha, the arm printed
+# "roster check clean — every routed model (1 checked) is served" while the routing table
+# still named the absent model. The list, not the table, was the subject of the check.
+#
+# So the tags are DERIVED from the canonical routing artifact in the same run, and that
+# derived set is what gets compared against the live roster. A committed tag list is
+# optional and is treated as a CROSS-CHECK: if one is supplied it must EQUAL the freshly
+# derived set, and drift between them is a failure, not a silent preference for one.
+#
+# ROUTING_TABLE_FILE — the canonical routing document itself (the table, not a copy of its
+#   model names). This is the thing being policed.
+# ROUTING_TAGS_CMD — a command that reads the routing document on STDIN and writes one
+#   model tag per line. Keep it beside the table so a change to the table's format and a
+#   change to the extractor travel together. Extracting nothing is CANNOT CHECK, never a
+#   pass: an extractor that silently stops matching would otherwise report a clean roster
+#   forever.
 # ROSTER_CMD — a command whose stdout lists one SERVED model tag per line (for example,
 #   your serving runtime's `list` subcommand piped through awk to the tag column).
+# ROUTING_MODELS_FILE — OPTIONAL. A committed list of routed tags, kept for other tooling.
+#   When set it must equal the derived set exactly; a mismatch fails and names both sides.
 #
 # Exit codes: 0 every routed model is served · 1 at least one routed model is MISSING
-# from the live roster (each named) · 2 CANNOT CHECK (no list file, or the roster command
-# failed or returned nothing — an empty roster cannot prove absence, so it is never a
-# red and never a pass).
+# from the live roster (each named), or the committed list has drifted from the table ·
+# 2 CANNOT CHECK (no routing document, the extractor failed or found no tags, or the
+# roster command failed or returned nothing — an empty roster cannot prove absence, so it
+# is never a red and never a pass).
 set -eu
 
-ROUTING_MODELS_FILE=${ROUTING_MODELS_FILE:-'<ROUTING_MODELS_FILE>'}
+ROUTING_TABLE_FILE=${ROUTING_TABLE_FILE:-'<ROUTING_TABLE_FILE>'}
+ROUTING_TAGS_CMD=${ROUTING_TAGS_CMD:-'<ROUTING_TAGS_CMD>'}
 ROSTER_CMD=${ROSTER_CMD:-'<ROSTER_CMD>'}
+ROUTING_MODELS_FILE=${ROUTING_MODELS_FILE:-''}
 
-if [ "$ROUTING_MODELS_FILE" = '<ROUTING_MODELS_FILE>' ] || [ "$ROSTER_CMD" = '<ROSTER_CMD>' ]; then
-  printf '%s\n' 'Replace <ROUTING_MODELS_FILE> and <ROSTER_CMD> (or export both); this template is not runnable as-is.' >&2
+if [ "$ROUTING_TABLE_FILE" = '<ROUTING_TABLE_FILE>' ] \
+  || [ "$ROUTING_TAGS_CMD" = '<ROUTING_TAGS_CMD>' ] \
+  || [ "$ROSTER_CMD" = '<ROSTER_CMD>' ]; then
+  printf '%s\n' 'Replace <ROUTING_TABLE_FILE>, <ROUTING_TAGS_CMD> and <ROSTER_CMD> (or export them); this template is not runnable as-is.' >&2
   exit 2
 fi
-if [ ! -f "$ROUTING_MODELS_FILE" ]; then
-  printf 'CANNOT CHECK — no routing-models file at %s\n' "$ROUTING_MODELS_FILE" >&2
+if [ ! -f "$ROUTING_TABLE_FILE" ]; then
+  printf 'CANNOT CHECK — no routing document at %s; there is nothing to police.\n' "$ROUTING_TABLE_FILE" >&2
   exit 2
 fi
 
+# ── derive the routed tags from the table itself, in THIS run ───────────────────────────
+if ! derived="$(sh -c "$ROUTING_TAGS_CMD" < "$ROUTING_TABLE_FILE")"; then
+  printf '%s\n' 'CANNOT CHECK — the tag extractor failed against the routing document; a failed extraction is not an empty table.' >&2
+  exit 2
+fi
+derived="$(printf '%s\n' "$derived" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' | sort -u || true)"
+if [ -z "$derived" ]; then
+  printf 'CANNOT CHECK — the extractor found no model tags in %s. A zero-tag check proves nothing, and an extractor that quietly stopped matching would report clean forever.\n' "$ROUTING_TABLE_FILE" >&2
+  exit 2
+fi
+
+# ── optional committed list: it must EQUAL what the table says, not replace it ──────────
+if [ -n "$ROUTING_MODELS_FILE" ]; then
+  if [ ! -f "$ROUTING_MODELS_FILE" ]; then
+    printf 'CANNOT CHECK — ROUTING_MODELS_FILE is set but there is no file at %s\n' "$ROUTING_MODELS_FILE" >&2
+    exit 2
+  fi
+  committed="$(sed 's/#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//' "$ROUTING_MODELS_FILE" | grep -v '^$' | sort -u || true)"
+  if [ "$committed" != "$derived" ]; then
+    printf '%s\n' 'ROSTER CHECK FAILED — the committed tag list has drifted from the routing document. Regenerate it; a list that no longer matches the table is what let an absent model read as served.'
+    printf 'derived from %s:\n' "$ROUTING_TABLE_FILE"
+    printf '%s\n' "$derived" | sed 's/^/  /'
+    printf 'committed in %s:\n' "$ROUTING_MODELS_FILE"
+    printf '%s\n' "$committed" | sed 's/^/  /'
+    exit 1
+  fi
+fi
+
+# ── the live roster ─────────────────────────────────────────────────────────────────────
 if ! roster="$(sh -c "$ROSTER_CMD")"; then
   printf '%s\n' 'CANNOT CHECK — the roster command failed; a failed lookup is not an empty roster.' >&2
   exit 2
@@ -50,14 +102,16 @@ while IFS= read -r tag; do
     printf 'MISSING from the live roster: %s (named by the routing table)\n' "$tag"
     missing=1
   fi
-done < "$ROUTING_MODELS_FILE"
+done <<EOF
+$derived
+EOF
 
 if [ "$checked" -eq 0 ]; then
-  printf '%s\n' 'CANNOT CHECK — the routing-models file names no models; a zero-model check proves nothing.' >&2
+  printf '%s\n' 'CANNOT CHECK — no models were checked; a zero-model check proves nothing.' >&2
   exit 2
 fi
 if [ "$missing" -ne 0 ]; then
   printf '%s\n' 'ROSTER CHECK FAILED — fix the routing table or restore the model; do not let the row outlive the roster.'
   exit 1
 fi
-printf 'roster check clean — every routed model (%s checked) is served\n' "$checked"
+printf 'roster check clean — every model named by %s (%s derived and checked) is served\n' "$ROUTING_TABLE_FILE" "$checked"

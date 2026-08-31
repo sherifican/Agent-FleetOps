@@ -496,6 +496,12 @@ MUTATIONS = [
       "'a routed model absent from the roster fails the arm and is named'",
       "    missing=1",
       "    missing=0"),
+    M("RK2", "roster", "templates/roster-check.sh.template",
+      "committed-list equality waived - a hand-kept list that drifted from the routing "
+      "document is accepted, which is the shape that let an absent model read as served",
+      "'a committed tag list must EQUAL the set derived from the table'",
+      '  if [ "$committed" != "$derived" ]; then',
+      '  if false; then'),
 ]
 
 
