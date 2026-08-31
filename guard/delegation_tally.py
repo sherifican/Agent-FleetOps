@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """delegation_tally.py — read out the D20 measurement. Answers "is HARD DELEGATE wrong, or is the practice?"
 
-Backlog D20. The rule says Claude does ONLY orchestration/dispatch. An audit found ~17/24 commits with no
+Backlog D20. The rule under measurement says the orchestrating agent does ONLY orchestration and
+dispatch, and hands the rest to someone else. An audit found ~17/24 commits with no
 delegation trace — but "no trace" != "not delegated" while no trace convention exists, so BOTH readings
 survived the same evidence. That unfalsifiability was the defect. From 2026-08-03 a commit-msg hook requires
 one trailer per commit, so the question becomes answerable.
@@ -69,7 +70,7 @@ def main():
     d_total, c_total = sum(delegated.values()), sum(direct.values())
     if tagged:
         print(f"\n  DELEGATED {d_total}/{tagged} ({100*d_total//tagged}%)   "
-              f"CLAUDE-DIRECT {c_total}/{tagged} ({100*c_total//tagged}%)")
+              f"AUTHORED-DIRECTLY {c_total}/{tagged} ({100*c_total//tagged}%)")
     for label, counter in (("Delegated-to", delegated), ("Authored-directly", direct)):
         if counter:
             print(f"\n  {label}:")
