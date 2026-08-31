@@ -17,9 +17,14 @@ tasks without fighting the framework's event loop or runtime:
    imports.** Unit-testable against fixtures with no live system. The pattern that works: small `read_*()`
    readers each wrapped in `try/except` returning a **distinguishable safe default** (never raise — and never collapse
    cannot-read into looks-empty: the returned record carries a status, `ok` / `empty` /
-   `missing` / `permission` / `parse-error`, so a consumer can tell a VALID empty observation
-   from a source it could not read; reference `guard/reader_record.py`, gated by
-   `guard/tests/test_reader_record.py`) + a **pure `build_*()`
+   `missing` / `permission` / `not-a-file` / `decode-error` / `parse-error`, so a consumer can
+   tell a VALID empty observation from a source it could not read; reference
+   `guard/reader_record.py`, gated by `guard/tests/test_reader_record.py`. Two states earn
+   their own name because the obvious groupings lie: a directory caught as an `OSError` reads
+   as a permission problem and sends the reader to check file modes when the fault is a wrong
+   path, and a decode failure is a `ValueError` raised inside `.read()` — so `except OSError`
+   never sees it and a reader documented as never raising raises. Write the encoding case
+   before you claim the reader is total.) + a **pure `build_*()`
    composer** (no I/O) + a `status()` convenience that calls the readers → the composer.
 2. **Dumb pure formatters.** Records → display strings. No I/O, no state.
 3. **The framework app layer.** Layout, timers, bindings, modals, the paint loop. This is the part the
