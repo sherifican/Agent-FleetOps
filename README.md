@@ -4,7 +4,7 @@
 
 # Agent-FleetOps
 
-Pattern library for agent fleets: bind every check, count, and claim to a live target that can go red.
+Pattern library for agent fleets: bind every check, count, and claim to a live target that can go red (fail).
 It works on one box; the two-workstation setup that produced it is provenance, not a requirement.
 
 The organizing idea, applied everywhere here:
