@@ -1,6 +1,6 @@
 """Dispatch box — a THIN front-end over the EXISTING fleet dispatch scripts (grok-research / codex-fleet /
 grok-code). It does NOT route or call models directly (the TUI is not an orchestrator): the owner types a
-brief + picks a leg, the brief is written to a file and that leg's script is run in the background, capturing
+brief + picks a leg, we write the brief to a file and run that leg's script in the background, capturing
 output under ~/.fleet_tui/dispatches/. Owner-initiated only. Safe: brief goes in a FILE (no shell injection),
 leg names are a fixed allow-list.
 """
@@ -17,11 +17,11 @@ from fleet_tui.sources import targets
 
 DISPATCH_DIR = os.path.expanduser("~/.fleet_tui/dispatches")   # under ~ (codex-fleet trusted-root)
 
-# The meta-prompt Kimi (K2.7, `kimi-cli`, subscription) uses to reformat a rough brief into this repo's standard
+# The meta-prompt Kimi (K2.7, `kimi-cli`, subscription) uses to reformat a rough brief into our standard
 # fleet-dispatch format + surface the relevant tools/files/paths. Honesty-bound: mark inferred items, never
 # fabricate paths/facts. The whole thing (prompt + brief) goes to a temp file → `kimi-cli -f` (no argv/quoting
 # issues on multi-line briefs).
-KIMI_REVISE_PROMPT = """Reformat the ROUGH BRIEF below into this fleet's STANDARD dispatch-brief format.
+KIMI_REVISE_PROMPT = """Reformat the ROUGH BRIEF below into our fleet's STANDARD dispatch-brief format.
 Return ONLY the revised brief — no preamble, no closing remarks, no code fences.
 
 Use exactly these sections (drop a section only if truly N/A):
@@ -272,7 +272,7 @@ def open_feedback_debts() -> list:
                     "brief": brief
                 })
             except Exception:
-                # If a feedback file can't be read, skip it rather than crash
+                # If we can't read a feedback file, skip it rather than crash
                 continue
         return debts
     except Exception:
@@ -290,5 +290,5 @@ def close_feedback(base_name: str) -> bool:
             return True
         return False
     except Exception:
-        # If the file can't be removed, return False (no debt closed)
+        # If we can't remove the file, return False (no debt closed)
         return False

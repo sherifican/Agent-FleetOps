@@ -16,7 +16,7 @@ PORT = int(os.environ.get("FLEET_TUI_SERVE_PORT", "8011"))
 
 
 def main() -> None:
-    # use THIS venv's python so the served subprocess has textual + this package
+    # use THIS venv's python so the served subprocess has textual + our package
     command = f"{sys.executable} -m fleet_tui"
     server = Server(command, host=HOST, port=PORT, title="Fleet Fleet TUI")
     print(f"Serving the Fleet Fleet TUI on http://{HOST}:{PORT}  "

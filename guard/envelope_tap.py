@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """envelope_tap.py — a logging reverse-proxy that captures the EXACT request a harness sends.
 
-WHY THIS EXISTS. The harness review concluded that arm B is attributable only on lanes this tap instruments,
+WHY THIS EXISTS. The harness review concluded that arm B is attributable only on lanes we instrument,
 which made a third-party harness uninterpretable no matter how many trials it got. That was true while the
-only options were "own the call site" or "give up". It stops being true the moment both harnesses let the caller
-choose the endpoint — qwen-code reads OPENAI_BASE_URL, Hermes profiles carry base_url. So this tap does not
-instrument the harness at all: it sits between it and the model.
+only options were "own the call site" or "give up". It stops being true the moment both harnesses let us
+choose the endpoint — qwen-code reads OPENAI_BASE_URL, Hermes profiles carry base_url. So we do not
+instrument the harness at all: we sit between it and the model.
 
 ★ THE PROPERTY THAT MAKES IT EVIDENCE: the tap is OUTSIDE THE BLAST RADIUS of the thing under test.
 A harness cannot misreport what it sent, because it is not the one reporting. Same move as reading

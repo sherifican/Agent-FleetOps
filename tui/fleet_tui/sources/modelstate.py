@@ -13,7 +13,7 @@ import urllib.request
 
 OLLAMA = "http://localhost:11434"
 BUSY_UTIL = 20          # GPU % above which a loaded model is treated as "in-flight"
-_util_cache = {}        # tiny time-cache so nvidia-smi is not spawned every refresh
+_util_cache = {}        # tiny time-cache so we don't spawn nvidia-smi every refresh
 _sidecar_vram_cache = {}  # cache for sidecar VRAM readings
 
 
@@ -110,7 +110,7 @@ def _sidecar_vram_mb(port) -> int:
 
         pids = {p.strip() for p in result.stdout.split("\n") if p.strip()} if result.returncode == 0 else set()
         if pids:
-            # SUM every nvidia-smi compute-app row for the PID(s). A model spanning BOTH cards lists the
+            # SUM every nvidia-smi compute-app row for our PID(s). A model spanning BOTH cards lists the
             # same pid can appear once per accelerator; sum every row to avoid undercounting.
             nvidia_cmd = ["nvidia-smi", "--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"]
             result = subprocess.run(nvidia_cmd, capture_output=True, text=True, timeout=5)

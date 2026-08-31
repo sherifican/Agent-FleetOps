@@ -6,7 +6,7 @@ set -uo pipefail
 cd "$(dirname "$0")"
 PY="$(pwd)/.venv/bin/python"
 reaped=0
-# Precise match (hard-learned): exactly this venv's python running `-m fleet_tui` — never a substring grep
+# Precise match (hard-learned): exactly our venv python running `-m fleet_tui` — never a substring grep
 # (that used to also match the launcher's argv and tear down more than intended).
 for pid in $(ps -eo pid,args --no-headers | awk -v py="$PY" '$2==py && $3=="-m" && $4=="fleet_tui"{print $1}'); do
   kill "$pid" 2>/dev/null && { echo "  stopped TUI instance $pid"; reaped=$((reaped+1)); }

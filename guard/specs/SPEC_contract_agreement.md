@@ -4,10 +4,10 @@ Write the file COMPLETELY at `../guard/contract_agreement.py`.
 
 ## Why this exists
 
-This repo's output contract is stated in FOUR places. Twice now they have silently disagreed:
+Our output contract is stated in FOUR places. Twice now they have silently disagreed:
 
   - the dispatch preamble prescribed the verbs `TRY` and `MONITOR` while the validator BANNED them.
-    The legs obeyed the preamble and the legs were blamed.
+    The legs obeyed the preamble and we blamed the legs.
   - §3b asked legs to rate a `Memory` project that the §5 bucket list did not contain, so a leg using
     `Memory` consistently in both places got flagged for being consistent.
 
@@ -85,7 +85,7 @@ this constant — that is the point: the extension becomes a deliberate, reviewa
    subtraction). Report each difference as `<vocab>: <surfaceA> has X not in <surfaceB>` naming both
    sides and the exact symmetric-difference members.
 2. `PROJECTS` and `BUCKETS` must be equal to each other. The addendum states this identity
-   deliberately ("The six buckets MATCH the six RELEVANCE projects"); when they drifted apart I
+   deliberately ("The six buckets MATCH the six RELEVANCE projects"); when they drifted apart we
    flagged legs for being correct.
 3. **No surface may PRESCRIBE a banned verb.** Read `BANNED` from the validator. A banned verb appearing
    in the preamble or addendum as a *prescription* is the original incident. Distinguish prescription

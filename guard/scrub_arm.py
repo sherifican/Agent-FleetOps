@@ -236,7 +236,7 @@ def scan(root, rules):
         if rel in SKIP_FILES:
             exempt += 1
             continue
-        if gitmode == "160000":       # a submodule pointer: a commit id, no bytes of this repo's
+        if gitmode == "160000":       # a submodule pointer: a commit id, no bytes of ours
             continue
         if blob is not None:
             if blob not in blobs:

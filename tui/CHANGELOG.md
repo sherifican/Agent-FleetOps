@@ -249,7 +249,7 @@
   0-100) and **temperature °C** — over a rolling ~90-sample window (1 sample/refresh). Given the freeze
   history, watching util/temp climb is genuinely useful. Plots redraw only while the Trends tab is active
   (and on switch-to), so cost stays near-zero elsewhere.
-- **[infra]** `textual-plotext` **1.0.1 confirmed compatible with this repo's Textual 8.2.8** (grok's "stale 2023"
+- **[infra]** `textual-plotext` **1.0.1 confirmed compatible with our Textual 8.2.8** (grok's "stale 2023"
   info was outdated — a fresh release exists); smoke-tested import+mount+render before integrating.
   Added `textual-plotext>=1.0` + `pyte>=0.8` (embedded terminal, was undeclared) to `pyproject.toml`.
   History sampling never touches the cosmetic frame path. 239 tests green; live plot render verified.

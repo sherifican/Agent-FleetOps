@@ -7,8 +7,8 @@ import os
 
 CONFIG_PATH = os.path.expanduser("~/.config/fleet_tui/cosmetics.json")
 
-# spinner keys live in widgets/anim.SPINNERS; validation there falls back to braille on unknown, so this
-# module only type-checks here (no import of anim → keeps this source framework-free + trivially testable).
+# spinner keys live in widgets/anim.SPINNERS; validation there falls back to braille on unknown, so we
+# only type-check here (no import of anim → keeps this source framework-free + trivially testable).
 SPEEDS = {"chill": 0.20, "normal": 0.12, "lively": 0.07}   # cosmetic-timer interval per speed
 CATS = ("jobs", "coding", "health", "posture")   # per-panel animation gates (menu auto-lists these)
 

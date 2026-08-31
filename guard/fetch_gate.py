@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """fetch_gate.py — the single gate for UNTRUSTED FETCHED WEB CONTENT.
 
-THE GAP THIS CLOSES (named 2026-07-31, patched 2026-08-06). This repo's poison gates guarded TRANSCRIPTS ONLY.
+THE GAP THIS CLOSES (named 2026-07-31, patched 2026-08-06). Our poison gates guarded TRANSCRIPTS ONLY.
 Research legs fetch web pages constantly and that content entered leg context ungated. A partial guard was
 added inline to local_research_decomposed.py the day the gap was named — but `smart-fetch`, the tool the
 fleet is explicitly told to use INSTEAD of curl/wget for all research fetches, had none. So the designated
@@ -47,7 +47,7 @@ def _visible_text(content):
     saved Reddit thread: RAW HTML -> CERTAIN_POISON (invisible_unicode + gibberish); the SAME page with
     markup stripped -> CLEAN. Scanning raw HTML would have made the gate fire on everything, which is the
     always-fires defect and would have gotten the gate disabled within a day.
-    This gate SCANs the extracted text but EMITs the caller's original bytes — the caller asked for HTML.
+    We SCAN the extracted text but EMIT the caller's original bytes — the caller asked for HTML.
     """
     import re, html as _h
     if "<" not in content[:4000] or ">" not in content[:4000]:

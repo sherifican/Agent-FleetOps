@@ -65,8 +65,8 @@ fully exercisable with no network and no cloud spend. A guard you cannot test of
     DEAD        the runner returned, but the token is absent — INCLUDING when rc == 0
     UNMEASURED  the runner raised, timed out, or the command does not exist
 
-`DEAD` and `UNMEASURED` are different: DEAD means the probe asked and got a wrong answer (the leg is broken);
-UNMEASURED means the probe never got to ask (the probe is broken). Conflating them sends you debugging the
+`DEAD` and `UNMEASURED` are different: DEAD means we asked and got a wrong answer (the leg is broken);
+UNMEASURED means we never got to ask (the probe is broken). Conflating them sends you debugging the
 wrong system — a sibling team burned a day on three false reds that were all broken measurements.
 
 `evidence` for a DEAD leg must include the first ~200 chars of what came back instead, so a human can
@@ -104,7 +104,7 @@ Exit codes:
     1 = any DEAD or any stale leg
     2 = any UNMEASURED
 
-Exit 2 dominates: if a leg could not be measured there is no knowing whether the others' results are
+Exit 2 dominates: if we could not measure a leg we do not know whether the others' results are
 meaningful.
 
 Update state only for legs that probed ALIVE. Never write a "last alive" for a DEAD or UNMEASURED

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""passback_send_check.py — does a peer agent actually hold what this check thinks was sent?
+"""passback_send_check.py — does a peer agent actually hold what we think we sent?
 
 Backlog D19. The rule "writing a file into the outbox is not sending it" was written 2026-07-28 and did
 not prevent four replies sitting undelivered for a day on 08-01, or a stale `run_guards.sh` on 08-03. A rule
 that has failed twice is a mechanism that does not exist.
 
 ★ THE DESIGN CONSTRAINT THAT DECIDES EVERYTHING ELSE: the evidence must come from the RECIPIENT, never from
-this check's own send log. A receipt written at push time is produced by the same act it is evidence about — it can
+our own send log. A receipt we write when we push is produced by the same act it is evidence about — it can
 confirm "I ran topc" and can never confirm "they have it". So this asks the PC directly and hashes the file
 THERE.
 
@@ -23,7 +23,7 @@ correction. There are TWO delivery paths, and this box can only observe one:
   (2) a peer agent reading the outbox IN PLACE from this box over the .100 SSH link (documented in
       the channel's SSH key and its logins are real)  -- NOT observable
 So "absent from Downloads" cannot distinguish NEVER-SENT from READ-IN-PLACE. Reporting it as a violation
-would assert knowledge this check does not have, and would be the same two-states-one-output defect this whole
+would assert knowledge we do not have, and would be the same two-states-one-output defect this whole
 subsystem exists to catch — a check that cries wolf trains you to ignore it, which is worse than no check.
 The first run flagged 17 files this way; that number is a QUESTION, not a verdict.
 **To make absence meaningful, the SEND side has to change** — if every outbound file goes via `topc`, then
@@ -120,7 +120,7 @@ def main():
     remote = remote_files()
     if remote is None:
         print("2 UNMEASURED: the PC could not be reached, so NOTHING about delivery was verified.\n"
-              "   An unreachable recipient is exactly when the least is known — this is not 'clean'.",
+              "   An unreachable recipient is exactly when we know least — this is not 'clean'.",
               file=sys.stderr)
         return UNMEASURED
 

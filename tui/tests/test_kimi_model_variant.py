@@ -90,7 +90,7 @@ def test_unknown_model_id_is_preserved_not_guessed(monkeypatch):
 
 
 def test_bare_kimi_code_alone_still_reports_something(monkeypatch):
-    """kimi is demonstrably up but how it started cannot be seen -> default model, session."""
+    """kimi is demonstrably up but we cannot see how it started -> default model, session."""
     _procs({504: ["kimi-code"]}, monkeypatch)
     procs = cloud_legs.read_kimi_procs()
     assert len(procs) == 1, "must not report nothing while kimi is running"

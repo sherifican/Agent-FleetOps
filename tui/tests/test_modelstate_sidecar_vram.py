@@ -41,7 +41,7 @@ def test_sidecar_vram_SUMS_across_gpus_and_pids(monkeypatch):
         if cmd and cmd[0] == "pgrep":
             return types.SimpleNamespace(returncode=0, stdout="3235632\n3235633\n")   # two pids
         if cmd and cmd[0] == "nvidia-smi":
-            # the pids on two GPUs + one unrelated process that must NOT be counted
+            # our pids on two GPUs + one unrelated process that must NOT be counted
             return types.SimpleNamespace(returncode=0,
                 stdout="3235632, 148\n999999, 5000\n3235632, 146\n3235633, 60\n")
         return types.SimpleNamespace(returncode=1, stdout="")

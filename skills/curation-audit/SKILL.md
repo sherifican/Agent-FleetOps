@@ -53,10 +53,10 @@ cannot see outbound traffic. Both of these were committed in one day on the refe
 is why it is written down:
 - *"exit codes 0/1/2 with 2 dominating are used machine-wide"* — relayed to a peer agent on another
   machine, then measured: it was ONE roll-up in ONE entry point. Corrected in memory the same pass.
-- *"this fidelity-claim class has been hit three times"* — relayed as the EVIDENCE for naming a
+- *"we have hit this fidelity-claim class three times"* — relayed as the EVIDENCE for naming a
   class, then found to be two (the third was a false SCOPE claim, a different defect). The peer was
   adopting on it.
 **How to apply:** for each applied correction, grep the outbound channel (whatever directory or
 queue carries messages to peers) for the claim; if it was sent, a short correction goes back **in
-the same pass**, not "next time a write happens". A correction that lands only where you can see it is not
+the same pass**, not "next time we write". A correction that lands only where you can see it is not
 a correction.

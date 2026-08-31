@@ -23,8 +23,8 @@ clear **at least two of the three**:
        Convergence across independent legs outranks any single leg's confidence rating.
   **(b) ACTIONABLE DENSITY** — ≥5 surviving P0/P1 items after reconcile (surviving = still standing
        once the reconcile has cut what one leg overclaimed).
-  **(c) REAL CAPTURED MEDIA** — ≥3 curated frames from this repo's vision pipeline, or ≥3 fetched
-       documents/pages actually retrieved.
+  **(c) REAL CAPTURED MEDIA** — ≥3 curated frames from OUR vision pipeline, or ≥3 fetched
+       documents/pages we actually retrieved.
 
 **CROSS-VIDEO convergence (the same item independently surfacing in ≥3 videos with different leg sets)
 counts as (a) on its own and is the strongest signal the pipeline produces.**
@@ -42,13 +42,13 @@ segment or the creator's own paid course as the core finding · anything whose a
 2. **Provenance block** (machine-filled, never hand-written): legs used + their byte counts ·
    reconcile date · audit verdict · frames captured/kept · items harvested · **which gate criteria
    this report met**.
-3. **VERDICT** — ≤120 words. What this is, and what to do. If the honest verdict is "nothing
+3. **VERDICT** — ≤120 words. What this is, and what we should do. If the honest verdict is "nothing
    actionable", say it and stop; a short honest report beats a padded one.
 4. **THE FINDING** — the one thing most worth knowing, argued properly.
 5. **BY DATA POINT** — the reconciled body. Every claim: **Claim → Evidence → Analysis → Implications.**
 6. **ACTIONABLE ITEMS** — the standard closed vocabularies (6 buckets · 7 actions · P0/P1/P2), with a
    `Convergence` column stating `n/N legs`.
-7. **WHAT THIS STACK ALREADY DOES** — honest placement against this repo's stack. Prevents re-adopting what already runs.
+7. **WHAT WE ALREADY DO** — honest placement against our own stack. Prevents re-adopting what we run.
 8. **OPEN QUESTIONS / UNVERIFIED** — what is not settled and the exact check that would settle it.
 
 Long sections are fine **when the length is doing work**. A section that could be half as long without
@@ -61,7 +61,7 @@ losing a claim is padding, and padding is a contract violation, not a style pref
   claim from it. Do not gate a report on anything beyond this floor.
 - **Per-claim anchors** (`[MM:SS]`, fetched URL, `path:line`) are required in two cases and optional
   otherwise:
-    (i)  the claim is **contested** — the legs disagreed, or it contradicts a prior belief;
+    (i)  the claim is **contested** — the legs disagreed, or it contradicts something we believe;
     (ii) the claim is **surprising** — a benchmark number, a price, a version, a capability claim.
   Elsewhere they are a convenience, not a requirement.
   *Rationale (owner, 2026-07-31):* a timestamp is what makes a disputed claim cheap to check —
@@ -73,14 +73,14 @@ losing a claim is padding, and padding is a contract violation, not a style pref
 - **Per-claim binding**: where a citation IS given, it attaches to the specific claim, never to a
   paragraph in bulk. (Adapted from Tongyi WebWeaver's writer scaffold.)
 - **MUST-CITE**: any number, version, benchmark, price, capability claim, or quoted assertion.
-- **MUST-NOT-CITE as fact**: this report's own inference, an opinion, or a projection. Label those `[inference]`.
-- **`⚠️ UNVERIFIED`** on anything not confirmed here — and say what would still need checking.
+- **MUST-NOT-CITE as fact**: our own inference, an opinion, or a projection. Label those `[inference]`.
+- **`⚠️ UNVERIFIED`** on anything we did not confirm ourselves — and say what we would check.
 - **`ADOPT` keeps its evidence bar**: only for something personally run or verified. Otherwise `VET`.
 - Never invent an install command, repo path, licence, or version. Leave it out.
 
 ## 4. MEDIA — real evidence only
 
-- Images must be **frames this repo's vision pipeline captured** or **pages this run fetched**. An OpenGraph/marketing
+- Images must be **frames OUR vision pipeline captured** or **pages WE fetched**. An OpenGraph/marketing
   preview card is NOT evidence and is banned. (This is the specific failure of the design this format
   was adapted from: its figures were link-preview cards dressed as documentation.)
 
@@ -93,7 +93,7 @@ losing a claim is padding, and padding is a contract violation, not a style pref
     3. show something **a sentence cannot convey as well** — a UI, a diagram, a benchmark table, a
        config, a demonstrated result.
   **A frame that does not evidence a data point is padding and must be dropped, however good it looks.**
-  This is the difference between illustration and evidence, and it is the whole reason this pipeline captures real
+  This is the difference between illustration and evidence, and it is the whole reason we capture real
   frames instead of using preview cards.
 
 - **Cap: 8 images** — a deliberate loosening from the standard card's tighter limit, but it is a

@@ -4,7 +4,7 @@
 # Adapted from a peer agent's `_breaker/` guard stack (2026-07-31). The transferable part was
 # the META-harness: machinery that keeps invariants honest, not the invariants themselves.
 #
-# ORDER MATTERS. The teeth-prover runs FIRST because every result below it is worth nothing until I
+# ORDER MATTERS. The teeth-prover runs FIRST because every result below it is worth nothing until we
 # know the guards can actually fail. A green light from an unproven guard is a green light wired to
 # nothing — that is the single most expensive failure mode in the sibling system's history.
 #

@@ -67,7 +67,7 @@ Results (measured on the reference setup; your numbers will differ):
 2. **The real differentiator was arithmetic/state-tracking, not tool-calling.** The small model read all 10 chunks correctly and then submitted the wrong sum — a failure a pass/fail "did it call the tools right" metric would have scored as SUCCESS. Score the OUTCOME, not the call sequence (cf. [[eval-integrity]]).
 3. **Accurate but expensive is a routing fact:** the sidecar model cost ~2.7 s/call vs the MoE's ~0.36 s/call, warm — plus a second process and manual memory juggling.
 
-**Scope limits — do not over-read a narrow benchmark:** a 3-tool deterministic domain, chains ≤12 calls, N=1 per cell for two arms. The sidecar model's standing on a broad public tool-calling benchmark came from a far broader test, so the honest claim is **"its accuracy advantage does not appear on this chain shape and it costs 6–9× the latency"** — NOT "it is worse at tool-calling."
+**Scope limits — do not over-read a narrow benchmark:** a 3-tool deterministic domain, chains ≤12 calls, N=1 per cell for two arms. The sidecar model's standing on a broad public tool-calling benchmark came from a far broader test, so the honest claim is **"its accuracy advantage does not appear on OUR chain shape and it costs 6–9× the latency"** — NOT "it is worse at tool-calling."
 
 ## GUARDRAILS (override the table)
 - **LOCAL-FIRST, CLOUD AS SUPPORT:** the default working legs stay LOCAL — local models pull as much weight as they can (you already own the hardware; conserve paid quota). Cloud = escalation / the hard-or-long parts, never the default for routine work. Do not burn cloud budget on orchestration PLUS regular agentic legwork.

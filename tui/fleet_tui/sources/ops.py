@@ -109,7 +109,7 @@ def _dispatch_to_opsitem(d) -> OpsItem | None:
         detail = tail or brief
         
         # Check for feedback debt
-        if base:  # Only check if a valid base name is present
+        if base:  # Only check if we have a valid base name
             try:
                 feedback_file = os.path.join(dispatch.DISPATCH_DIR, f"{base}.feedback_required")
                 done_file = os.path.join(dispatch.DISPATCH_DIR, f"{base}.done")
@@ -117,7 +117,7 @@ def _dispatch_to_opsitem(d) -> OpsItem | None:
                 if os.path.exists(feedback_file) and os.path.exists(done_file):
                     detail = f"FEEDBACK DUE · {detail}"
             except Exception:
-                # Defensive: if feedback debt can't be checked, just return the original detail
+                # Defensive: if we can't check feedback debt, just return the original detail
                 pass
 
         # Add stale marker if needed

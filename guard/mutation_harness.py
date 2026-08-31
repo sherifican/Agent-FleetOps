@@ -79,7 +79,7 @@ FILES = [
 def verify_anchors():
     """--verify-anchors: does every mutation's needle still bind EXACTLY ONCE in its file?
 
-    a peer agent's finding (2026-08-05), and it applies here because this harness anchors on literals too:
+    a peer agent's finding (2026-08-05), and it applies here because we anchor on literals too:
     **a STALE NEEDLE DOES NOT FAIL — it silently stops proving the guard has teeth, and the guard stays
     green either way.** Their prover had a needle pinned to a changelog line carrying a version number;
     the line moved at a release and the mutation had been binding zero times ever since. No symptom.

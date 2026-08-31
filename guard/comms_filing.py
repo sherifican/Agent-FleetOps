@@ -26,7 +26,7 @@ because the next real red gets waved through. Scope was narrowed to the one misf
 something. (See feedback-automation-does-its-own-job, third mode.)
 
 Exit codes: 0 = every file correctly filed · 1 = at least one misfiled · 2 = a root is unreadable
-(UNMEASURED — never folded into success; a directory that could not be checked is absent, and absent is loud).
+(UNMEASURED — never folded into success; a directory we could not check is absent, and absent is loud).
 
     usage: comms_filing.py [--root DIR] [--fix]
            --fix MOVES misfiled files to the correct sibling folder (prints every move).

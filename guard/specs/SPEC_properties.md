@@ -4,9 +4,9 @@ Write the file COMPLETELY at `../guard/research_properties.py`.
 
 ## Why this exists
 
-This repo's research pipeline emits nondeterministic text (LLM reports). Prose cannot be diffed against prose.
-So the pipeline does NOT store a golden baseline. Instead it extracts **deterministic properties** — functions of
-the text whose answers are stable even though the text is not — and those are what get watched.
+Our research pipeline emits nondeterministic text (LLM reports). We cannot diff prose against prose.
+So we do NOT store a golden baseline. Instead we extract **deterministic properties** — functions of
+the text whose answers are stable even though the text is not — and we watch THOSE.
 
 This module is the foundation. A teeth-prover, a stage-closure checker and a regression differ all
 consume its output. It must be PURE: no network, no clock, no randomness, no writes. Same input bytes
@@ -97,7 +97,7 @@ the section they describe is absent (then `ok=False`).
       - after `youtu.be/`
       - after `watch?v=`
       - after `youtube.com/embed/`
-      - a trailing `_<11 chars>` at the end of a slug-like token (this repo's RESULT_/FINAL_ filenames)
+      - a trailing `_<11 chars>` at the end of a slug-like token (our RESULT_/FINAL_ filenames)
     An id is "11 chars from [A-Za-z0-9_-]". Note ids legitimately contain `_` and `-`; do NOT split a
     slug on underscore to find them (that bug truncated `NgAglRc_ccs` to `ccs`).
 

@@ -32,7 +32,7 @@ SIDECAR = os.environ.get("GEMMA_VISION_URL", "http://127.0.0.1:8336")
 GEMMA_MODEL = os.environ.get("GEMMA_VISION_MODEL", "gemma4-e4b-q4-k-m")
 SCENE_THRESH = float(os.environ.get("VI_SCENE_THRESH", "0.18"))
 FLOOR_SECS = int(os.environ.get("VI_FLOOR_SECS", "2"))       # forced frame at least this often
-# 2s floor (owner 2026-08-01): at 30s the sampler was structurally blind to anything on screen briefly — a figure that
+# 2s floor (owner 2026-08-01): at 30s we were structurally blind to anything on screen briefly — a figure that
 # flashes up for 2-3s could not be sampled at all.  The TEMPORAL dedup is now near-zero because the real
 # redundancy filter is PERCEPTUAL (below): time-spacing cannot tell a slide change from a static talking head.
 DEDUP_SECS = float(os.environ.get("VI_DEDUP_SECS", "1.5"))   # merge frames within this window
@@ -49,7 +49,7 @@ PHASH_MIN_KEEP_FRAC = float(os.environ.get("VI_PHASH_MIN_KEEP_FRAC", "0.05"))  #
 KEEPS_CAP = int(os.environ.get("VI_KEEPS_CAP", "60"))        # legacy even-spread cap (superseded by companion-select)
 FRAME_W = int(os.environ.get("VI_FRAME_W", "1280"))
 # COMPANION-IMAGE protocol (owner 2026-07-15): save only a STRICT handful of info-RICH companion images per
-# video (~3-6 for 30-60min), tunable during calibration. A frame is SAVED only if it's an irreducible visual
+# video (~3-6 for 30-60min), tunable as we calibrate. A frame is SAVED only if it's an irreducible visual
 # (keep=true) AND its companion_score >= MIN; then a duration-scaled cap keeps it strict.
 COMPANION_MIN = int(os.environ.get("VI_COMPANION_MIN", "7"))       # min companion_score to be saveable (0-10)
 COMPANION_TARGET = int(os.environ.get("VI_COMPANION_TARGET", "6")) # normal ceiling (→ ~3-6 at 30-60min)
@@ -100,32 +100,32 @@ def _hamming(a, b):
 # before it ever ran in production. Keep the code: it is the measuring instrument, and the finding below is
 # the reason the obvious next idea is wrong.
 #
-# MEASURED (`vision_measure/replay_stage_a.py`, over the 6 videos' real scored sets): budgeting the candidate
-# set costs the frames actually PUBLISHED. SAVED-frame recall was 25.0% at budget 40, 31.8% at 60, 34.1%
-# at 80, and still only 47.7% at 100 — i.e. even a token 62%-saving budget loses HALF the published evidence.
-# That is the worst failure shape available: the budget stops the pipeline LOOKING at a frame that went on to be cited,
+# MEASURED (`vision_measure/replay_stage_a.py`, over the 6 videos' real scored sets): budgeting our candidate
+# set costs the frames we actually PUBLISHED. SAVED-frame recall was 25.0% at budget 40, 31.8% at 60, 34.1%
+# at 80, and still only 47.7% at 100 — i.e. even a token 62%-saving budget loses HALF our published evidence.
+# That is the worst failure shape available: the budget stops us LOOKING at a frame that went on to be cited,
 # and no downstream stage can detect or repair it.
 #
 # WHY, and it is a correction to how the research was read: the field's Stage A is EVENT-DRIVEN — candidates
 # land ON scene cuts / slide transitions, and |C| is naturally 30-80 because that is how many events exist.
-# This pipeline is a dense uniform sampler (2s floor) emitting 364 candidates that are mostly not events. Subsampling
+# OURS is a dense uniform sampler (2s floor) emitting 364 candidates that are mostly not events. Subsampling
 # that with temporal bins picks the middle of each ~15s window, which is uncorrelated with the one instant the
 # slide was fully rendered — 31.8% recall at a 16% sampling rate is barely above chance.
-# ⇒ "budget the candidate set" and "subsample this candidate set" are NOT the same operation. Getting to a
+# ⇒ "budget the candidate set" and "subsample OUR candidate set" are NOT the same operation. Getting to a
 #   real budget means making Stage A event-driven FIRST (scene/slide-transition detection), not capping a
 #   uniform sampler. Do not re-enable this without that change.
 STAGE_A_BUDGET = int(os.environ.get("VI_STAGE_A_BUDGET", "0"))   # 0 = OFF (refuted; see above)
 
 
 def _stage_a_budget(frames, budget=None):
-    """STAGE-A CANDIDATE BUDGET with a hard temporal prior. Caps what is PAID to score.
+    """STAGE-A CANDIDATE BUDGET with a hard temporal prior. Caps what we PAY to score.
 
-    WHY (prior-art research, 2026-08-01). A session was spent building three cheap filters to guess which
+    WHY (prior-art research, 2026-08-01). We spent a session building three cheap filters to guess which
     frames are VALUABLE, and measurement killed all three. The field does not do that. Its consensus shape is:
     Stage A generates a BUDGETED candidate set with a hard temporal prior; Stage B spends the expensive model
-    only on those; Stage C picks the final few with a diversity constraint. I already had B and C. What I
+    only on those; Stage C picks the final few with a diversity constraint. We already had B and C. What we
     lacked was a BUDGET on A — the prefilter admitted however many frames survived it (364 on one video), and
-    all of them were scored at 2 model calls each.
+    we scored all of them at 2 model calls each.
 
     Binning is the critical part, not the cap: it is a deterministic temporal prior that guarantees the
     candidates span the whole video, which is the property a value-ranker cannot recover once the candidates
@@ -156,7 +156,7 @@ def _stage_a_budget(frames, budget=None):
         take = scene[len(scene) // 2] if scene else b[len(b) // 2]
         picked.append(take)
         leftovers.extend([f for f in b if f is not take])
-    # redistribute unspent budget (from empty bins) to the frames most isolated from what is already held
+    # redistribute unspent budget (from empty bins) to the frames most isolated from what we already hold
     slots = budget - len(picked)
     if slots > 0 and leftovers:
         chosen = list(picked)
@@ -221,7 +221,7 @@ def _showinfo_ts(logtext):
 def transcript(root):
     """Clean a downloaded .vtt → timestamped, de-duplicated plain text. Prefer MANUAL/high-quality subs over ASR;
     among multiple manual tracks pick the SMALLEST (dodges bloated poison tracks — a legit track is normal-sized,
-    a stuffed anti-scrape track is huge). The poison detector still gates whatever is picked."""
+    a stuffed anti-scrape track is huge). The poison detector still gates whatever we pick."""
     manual = sorted(glob.glob(f"{root}/source/manual_*.vtt"), key=os.path.getsize)   # smallest manual first
     # priority: manual (high-quality) → WhisperX (local poison-resistant ASR) → yt-dlp auto-subs → legacy
     vtts = (manual or glob.glob(f"{root}/source/whisperx_*.vtt") or glob.glob(f"{root}/source/auto_*.vtt")
@@ -355,7 +355,7 @@ Look at the frame and return STRICT JSON (no prose outside it) with these keys:
 - "verbatim": if the frame shows CODE, a TERMINAL, a DIAGRAM label, a SLIDE with text, a URL/link, a command, or any readable technical text, transcribe it EXACTLY (preserve line breaks with \\n). If nothing readable, use "".
 - "keep": true ONLY for an IRREDUCIBLE VISUAL — a diagram, architecture chart, flowchart, plot/graph, or a UI screenshot whose SPATIAL layout carries meaning words cannot. Be STRICT and default to false.
 - "keep_reason": one short clause justifying the keep decision.
-- "companion_score": an INTEGER 0-10 (0 when keep=false). GRADE HARSHLY — this decides which FEW images get saved. Judge how CENTRAL this visual is to the WHOLE video's point: imagining every frame, would THIS be among the top 2-3 most important visuals of the entire video? **10 = RARE** — THE single defining figure (the headline result, or the one architecture/diagram the whole work hinges on); a typical video has 0-2 of these. **9** = a major figure central to the argument. **7-8 = the DEFAULT for a genuinely useful SUPPORTING figure** (a secondary diagram/chart that aids understanding but isn't the centerpiece) — MOST saveable images belong here. **4-6** = helps a little, text mostly carries it. **0-3** = decorative/redundant. ⚠ If you're tempted to give many 9-10s, you are OVER-scoring — most figures are supporting (7-8), not defining. Only 7+ is saved; reserve 9-10 for the few most central.
+- "companion_score": an INTEGER 0-10 (0 when keep=false). GRADE HARSHLY — this decides which FEW images we save. Judge how CENTRAL this visual is to the WHOLE video's point: imagining every frame, would THIS be among the top 2-3 most important visuals of the entire video? **10 = RARE** — THE single defining figure (the headline result, or the one architecture/diagram the whole work hinges on); a typical video has 0-2 of these. **9** = a major figure central to the argument. **7-8 = the DEFAULT for a genuinely useful SUPPORTING figure** (a secondary diagram/chart that aids understanding but isn't the centerpiece) — MOST saveable images belong here. **4-6** = helps a little, text mostly carries it. **0-3** = decorative/redundant. ⚠ If you're tempted to give many 9-10s, you are OVER-scoring — most figures are supporting (7-8), not defining. Only 7+ is saved; reserve 9-10 for the few most central.
 
 STRICT KEEP RULE — a frame that is primarily CODE, a TERMINAL, a chat/log, or a SLIDE OF TEXT is **keep=false**: its value is the text, which you already captured in "verbatim", so the image is redundant. Do NOT keep an image just because it "contains code" or "is technical". keep=true is reserved for when the PICTURE itself is the information (boxes-and-arrows diagram, a rendered UI, a chart) — not for readable text/code.
 If the frame is just a person talking with no readable technical content: on_screen="talking head", verbatim="", keep=false, keep_reason="no on-screen content".
@@ -394,7 +394,7 @@ def _gemma_body(path, max_tokens=GEMMA_MAX_TOKENS, b64_override=None):
         # JSON -> parse fail. Penalize repeats to kill the loop.
         "frequency_penalty": 0.6, "presence_penalty": 0.3,
         # this llama.cpp build routes chain-of-thought into reasoning_content and leaves content
-        # empty until it "finishes thinking" — a DIRECT answer is wanted, so disable thinking.
+        # empty until it "finishes thinking" — we want a DIRECT answer, so disable thinking.
         "chat_template_kwargs": {"enable_thinking": False},
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": GEMMA_PROMPT},
@@ -662,7 +662,7 @@ def crossmodal(root):
     # on topical divergence alone. Real case: a video whose VISUALS ran a sponsor's graphics (Airloak,
     # "sandboxed execution") for 8 minutes while narration continued on the video's actual subject was
     # verdicted confirmed_poison — yet the transcript contained ZERO AI-directed language and even mentioned
-    # the sponsor 4 times. This repo's doctrine is "poison = AI-DIRECTED, not human-directed promo", and the
+    # the sponsor 4 times. Our own doctrine is "poison = AI-DIRECTED, not human-directed promo", and the
     # phrase gate had already scored it CLEAN 0/100. So: require at least one AI-directed marker in the
     # transcript before escalating. Without corroboration, downgrade to "suspicious" and CONTINUE — the
     # finding is still recorded and printed, it just no longer cuts a clean video.
@@ -726,13 +726,13 @@ def _companion_cap(cands, dur_min):
     measured the wrong thing.  Over five real videos the qualified-distinct count varied **12x at
     essentially constant duration** (5 / 28 / 47 / 59 / 62, all 12-16 min), so every one of them got the
     same target of 2.  Consequences, both measured (`vision_measure/replay_cap.py`):
-      * the cap deleted **92% of the frames already paid two model calls each to identify**; and
+      * the cap deleted **92% of the frames we had already paid two model calls each to identify**; and
       * three of the five saved `(1,0,1)` across thirds — **the middle third of the video got nothing**.
         That is a coverage hole, the same family as the temporal-spread bug fixed the same day, one layer
         up: the cap was so tight that spread had nothing left to spread.
 
     `Q` (qualified-distinct) is the pipeline's OWN measurement of information density, produced by the very
-    model calls already spent, so the cap now follows it.  `sqrt` gives diminishing returns so a
+    model calls we already spent, so the cap now follows it.  `sqrt` gives diminishing returns so a
     59-qualified screencast cannot flood a report.  Frame density costs nothing downstream (synthesis is
     one cloud call regardless), so the real ceiling is reader attention, not money — hence COMPANION_MAX.
 
@@ -741,7 +741,7 @@ def _companion_cap(cands, dur_min):
     and this change can only ever add frames, never silently drop one.
 
     Returns `(cap, target, Q, dur_floor)`; `gc()` and the offline replay both call THIS function, so the
-    shipped formula and the one validated against cannot drift apart.
+    shipped formula and the one we validate against cannot drift apart.
     """
     Q = len(cands)
     dur_floor = min(COMPANION_TARGET, max(2, round(dur_min / 10.0)))    # the OLD rule, demoted to a floor
@@ -918,7 +918,7 @@ def harvest(root, title="", vid=""):
          "# Video-vision — ACTIONABLE ITEMS ledger\n\nForwarded suggestions per video (GET/ADOPT/ADAPT/VET/EXPLORE/WATCH/REJECT). Owner dispositions.\n"),
         ("standouts", r"#+[^\n]*STANDOUTS\s*&?\s*FINDINGS[^\n]*\n(.*?)(?=\n#{1,2}\s|\Z)", "STANDOUTS_HUB.md",
          "# Video-vision — STANDOUTS & FINDINGS hub\n\nCritical/surprising findings, rejections, and notable creator claims/opinions "
-         "(each with the CONFIRMED/REFUTED/PLAUSIBLE/UNVERIFIED/MISLEADING verdict + context). The provocative/subjective signal worth "
+         "(each with our CONFIRMED/REFUTED/PLAUSIBLE/UNVERIFIED/MISLEADING verdict + context). The provocative/subjective signal worth "
          "remembering that is NOT a direct action item. ⚠ = orchestrator should re-check.\n"),
     ]:
         m = re.search(pat, t, re.S | re.I)
