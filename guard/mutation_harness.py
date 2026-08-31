@@ -390,6 +390,12 @@ MUTATIONS = [
       "'over-broad candidate FAILS the review' (the social off-switch direction)",
       "    if share > max_share:",
       "    if share > max_share * 9:"),
+    M("PA2", "population", "guard/population_arm.py",
+      "every nonzero exit counted as a flag again - a crash on the labelled positive reads "
+      "as a detection",
+      "'one exit code is the flag; a crash, a usage error or a timeout measures nothing'",
+      '    return ("flagged" if p.returncode == FLAG_EXIT else "error"), p.returncode, p.stderr',
+      '    return "flagged", p.returncode, p.stderr'),
     M("OW1", "one_writer", "guard/one_writer_gate.py",
       "foreign-file detection blinded - another job's dirty tree proceeds",
       "'a foreign dirty file refuses the transaction and is named'",

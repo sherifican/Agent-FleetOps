@@ -78,6 +78,13 @@ Arm: `guard/population_arm.py` runs a candidate checker over a pinned corpus man
 flagged/scanned, and fails the review when the share exceeds the ceiling or a labelled positive is
 missed. Gate: `guard/tests/test_population_arm.py`.
 
+**Define ONE exit code as the flag.** "Nonzero means flagged" quietly counts crashes, usage errors
+and the timeout code as detections, and it fails in the direction that looks like success: a
+checker crashing on exactly the file it was meant to detect reads as a narrow, accurate guard that
+caught its labelled positive. Every other nonzero, and any timeout, means the checker did not
+answer the question — so the breadth ratio measures nothing and the review is CANNOT CHECK, with
+the checker's own stderr retained per path.
+
 ## The procedure
 
 For each guard, in writing:
