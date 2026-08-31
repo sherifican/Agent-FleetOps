@@ -206,8 +206,9 @@ rather than a slope — a model either fits or it doesn't:
   are not the two-card story. A single 32 GB card is a different layout. On decode the two-card rows
   land at ~105–115 tok/s (the higher figures that used to sit here were prompt-processing, not
   decode).
-- **Budget for runtime overhead, not just weights** — it does not scale with model size. See the
-  third chart: one 9 GB model occupies 17.0 GiB loaded, summed across both cards.
+- **Runtime overhead does not scale with weight size.** The third chart's three rows add 1.7, 8.0
+  and 2.1 GiB on top of files of 7.6, 9.0 and 23 GB respectively — the largest model there carries
+  nearly the smallest overhead. Budget it per model from the log; it is not a percentage.
 - **CPU is not the bottleneck** for GPU-resident inference; it matters for loading and for the
   orchestration around the models. System RAM matters more than core count — 32 GB is adequate but
   not generous once several services and a browser are running alongside.

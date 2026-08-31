@@ -40,17 +40,41 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ---------------------------------------------------------------- instruments
 
-def measure_guard_suite(root):
-    """Tests collected from guard/tests/ — the collector run_guards.sh itself runs."""
+# A collector that could not import part of a suite still prints a total, and that total
+# is a floor, not a count. Measuring `tui/tests` without `textual` installed reports 326
+# where the suite holds 364 — so comparing prose against it would flag a CORRECT number
+# as drift. A partial read is not a smaller reading; it is a different question answered.
+SKIP_DEPS = "the suite's own test dependencies are not installed here"
+
+
+def _collect(root, rel):
+    """(count, note). count is None whenever the number would be a floor, not a total."""
     try:
         p = subprocess.run(
-            [sys.executable, "-m", "pytest", os.path.join("guard", "tests"),
-             "--collect-only", "-q"],
-            cwd=root, capture_output=True, text=True, timeout=180)
+            [sys.executable, "-m", "pytest", rel, "--collect-only", "-q"],
+            cwd=root, capture_output=True, text=True, timeout=300)
     except (OSError, subprocess.SubprocessError):
-        return None
-    m = re.search(r"(\d+)\s+tests?\s+collected", p.stdout)
-    return int(m.group(1)) if m else None
+        return None, "the collector could not be run"
+    out = p.stdout + p.stderr
+    if not os.path.isdir(os.path.join(root, rel)):
+        return None, f"{rel} is not present"
+    if "ModuleNotFoundError" in out or "ImportError" in out:
+        return None, SKIP_DEPS
+    if re.search(r"\b\d+\s+errors?\b", out):
+        return None, "the collector reported errors, so its total is a floor"
+    m = re.search(r"(\d+)\s+tests?\s+collected", out)
+    if not m:
+        return None, "the collector printed no total"
+    return int(m.group(1)), None
+
+
+def measure_guard_suite(root):
+    """Tests collected from guard/tests/ — the collector run_guards.sh itself runs."""
+    return _collect(root, os.path.join("guard", "tests"))
+
+
+def measure_tui_suite(root):
+    return _collect(root, os.path.join("tui", "tests"))
 
 
 def _bench_rows(root):
@@ -64,14 +88,14 @@ def _bench_rows(root):
 
 def measure_bench_rows(root):
     rows = _bench_rows(root)
-    return None if rows is None else len(rows)
+    return (None, "the operating log could not be read") if rows is None else (len(rows), None)
 
 
 def measure_bench_tags(root):
     rows = _bench_rows(root)
     if rows is None:
-        return None
-    return len({r["model"] for r in rows if r.get("model")})
+        return None, "the operating log could not be read"
+    return len({r["model"] for r in rows if r.get("model")}), None
 
 
 # ---------------------------------------------------------------- claim sites
@@ -96,10 +120,24 @@ def _claims_bench_tags(line):
     return [int(m.group(1)) for m in re.finditer(r"(\d+)\s+model tags\b", line, re.I)]
 
 
+def _claims_tui_suite(line):
+    return [int(m.group(1)) for m in
+            re.finditer(r"(\d+)[- ]test hermetic suite", line, re.I)]
+
+
+# (name, instrument, claim-finder, canonical phrasing). The fourth entry exists so the
+# selftest can plant a claim for EVERY check from the registry itself. A fixture that
+# hand-lists three of four counts passes on a machine where the fourth is skipped and
+# fails on one where it is not — the fixture has to track the registry, not a memory of it.
 CHECKS = [
-    ("guard unit suite", measure_guard_suite, _claims_guard_suite),
-    ("bench measurement rows", measure_bench_rows, _claims_bench_rows),
-    ("bench model tags", measure_bench_tags, _claims_bench_tags),
+    ("guard unit suite", measure_guard_suite, _claims_guard_suite,
+     lambda n: f"{n} hermetic unit gates"),
+    ("bench measurement rows", measure_bench_rows, _claims_bench_rows,
+     lambda n: f"{n} measurements"),
+    ("bench model tags", measure_bench_tags, _claims_bench_tags,
+     lambda n: f"{n} model tags"),
+    ("fleet-tui suite", measure_tui_suite, _claims_tui_suite,
+     lambda n: f"behind a {n}-test hermetic suite"),
 ]
 
 
@@ -125,23 +163,35 @@ def _docs(root):
 def check(root=ROOT, measured=None):
     """Return (exit_code, report_lines).
 
-    `measured` maps a check name to its value. It is a parameter rather than an
-    unconditional call so the selftest can point the doc sweep at a planted tree while
-    still comparing against real numbers — a fixture supplying its own expected count
-    would be checking the fixture, not the guard.
+    `measured` maps a check name to its value, letting the selftest point the doc sweep
+    at a planted tree while still comparing against real numbers — a fixture supplying
+    its own expected count would be checking the fixture, not the guard.
     """
-    docs = [(rel, open(os.path.join(root, rel), encoding="utf-8", errors="replace").read()
-             .splitlines()) for rel in _docs(root)
-            if os.path.isfile(os.path.join(root, rel))]
+    docs = []
+    for rel in _docs(root):
+        full = os.path.join(root, rel)
+        if not os.path.isfile(full):
+            continue
+        try:
+            with open(full, encoding="utf-8", errors="replace") as fh:
+                docs.append((rel, fh.read().splitlines()))
+        except OSError:
+            continue
 
-    lines, worst = [], 0
-    for name, instrument, claimer in CHECKS:
-        n = (measured or {}).get(name)
+    lines, worst, verified = [], 0, 0
+    for name, instrument, claimer, _plant in CHECKS:
+        if measured and name in measured:
+            n, note = measured[name]          # (value, note), same shape an instrument returns
+        else:
+            n, note = instrument(root)
+
         if n is None:
-            n = instrument(root)
-        if n is None:
-            lines.append(f"   UNMEASURED  {name}: instrument could not be read")
-            worst = max(worst, 2)
+            if note == SKIP_DEPS:
+                lines.append(f"   skipped     {name}: {note} "
+                             f"(NOT CONFIGURED — not counted as a pass)")
+            else:
+                lines.append(f"   UNMEASURED  {name}: {note}")
+                worst = max(worst, 2)
             continue
 
         sites = [(rel, i, c)
@@ -154,6 +204,7 @@ def check(root=ROOT, measured=None):
             worst = max(worst, 2)
             continue
 
+        verified += 1
         bad = [s for s in sites if s[2] != n]
         lines.append(f"   {'DRIFT     ' if bad else 'ok        '}  {name}: measured {n} · "
                      f"{len(sites)} claim(s) in {len({s[0] for s in sites})} file(s)")
@@ -163,13 +214,16 @@ def check(root=ROOT, measured=None):
         if bad:
             worst = max(worst, 1)
 
-    head = {0: "every documented count matches its instrument",
+    if verified == 0:
+        worst = max(worst, 2)
+        lines.append("   UNMEASURED  no check verified anything — a sweep that compared "
+                     "nothing reports the same green as a real one")
+
+    head = {0: f"every documented count matches its instrument ({verified} checked)",
             1: "documented counts disagree with what was measured — the prose is stale",
             2: "UNMEASURED — a count could not be checked; worse than a violation"}[worst]
     return worst, [head] + lines
 
-
-# ---------------------------------------------------------------- selftest
 
 def _selftest():
     import tempfile
@@ -181,54 +235,83 @@ def _selftest():
         if not ok:
             failures.append(name)
 
-    real = {name: fn(ROOT) for name, fn, _ in CHECKS}
-    if any(v is None for v in real.values()):
-        print(f"SELFTEST UNMEASURED: an instrument could not be read: {real}")
+    real, notes = {}, {}
+    for name, fn, _c, _p in CHECKS:
+        real[name], notes[name] = fn(ROOT)
+
+    # Replay each instrument's real answer — value AND note — so a check that legitimately
+    # skips here keeps skipping in the fixture instead of turning into a false UNMEASURED.
+    sim = {name: (real[name], notes[name]) for name, _f, _c, _p in CHECKS}
+    if all(v is None for v in real.values()):
+        print(f"SELFTEST UNMEASURED: no instrument could be read: {notes}")
         return 2
 
     g = real["guard unit suite"]
     rows = real["bench measurement rows"]
     tags = real["bench model tags"]
+    if g is None or rows is None or tags is None:
+        print(f"SELFTEST UNMEASURED: a core instrument was unreadable: {notes}")
+        return 2
+
+    def doc_for(bump=None, delta=0, extra=""):
+        """A doc asserting the correct count for every measurable check.
+
+        `bump` names one check whose planted count is wrong by `delta`, so exactly one
+        thing differs between the green case and each red one.
+        """
+        out = []
+        for name, _f, _c, plant in CHECKS:
+            v = real[name]
+            if v is None:
+                continue
+            out.append(plant(v + delta if name == bump else v))
+        return "\n".join(out) + "\n" + extra
 
     with tempfile.TemporaryDirectory() as td:
         doc = pathlib.Path(td) / "DOC.md"
 
-        def rc_for(text):
+        def rc_for(text, measured=None):
             doc.write_text(text)
-            return check(td, measured=real)[0]
+            return check(td, measured=measured or sim)[0]
 
-        allthree = ("{g} hermetic unit gates\n{r} measurements\n{t} model tags\n")
-
-        case("every count correct passes (green)",
-             rc_for(allthree.format(g=g, r=rows, t=tags)) == 0)
+        case("every count correct passes (green)", rc_for(doc_for()) == 0)
         case("a wrong suite count is caught (red)",
-             rc_for(allthree.format(g=g + 1, r=rows, t=tags)) == 1)
+             rc_for(doc_for("guard unit suite", +1)) == 1)
         case("a wrong bench row count is caught (red)",
-             rc_for(allthree.format(g=g, r=rows + 1, t=tags)) == 1)
+             rc_for(doc_for("bench measurement rows", +1)) == 1)
         case("a wrong model-tag count is caught (red)",
-             rc_for(allthree.format(g=g, r=rows, t=tags + 1)) == 1)
+             rc_for(doc_for("bench model tags", +1)) == 1)
         case("a table row is checked (red)",
-             rc_for(f"{g} hermetic unit gates\n| Total measurements | **{rows + 5}** |\n"
-                    f"{tags} model tags\n") == 1)
+             rc_for(doc_for(extra=f"| Total measurements | **{rows + 5}** |\n")) == 1)
         case("a line that RUNS the suite is checked (red)",
-             rc_for(f"| gates | `pytest guard/tests/ -q` | {g + 7} tests |\n"
-                    f"{rows} measurements\n{tags} model tags\n") == 1)
-        case("a changelog's per-change test count is not read as a suite claim",
-             rc_for(f"this change adds 6 hermetic tests\n{g} hermetic unit gates\n"
-                    f"{rows} measurements\n{tags} model tags\n") == 0)
+             rc_for(doc_for(extra=f"| gates | `pytest guard/tests/ -q` | {g + 7} tests |\n")) == 1)
+        case("a changelog's per-change test count is not a suite claim",
+             rc_for(doc_for(extra="this change adds 6 hermetic tests\n")) == 0)
         case("a tree asserting nothing is UNMEASURED, not a pass",
              rc_for("the suite is hermetic and needs no live fleet\n") == 2)
         case("one silent check makes the whole sweep UNMEASURED",
              rc_for(f"{g} hermetic unit gates\n{rows} measurements\n") == 2)
 
-    case("the instruments returned real values",
-         all(isinstance(v, int) and v > 0 for v in real.values()))
+        # A skipped instrument must not be compared against. Forced here rather than
+        # depending on whether this machine happens to have the optional deps.
+        forced = dict(sim, **{"fleet-tui suite": (None, SKIP_DEPS)})
+        case("a suite whose deps are absent is SKIPPED, never compared",
+             rc_for(doc_for(extra="behind a 999-test hermetic suite\n"),
+                    measured=forced) == 0)
+        case("a skip does not hide a real drift elsewhere",
+             rc_for(doc_for("guard unit suite", +1,
+                            extra="behind a 999-test hermetic suite\n"),
+                    measured=forced) == 1)
+
+    case("the instruments that answered returned real values",
+         all(v > 0 for v in real.values() if v is not None))
 
     if failures:
         print(f"SELFTEST FAILED ({len(failures)}): " + ", ".join(failures))
         return 1
-    print("doc_count_drift selftest: goes red on every drifted count, stays quiet on "
-          "counts about other things, and refuses to pass on a check that verified nothing")
+    print("doc_count_drift selftest: goes red on every drifted count, stays quiet on counts "
+          "about other things, skips a suite it cannot fully collect, and refuses to pass "
+          "on a check that verified nothing")
     return 0
 
 
