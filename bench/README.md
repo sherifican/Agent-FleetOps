@@ -8,7 +8,7 @@ serving stacks; this is not a controlled cross-vendor comparison.
 
 | | box-a | box-b |
 |---|---|---|
-| Compute | two 16 GB consumer dGPUs (Dual 5060ti 16GB) | 32 GB workstation dGPU (Raeon 9700 AI Pro) plus unified-memory iGPU (Strix Halo/Radeon 8060 intergrated)|
+| Compute | two 16 GB consumer dGPUs (dual RTX 5060 Ti 16GB) | 32 GB workstation dGPU (Radeon AI PRO R9700) plus unified-memory iGPU (Strix Halo / Radeon 8060S integrated) |
 | Memory / link context | 30 GiB DDR4-2933; one dGPU on PCIe Gen4 x8 and one on Gen3 x4 | unified-memory iGPU path; Vulkan serving stack |
 | Published device labels | `dgpu-a`, `both-dgpu` | `dgpu-b`, `igpu` |
 
