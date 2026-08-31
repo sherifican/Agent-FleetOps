@@ -96,24 +96,84 @@ def test_maintainer_without_overlay_is_cannot_check_never_a_pass():
     assert "CANNOT_CHECK" in out, out
 
 
-def test_maintainer_overlay_phrase_is_flagged():
-    with tempfile.TemporaryDirectory() as d:
-        _corpus(d, {"doc.md": "carries the planted overlay phrase here\n"})
-        ov = os.path.join(d, "overlay.txt")  # outside the scanned corpus in real use
+def _overlay_run(corpus_files, overlay_text, extra=()):
+    """Scan one tree with an overlay kept OUTSIDE it — the arrangement the docs describe.
+
+    Both overlay gates used to write overlay.txt INSIDE --root, where each literal rule matched
+    its OWN line. Both passed on that self-hit alone: making the intended target undetectable
+    left them green and the suite still printed its all-pass marker. The overlay now lives in a
+    separate directory, and the assertions name the FILE and LINE the hit must land on.
+    """
+    with tempfile.TemporaryDirectory() as scanned, tempfile.TemporaryDirectory() as private:
+        _corpus(scanned, corpus_files)
+        ov = os.path.join(private, "overlay.txt")
         with open(ov, "w", encoding="utf-8") as fh:
-            fh.write("# private overlay\nplanted overlay phrase\n")
-        rc, out = _run(["--root", d, "--profile", "maintainer", "--overlay", ov])
-    assert rc == 1 and "overlay:2" in out, out
+            fh.write(overlay_text)
+        return _run(["--root", scanned, "--profile", "maintainer", "--overlay", ov, *extra])
+
+
+def test_maintainer_overlay_phrase_is_flagged():
+    rc, out = _overlay_run(
+        {"doc.md": "an ordinary first line\ncarries the planted overlay phrase here\n"},
+        "# private overlay\nplanted overlay phrase\n")
+    flags = [l.strip() for l in out.splitlines() if l.strip().startswith("\u26d4")]
+    assert rc == 1 and len(flags) == 1, out
+    assert flags[0].startswith("\u26d4 doc.md:2 [private-material/overlay:2]"), out
 
 
 def test_overlay_quoted_speech_class_prefix():
+    rc, out = _overlay_run(
+        {"doc.md": "an ordinary first line\na planted spoken marker sits here\n"},
+        "quoted-speech:planted spoken marker\n")
+    flags = [l.strip() for l in out.splitlines() if l.strip().startswith("\u26d4")]
+    assert rc == 1 and len(flags) == 1, out
+    assert flags[0].startswith("\u26d4 doc.md:2 [quoted-speech/overlay:1]"), out
+
+
+def test_an_overlay_that_compiles_to_zero_rules_is_cannot_check():
+    for text in ("", "\n\n", "# only a comment\n#and another\n"):
+        rc, out = _overlay_run({"doc.md": "nothing private here\n"}, text)
+        assert rc == 2 and "CANNOT_CHECK" in out, repr(text) + ":\n" + out
+        assert "ZERO rules" in out, out
+
+
+def test_an_overlay_under_a_non_maintainer_profile_is_refused():
+    """The runner defaults to the adopter profile, so this is the easy mistake to make."""
+    with tempfile.TemporaryDirectory() as scanned, tempfile.TemporaryDirectory() as private:
+        _corpus(scanned, {"doc.md": "the planted overlay phrase ships here\n"})
+        ov = os.path.join(private, "overlay.txt")
+        with open(ov, "w", encoding="utf-8") as fh:
+            fh.write("planted overlay phrase\n")
+        rc, out = _run(["--root", scanned, "--profile", "adopter", "--overlay", ov])
+    assert rc != 0, "an ignored overlay printed a green —\n" + out
+    assert rc == 2 and "CANNOT_CHECK" in out, out
+
+
+def test_an_overlay_inside_the_scanned_tree_is_refused():
     with tempfile.TemporaryDirectory() as d:
-        _corpus(d, {"doc.md": "a planted spoken marker sits here\n"})
+        _corpus(d, {"doc.md": "the planted overlay phrase ships here\n"})
         ov = os.path.join(d, "overlay.txt")
         with open(ov, "w", encoding="utf-8") as fh:
-            fh.write("quoted-speech:planted spoken marker\n")
+            fh.write("planted[ ]overlay phrase\n")     # regex syntax: it never flags itself
         rc, out = _run(["--root", d, "--profile", "maintainer", "--overlay", ov])
-    assert rc == 1 and "[quoted-speech/overlay:1]" in out, out
+    assert rc == 2 and "OUTSIDE the scanned tree" in out, \
+        "a denylist inside the corpus ships the strings it exists to keep out —\n" + out
+
+
+def test_a_tracked_overlay_is_refused_even_from_outside_the_root():
+    with tempfile.TemporaryDirectory() as home:
+        repo = os.path.join(home, "repo")
+        os.makedirs(os.path.join(repo, "sub"))
+        _new_git_tree(repo)
+        ov = os.path.join(repo, "overlay.txt")
+        with open(ov, "w", encoding="utf-8") as fh:
+            fh.write("planted[ ]overlay phrase\n")
+        _corpus(os.path.join(repo, "sub"), {"doc.md": "the planted overlay phrase ships here\n"})
+        subprocess.run(["git", "-C", repo, "add", "-A"], check=True, capture_output=True)
+        rc, out = _run(["--root", os.path.join(repo, "sub"), "--profile", "maintainer",
+                        "--overlay", ov])
+    assert rc == 2 and "git tracks it" in out, \
+        "an overlay outside --root but tracked still gets published —\n" + out
 
 
 def test_adopter_profile_does_not_require_overlay():

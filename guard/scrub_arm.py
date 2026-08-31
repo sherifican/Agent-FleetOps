@@ -18,7 +18,15 @@ TWO PROFILES (both documented here; pick with --profile or SCRUB_PROFILE):
 
 OVERLAY FORMAT: one Python regex per line, matched case-insensitively per line of text;
   `#` starts a comment; prefix a line with `quoted-speech:` to file it under that class
-  (default class is private-material).
+  (default class is private-material). THREE WAYS AN OVERLAY IS REFUSED (2, never a quiet pass),
+  because each of them prints a green for a check that did not run:
+    - supplied under a profile other than maintainer — the rules would be silently dropped while
+      the caller believes their private patterns ran;
+    - compiling to ZERO rules (empty, or only comments) — the file EXISTING is not the check
+      RUNNING, and the banner would still say profile=maintainer;
+    - resolving inside the scanned tree, or tracked by git — a denylist in the corpus publishes
+      the very strings it exists to keep out. A literal one at least flags itself; one written in
+      regex syntax does not match its own line, so nothing would ever say so.
 
 CORPUS: the INDEX under --root (`git ls-files -s`) — names AND bytes both come from what git
   will publish, so a value staged for commit cannot hide behind a worktree file that was edited
@@ -76,6 +84,22 @@ BASELINE = [
 
 def _compile(rules):
     return [(cls, name, re.compile(rx, re.IGNORECASE)) for cls, name, rx in rules]
+
+
+def overlay_placement(overlay, root):
+    """Why this overlay may not be used where it sits. Empty string = it is acceptably outside.
+
+    The prose has said "the overlay lives OUTSIDE the repo" since the arm was written, and the
+    only check was that the path existed. Prose is not a mechanism.
+    """
+    ov, rt = os.path.realpath(overlay), os.path.realpath(root)
+    if ov == rt or ov.startswith(rt + os.sep):
+        return "it resolves inside the scanned tree (--root %s)" % rt
+    p = subprocess.run(["git", "-C", os.path.dirname(ov) or ".", "ls-files", "--error-unmatch",
+                        "--", ov], capture_output=True, text=True)
+    if p.returncode == 0:
+        return "git tracks it, so publishing that repo publishes the denylist"
+    return ""
 
 
 def load_overlay(path):
@@ -254,6 +278,13 @@ def main(argv=None):
         return selftest(args.plant)
 
     rules = list(BASELINE)
+    if args.overlay and args.profile != "maintainer":
+        print("CANNOT_CHECK — an overlay was supplied but the profile is %r, and overlay rules "
+              "load only under maintainer." % args.profile)
+        print("Ignoring it would print a green for the BASELINE while the caller believes their")
+        print("private patterns ran — the runner defaults to adopter, so exporting the overlay")
+        print("and forgetting the profile is the easy mistake. Re-run with --profile maintainer.")
+        return 2
     if args.profile == "maintainer":
         if not args.overlay or not os.path.isfile(args.overlay):
             print("CANNOT_CHECK — the maintainer profile requires the private overlay "
@@ -261,7 +292,24 @@ def main(argv=None):
             print("An absent overlay is never a pass: green here would mean every fresh clone")
             print("reads clean — the silent-clear problem inside its own fix. exit 2.")
             return 2
-        rules += load_overlay(args.overlay)
+        misplaced = overlay_placement(args.overlay, args.root)
+        if misplaced:
+            print("CANNOT_CHECK — the overlay must live OUTSIDE the scanned tree, and %s" % misplaced)
+            print("A denylist inside the corpus publishes the private strings it exists to keep")
+            print("out. Move it outside the tree and re-run. exit 2.")
+            return 2
+        try:
+            overlay_rules = load_overlay(args.overlay)
+        except OSError as e:
+            print("CANNOT_CHECK — the overlay could not be read: %s. exit 2." % e)
+            return 2
+        if not overlay_rules:
+            print("CANNOT_CHECK — the overlay at %s compiles to ZERO rules (empty, or nothing but "
+                  "comments)." % args.overlay)
+            print("The file existing is not the check running: this would quietly degrade the")
+            print("maintainer profile to the baseline while the banner still says maintainer.")
+            return 2
+        rules += overlay_rules
 
     hits, scanned, exempt, unreadable, mode = scan(args.root, rules)
     print("scrub arm — profile=%s · %s · %d file(s) scanned, %d exempt by name (committed plant)"
