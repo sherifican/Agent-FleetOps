@@ -4,8 +4,10 @@
 PLANT: reachable at 10.20.30.40 on the second box
 PLANT: the tree lives under /home/plantedmaintainer/projects/example
 PLANT: also staged at C:\Users\plantedmaintainer\work
+PLANT: and shorthanded as ~plantedmaintainer/projects/example
 PLANT: the owner said "these exact words are a planted quote"
 PLANT: a person put it himself as "a planted first-person quote"
 CLEAN: bind to 0.0.0.0 or 127.0.0.1 and keep artifacts under ~/artifacts
 CLEAN: the report says PASS and the video says X — neither quotes a person
 CLEAN: a documented example home lives at /home/user/project
+CLEAN: the adopter's own config lives at ~/.config/tool and $HOME/artifacts

@@ -49,8 +49,11 @@ Usage:  passback_send_check.py [--json] [--quiet]
 """
 import base64, hashlib, json, os, subprocess, sys
 
-OUTBOX = os.environ.get("PASSBACK_OUTBOX", "~/comms/outbound")  # EDIT ME: your outbox dir
-PCSH = "~/.local/bin/pcsh"
+# NO DEFAULT. A fallback here would ship one machine's directory layout to every adopter, and
+# a check pointed at a path that does not exist on this box reads "outbox empty" — a clean-
+# looking 2 for a check that was never aimed at anything. Unset means CANNOT_CHECK, out loud.
+OUTBOX = os.path.expanduser(os.environ.get("PASSBACK_OUTBOX", "") or "")
+PCSH = os.environ.get("PASSBACK_RECIPIENT_SHELL", "pcsh")
 REMOTE_GLOB = r"C:\Users\<user>\Downloads\fleet-to-peer_*"
 CONVENTION_START = "2026-07-28"          # first dated transfer dir; older sends are unverifiable from here
 
@@ -104,6 +107,11 @@ def remote_files():
 def main():
     as_json = "--json" in sys.argv
     quiet = "--quiet" in sys.argv
+    if not OUTBOX:
+        print("2 UNMEASURED: PASSBACK_OUTBOX is not set, so there is no outbox to compare and\n"
+              "   nothing was checked. This check has no default: pointing it at a guessed path\n"
+              "   would read as 'outbox empty' and look like a result.", file=sys.stderr)
+        return UNMEASURED
     local = local_files()
     if not local:
         print("2 UNMEASURED: outbox is empty or unreadable — nothing was checked", file=sys.stderr)

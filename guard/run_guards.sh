@@ -48,14 +48,24 @@ else
   echo "   selftest cannot run here. 2 = UNMEASURED — an absent check must be loud, never green."
   roll 2
 fi
-PASSBACK_OUTBOX="${PASSBACK_OUTBOX:-$HOME/comms/outbound}"; export PASSBACK_OUTBOX
-PASSBACK_TEETH_FILE="$PASSBACK_OUTBOX/replies/${PASSBACK_TEETH_TARGET:-REPLY_example.md}"
-if [ -f "$PASSBACK_TEETH_FILE" ]; then
-  python3 guard/tests/teeth_passback_send_check.py; roll $?
+# The passback teeth test needs an outbox that exists on THIS box. There is no default: a
+# fallback would ship one machine's directory layout to every adopter, and a check aimed at a
+# path that does not exist reads "outbox empty" — a clean-looking result for a check that was
+# never aimed at anything.
+if [ -n "${PASSBACK_OUTBOX:-}" ]; then
+  export PASSBACK_OUTBOX
+  PASSBACK_TEETH_FILE="$PASSBACK_OUTBOX/replies/${PASSBACK_TEETH_TARGET:-REPLY_example.md}"
+  if [ -f "$PASSBACK_TEETH_FILE" ]; then
+    python3 guard/tests/teeth_passback_send_check.py; roll $?
+  else
+    echo "   PASSBACK_OUTBOX is set but no teeth target sits at \$PASSBACK_OUTBOX/replies (set"
+    echo "   PASSBACK_TEETH_TARGET to a reply this box has already sent). This check WAS"
+    echo "   configured and could not run: 2 = UNMEASURED."
+    roll 2
+  fi
 else
-  echo "   NOTE: no passback teeth target at \$PASSBACK_OUTBOX/replies (set PASSBACK_TEETH_TARGET"
-  echo "   to a reply you actually sent). 2 = UNMEASURED — the passback check did not run."
-  roll 2
+  echo "   NOT CONFIGURED: the passback teeth test needs PASSBACK_OUTBOX (an outbox on this box)."
+  echo "   Nothing to measure and nothing missing — skipped, not UNMEASURED."
 fi
 
 note "5. NEGATIVE CONTROL — the runner itself must be able to fail"

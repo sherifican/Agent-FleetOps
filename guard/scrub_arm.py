@@ -74,6 +74,15 @@ BASELINE = [
      r"|192\.168\.\d{1,3}\.\d{1,3})\b"),
     ("private-material", "home-path",
      r"(?:/home/|/Users/|C:\\Users\\)" + _NEUTRAL + r"[A-Za-z0-9_.-]+"),
+    # The tilde shorthand for the same thing: a tilde immediately followed by an account name
+    # names a real account, so it belongs to this class. The account-LESS home anchors (a bare
+    # tilde-slash, or the home environment variable) name nobody, and a corpus-wide rule for
+    # them measures 151 tracked lines in this repo — documentation legitimately writes adopter
+    # config paths that way — so the baseline does not claim them. What ships those anchors as
+    # somebody's actual LAYOUT is a fallback default in code, and that is gated structurally by
+    # guard/tests/test_shipped_defaults.py, which can fire, rather than by a regex that cannot.
+    ("private-material", "home-path-tilde",
+     r"(?<![\w.~-])~" + _NEUTRAL + r"[A-Za-z][A-Za-z0-9_.-]{2,}/"),
     ("quoted-speech", "person-attribution",
      r"\b(?:(?:the owner|he|she)\s+(?:said|says|told|asked|wrote|picked|named|put it)"
      r"|the user\s+(?:said|told|asked|wrote|picked|named))\b[^\n]{0,40}[\"\u201c]"),
@@ -172,14 +181,33 @@ def _blob_bytes(root, blob_ids):
     return got
 
 
+# Bytes a human would call text: printable ASCII, the usual whitespace, and the printable
+# half of the 8-bit range (so latin-1 prose reads as text, not as noise).
+_TEXTY = frozenset(bytes(range(0x20, 0x7F)) + b"\t\n\r\f\v" + bytes(range(0xA0, 0x100)))
+_RUNS = re.compile(rb"[\x20-\x7e]{8,}")
+
+
+def _is_binary(data):
+    if b"\0" in data:
+        return True
+    head = data[:8000]
+    return bool(head) and sum(1 for b in head if b not in _TEXTY) * 10 > len(head)
+
+
 def _views(data):
     """Every reading of these bytes that could carry a private string.
 
     A file is NEVER dropped for failing to decode. A decoder saying no is a fact about the
     decoder, not evidence that the bytes are clean: latin-1 and UTF-16 files carrying ASCII-
-    compatible addresses used to be skipped and the run still returned 0. latin-1 cannot fail,
-    so every file gets scanned in at least one view; NUL-carrying bytes are additionally read
-    as UTF-16 in both byte orders, which is how a BOM-less UTF-16 address becomes visible.
+    compatible addresses used to be skipped and the run still returned 0.
+
+      * valid UTF-8            -> read as UTF-8
+      * NULs present           -> additionally read as UTF-16, both byte orders (that is how a
+                                  BOM-less wide-encoded address becomes visible)
+      * 8-bit text             -> read as latin-1, which cannot fail
+      * genuinely binary bytes -> the printable ASCII RUNS inside them, like `strings`. Reading
+                                  compressed bytes as latin-1 instead invents matches out of
+                                  noise; runs keep any embedded text visible without that.
     """
     views = []
     try:
@@ -189,9 +217,12 @@ def _views(data):
     if b"\0" in data:
         for codec in ("utf-16-le", "utf-16-be"):
             views.append(data.decode(codec, "replace"))
-    fallback = data.decode("latin-1")
-    if fallback not in views:
-        views.append(fallback)
+    if _is_binary(data):
+        views.append(b"\n".join(_RUNS.findall(data)).decode("ascii", "replace"))
+    else:
+        fallback = data.decode("latin-1")
+        if fallback not in views:
+            views.append(fallback)
     return views
 
 

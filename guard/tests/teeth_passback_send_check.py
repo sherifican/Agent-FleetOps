@@ -13,8 +13,13 @@ spec = importlib.util.spec_from_file_location("psc", "./guard/passback_send_chec
 psc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(psc)
 
-TARGET = (os.environ.get("PASSBACK_OUTBOX", "~/comms/outbound") + "/replies/"
-          + os.environ.get("PASSBACK_TEETH_TARGET", "REPLY_example.md"))  # EDIT ME: a reply you actually sent
+OUTBOX = os.path.expanduser(os.environ.get("PASSBACK_OUTBOX", "") or "")
+if not OUTBOX:
+    print("2 CANNOT_CHECK: set PASSBACK_OUTBOX to the outbox this teeth test should exercise.\n"
+          "   There is no default — a guessed layout is one machine's, and a check aimed at a\n"
+          "   path that does not exist here would report a clean-looking nothing.")
+    sys.exit(2)
+TARGET = OUTBOX + "/replies/" + os.environ.get("PASSBACK_TEETH_TARGET", "REPLY_example.md")
 BACKUP = os.environ.get("TEETH_BACKUP", "/tmp/teeth_target.bak")
 
 

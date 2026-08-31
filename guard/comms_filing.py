@@ -36,7 +36,9 @@ import os
 import shutil
 import sys
 
-DEFAULT_ROOT = os.environ.get("COMMS_ROOT", "~/comms")  # EDIT ME: your comms root
+# No baked-in default: one machine's directory layout is not an adopter's. Set COMMS_ROOT or
+# pass --root; unset is CANNOT_CHECK, never a scan of a guessed path that happens to be empty.
+DEFAULT_ROOT = os.path.expanduser(os.environ.get("COMMS_ROOT", "") or "") or None
 
 # prefix -> the folder it belongs in
 # NARROW BY DESIGN. A first draft asserted a full prefix->folder mapping and fired on 31 files across
@@ -101,6 +103,10 @@ def main(argv=None):
     ap.add_argument("--fix", action="store_true",
                     help="MOVE each misfiled file into its correct sibling folder")
     args = ap.parse_args(argv)
+    if not args.root:
+        print("2 CANNOT_CHECK: no comms root. Pass --root, or set COMMS_ROOT — this check ships "
+              "no default, because a guessed layout would scan nothing and report it as clean.")
+        return 2
 
     misfiled, unmeasured = check(args.root)
 

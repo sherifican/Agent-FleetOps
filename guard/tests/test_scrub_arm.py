@@ -29,6 +29,7 @@ MARKER = "SCRUB ARM HAS TEETH - ALL CHECKS PASSED"
 ADDR = "10." + "20.30.40"
 HOME_UNIX = "/ho" + "me/plantedperson/notes.md"
 HOME_WIN = "C:" + "\\Users" + "\\plantedperson\\work"
+TILDE_ACCOUNT = "~" + "plantedperson/projects/notes.md"
 QUOTE_PERSON = "the ow" + 'ner said "planted words"'
 QUOTE_SELF = "h" + "e put it him" + 'self as "planted words"'
 CLEAN_LINES = "\n".join([
@@ -73,6 +74,21 @@ def test_baseline_flags_unix_home_path():
 def test_baseline_flags_windows_home_path():
     rc, out = _scan_one("staged at %s\n" % HOME_WIN)
     assert rc == 1 and "home-path" in out, out
+
+
+def test_baseline_flags_the_tilde_account_form():
+    """The tilde shorthand names the same account as the full home path, and the arm could not
+    see it: only the spelled-out form was covered."""
+    rc, out = _scan_one("the tree also lives at %s\n" % TILDE_ACCOUNT)
+    assert rc == 1 and "home-path-tilde" in out, out
+
+
+def test_the_account_less_home_anchors_stay_clean():
+    """The stated scope limit, kept honest: a bare home anchor names no account, and the corpus
+    documents adopter config paths that way. What ships one as a LAYOUT is a fallback default,
+    gated by guard/tests/test_shipped_defaults.py."""
+    rc, out = _scan_one("keep artifacts under ~/artifacts and $HOME/.config/tool.json\n")
+    assert rc == 0, out
 
 
 def test_baseline_flags_quoted_person():
