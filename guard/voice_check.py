@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-"""Keep the published voice first-person singular.
+"""Keep the FRONT-FACING voice first-person singular.
 
-This repository is written by one person, and the owner wants the published prose to
-say so. First-person plural is the default register of technical writing, so it comes
-back on its own: every new paragraph, comment and docstring is another chance for it
-to reappear, and nobody re-reads the whole tree looking for a pronoun.
+A README is the author talking to a reader, and there is one author here, so "we" is a
+false collective. First-person plural is the default register of technical writing, so
+it comes back on its own: every new paragraph is another chance, and nobody re-reads the
+tree looking for a pronoun.
+
+The scope is deliberately narrow, and the reason is worth stating because the first cut
+got it wrong. Material under `skills/` and `templates/` is written to be pulled INTO
+somebody else's fleet, where it becomes that team's own operating instructions — "we"
+there reads as the adopting team and is self-explanatory in place. Enforcing singular on
+it would be correcting prose that is not addressed to a reader at all. So this checks
+what a visitor READS to understand the project: README files, `docs/`, `adopt/`, and
+`specs/`.
 
 The hazard is that some of these words are DATA, not voice. `guard/brief_scan.py`
 exists to detect leaked hypotheses and appeals to consensus in dispatch briefs, so it
@@ -37,6 +45,18 @@ PLURAL = re.compile(
 
 TEXT_EXT = {".md", ".py", ".sh", ".tsv", ".txt", ".yml", ".yaml", ".toml",
             ".json", ".cfg", ".ini", ".template", ".svg", ".html", ".css", ".js"}
+
+# Front-facing = what a visitor reads to understand the project. Everything else in the
+# tree is code, or is material meant to be adopted into another fleet and spoken in that
+# fleet's voice.
+FRONT_DIRS = ("docs/", "adopt/", "specs/")
+
+
+def in_scope(rel):
+    rel = rel.replace(os.sep, "/")
+    if os.path.basename(rel).lower().startswith("readme") and rel.endswith(".md"):
+        return True
+    return rel.startswith(FRONT_DIRS)
 
 
 def _tracked(root):
@@ -76,7 +96,7 @@ def scan(root=ROOT):
     """{path: [(lineno, text)]} for every tracked text file."""
     hits = {}
     for rel in _tracked(root):
-        if os.path.splitext(rel)[1].lower() not in TEXT_EXT:
+        if os.path.splitext(rel)[1].lower() not in TEXT_EXT or not in_scope(rel):
             continue
         full = os.path.join(root, rel)
         try:
@@ -96,7 +116,7 @@ def scan(root=ROOT):
 
 def check(root=ROOT):
     files = [f for f in _tracked(root)
-             if os.path.splitext(f)[1].lower() in TEXT_EXT]
+             if os.path.splitext(f)[1].lower() in TEXT_EXT and in_scope(f)]
     if not files:
         return 2, ["UNMEASURED: no text files were scanned, so a clean result would "
                    "mean nothing"]
@@ -140,7 +160,13 @@ def _selftest():
 
     with tempfile.TemporaryDirectory() as td:
         os.makedirs(os.path.join(td, "guard"))
-        doc = pathlib.Path(td) / "DOC.md"
+        os.makedirs(os.path.join(td, "skills", "example"))
+        # An in-scope front-facing document. The first version of this fixture used a
+        # name that is NOT front-facing, so after the scope narrowed it scanned nothing
+        # and every case failed at once — which is the vacuity trap this guard warns
+        # about, caught in its own selftest.
+        doc = pathlib.Path(td) / "README.md"
+        adopted = pathlib.Path(td) / "skills" / "example" / "SKILL.md"
         allow = pathlib.Path(td) / ALLOW
 
         doc.write_text("This is the record. It states what was measured.\n")
@@ -152,23 +178,32 @@ def _selftest():
         doc.write_text("We measured it, and our result stands.\n")
         case("plural prose goes red", check(td)[0] == 1)
 
-        allow.write_text("DOC.md\tthe scanner's own fixtures live here\n")
+        allow.write_text("README.md\tthe scanner's own fixtures live here\n")
         case("a declared exemption with a reason is honoured", check(td)[0] == 0)
 
-        allow.write_text("DOC.md\n")          # no reason
+        allow.write_text("README.md\n")          # no reason
         case("an exemption without a reason does not count", check(td)[0] == 1)
 
-        allow.write_text("DOC.md\tstill needed\nGONE.md\tnothing here any more\n")
+        allow.write_text("README.md\tstill needed\nGONE.md\tnothing here any more\n")
         case("an exemption for a file with no hits is reported stale",
              check(td)[0] == 1)
 
         doc.write_text("Plain singular prose again.\n")
-        allow.write_text("DOC.md\tno longer contains any\n")
+        allow.write_text("README.md\tno longer contains any\n")
         case("an exemption that outlived its need goes red", check(td)[0] == 1)
 
         os.remove(str(allow))
         case("with no allow-list at all, plural still goes red",
              (doc.write_text("Our result.\n"), check(td)[0])[1] == 1)
+
+        # The scope rule itself, pinned: material written to be adopted into another
+        # fleet speaks in that fleet's voice and is not corrected here.
+        doc.write_text("Singular prose.\n")
+        adopted.write_text("We run this loop, and our gate refuses on red.\n")
+        case("plural in adopted material (skills/) is NOT enforced", check(td)[0] == 0)
+
+        doc.write_text("We measured it.\n")
+        case("plural in a front-facing README still goes red", check(td)[0] == 1)
 
     if failures:
         print(f"SELFTEST FAILED ({len(failures)}): " + ", ".join(failures))

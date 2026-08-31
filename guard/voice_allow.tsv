@@ -1,20 +1,16 @@
-# voice_allow.tsv — files whose first-person-plural words are DATA, not voice.
+# voice_allow.tsv — front-facing files whose plural words are DATA, not voice.
 #
-# guard/voice_check.py keeps the published prose first-person singular. A few files
-# legitimately CONTAIN that vocabulary: a scanner built to detect appeals to consensus
-# has to carry the phrases it detects, and its fixtures have to use them or the scanner
-# would never be proved able to fire. Rewriting those would break the guard while leaving
-# every test green, because the fixtures would have been rewritten to match it.
+# guard/voice_check.py keeps the FRONT-FACING prose first-person singular: README files,
+# docs/, adopt/, specs/. Code is out of scope, and so is skills/ and templates/ — that
+# material is written to be pulled into another fleet, where it becomes that team's own
+# operating instructions and "we" is the adopting team speaking, not this author.
 #
-# Every line here is CHECKED. A file listed with no remaining matches is reported as a
-# stale exemption, so this cannot quietly widen into a blanket permission.
+# This file is empty on purpose. It exists because a front-facing document could one day
+# need to QUOTE plural language (an example of a phrasing to avoid, a quotation from
+# someone else), and an exception with a stated reason is better than weakening the rule.
+#
+# Every line here is CHECKED: a file listed with no remaining matches is reported as a
+# stale exemption, so the list cannot quietly widen. It reported all eight of its first
+# entries the moment the scope narrowed, which is the behaviour to keep.
 #
 # Format:  PATH<TAB>why the words in this file are data rather than voice
-guard/brief_scan.py	the leak-detector's own rule ids, regexes and quoted example briefs; the docstrings quote those same patterns
-guard/tests/test_brief_scan.py	fixtures the scanner must fire on and mandated-language fixtures it must NOT fire on
-guard/mutation_harness.py	mutation strings that are byte-copies of brief_scan's rule literals; changing them unbinds the mutation
-guard/test_companion_cap.py	a quoted example phrase ("we fixed it") illustrating the unfalsifiable claim this guard exists to prevent
-guard/test_perceptual_prefilter.py	a verbatim quotation of the owner's words when he approved the sampling rate
-tui/tests/test_posture.py	a captured upstream version report used as a fixture; its bytes are the input under test
-guard/voice_check.py	carries the detection vocabulary as its own matching pattern
-guard/voice_allow.tsv	the reasons here quote the very phrases they exempt
