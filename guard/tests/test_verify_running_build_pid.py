@@ -18,7 +18,8 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from guard.verify_running_build_pid import bind_check, pid_identity, sha256_file  # noqa: E402
+from guard.verify_running_build_pid import (  # noqa: E402
+    bind_check, pid_identity, selftest, sha256_file)
 
 MARKER = "PID BIND HAS TEETH - ALL CHECKS PASSED"
 HAVE_PROC = os.path.isdir("/proc")
@@ -99,6 +100,17 @@ def test_dead_pid_is_cannot_check_never_green():
         pass  # exited context: process terminated, dir gone
     rec = bind_check(2 ** 22 + 11, "/nonexistent", "0" * 64)
     assert rec["status"] == "cannot-check", "an unanswerable bind must be loud, not green: %r" % rec
+
+
+def test_selftest_is_green():
+    """The runner advertises "every proof-carrying tool must prove itself"; --selftest used
+    to be a usage error (exit 2), so this arm had nothing to run."""
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = selftest()
+    assert rc == 0, "selftest red:\n" + buf.getvalue()
 
 
 ALL = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

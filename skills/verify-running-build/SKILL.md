@@ -86,13 +86,22 @@ Mechanism per platform:
 
 - **Linux** — `/proc/<pid>/exe`, `/proc/<pid>/cmdline`, and `/proc/<pid>/cwd` resolve the
   interpreter and the script/config the process loaded.
-- **Windows** — the process table's executable path for the PID.
+- **Windows** — the process table's executable path for the PID. **Described, not implemented
+  here**: you have to write this one. See the note below before relying on it.
 - **Every platform** — the content hash of the resolved file, compared against the hash of the
   bytes you deployed. The hash is the binding; the path alone is not.
 
 Reference implementation and gate: `guard/verify_running_build_pid.py` and
 `guard/tests/test_verify_running_build_pid.py` — a marker file the serving PID never loaded goes
-RED while the file-diff and uptime checks stay green.
+RED while the file-diff and uptime checks stay green. `--selftest` runs that same
+path-mismatch branch against a live child process, with the PID's own file as the green control.
+
+**The reference implementation is Linux-only, and says so at runtime.** It resolves the loaded
+file from `/proc` and nothing else, so on a Windows host — or anywhere without `/proc` — it
+returns CANNOT CHECK for every PID, never a pass. The Windows row above is a specification of
+what an adopter must implement (resolve the executable path for the PID from the process table,
+then hash the resolved file); it is not code you are being handed. Treat a CANNOT CHECK as the
+loud absence it is: this deploy went unverified on that axis.
 
 ## Fail closed, and roll back automatically
 

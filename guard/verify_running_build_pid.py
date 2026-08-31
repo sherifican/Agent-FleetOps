@@ -25,10 +25,19 @@ Verdicts from bind_check(): status "bound" · "not-bound" · "cannot-check".
 Exit codes (CLI): 0 bound · 1 not bound · 2 cannot check.
 Gate: guard/tests/test_verify_running_build_pid.py — a marker file the serving PID never
 loaded goes RED while the file-diff and uptime checks stay green.
+
+`--selftest` runs the PATH-MISMATCH branch against a LIVE child process: it starts a
+server, asks the binding whether that PID is serving a marker file the PID never loaded,
+and requires red — with the same PID's real file as the green control, so the arm is shown
+to discriminate rather than to refuse everything. On a host without /proc there is nothing
+to exercise, and the selftest says so and returns 2 (CANNOT CHECK) rather than passing.
 """
 import hashlib
 import os
+import subprocess
 import sys
+import tempfile
+import time
 
 
 def sha256_file(path):
@@ -96,9 +105,73 @@ def bind_check(pid, deployed_path, expected_sha256):
             "reason": "pid %d serves the deployed bytes" % pid}
 
 
+def selftest():
+    """Teeth against a live process: the PATH-MISMATCH branch must go RED on a marker file
+    the serving PID never loaded, the same PID's real file must go GREEN (so the red is
+    discriminating, not blanket), and a dead PID must be CANNOT CHECK."""
+    if not os.path.isdir("/proc"):
+        print("CANNOT CHECK — this reference implementation resolves the loaded file from "
+              "/proc, and there is no /proc here. Nothing was exercised; an absent check "
+              "must be loud, never green.")
+        return 2
+    failures = []
+    with tempfile.TemporaryDirectory() as d:
+        served = os.path.join(d, "served.py")
+        with open(served, "w", encoding="utf-8") as fh:
+            fh.write("import time\nwhile True:\n    time.sleep(0.2)\n")
+        marker = os.path.join(d, "marker.py")
+        with open(marker, "w", encoding="utf-8") as fh:
+            fh.write("# a file this process never loaded\n")
+        proc = subprocess.Popen([sys.executable, served], cwd=d)
+        try:
+            # Between fork and exec, /proc/<pid>/cmdline still shows the PARENT's argv, and
+            # the resolver would honestly resolve this script. Waiting for the child's own
+            # argv is a CONTROL, and its failure is a control failure, not a verdict.
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                ident = pid_identity(proc.pid)
+                if ident and any(a.endswith("served.py") for a in ident["cmdline"]):
+                    break
+                time.sleep(0.01)
+            else:
+                print("  FAIL  the serving process never came up — CONTROL failure, not a "
+                      "verdict; nothing was measured")
+                return 2
+            rec = bind_check(proc.pid, marker, sha256_file(marker))
+            if rec["status"] != "not-bound":
+                failures.append("a marker file the PID never loaded reported %r — the "
+                                "path-mismatch branch did not fire" % rec["status"])
+            elif "never loaded" not in rec["reason"] or served not in rec["reason"]:
+                failures.append("the refusal must name what the PID actually resolved: %r"
+                                % rec["reason"])
+            rec = bind_check(proc.pid, served, sha256_file(served))
+            if rec["status"] != "bound":
+                failures.append("the PID's OWN file reported %r — a check that refuses "
+                                "everything discriminates nothing: %s"
+                                % (rec["status"], rec["reason"]))
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+        dead = bind_check(proc.pid, served, sha256_file(served))
+        if dead["status"] != "cannot-check":
+            failures.append("a dead PID reported %r — no identity to bind against must be "
+                            "CANNOT CHECK, never a pass" % dead["status"])
+    for f in failures:
+        print("  FAIL  %s" % f)
+    if failures:
+        print("pid bind selftest: %d check(s) RED" % len(failures))
+        return 1
+    print("pid bind selftest: a marker file the live PID never loaded is REFUSED and the "
+          "resolved file is named; the same PID's own file binds; a dead PID is CANNOT CHECK")
+    return 0
+
+
 def main(argv):
+    if argv and argv[0] == "--selftest":
+        return selftest()
     if len(argv) != 3:
         print("usage: verify_running_build_pid.py <pid> <deployed-file> <expected-sha256>")
+        print("       verify_running_build_pid.py --selftest")
         return 2
     rec = bind_check(int(argv[0]), argv[1], argv[2])
     print("%s: %s" % (rec["status"].upper(), rec["reason"]))
