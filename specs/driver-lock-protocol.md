@@ -15,12 +15,31 @@ write-time integrity check for those live-collision cases.
 ## Shipped default: one coder per repository
 
 The concurrent paths below are a reference design. The shipped, gated default is simpler: **one
-coder per repository.** An edit pass opening against a working tree that carries another job's
-dirty files refuses to start — commit or stash between passes — and the refusal names only real
-paths, verbatim from the version-control status: a refusal that fabricates paths teaches its
-operator to ignore refusals. Enforcement and gate: `guard/one_writer_gate.py` and
-`guard/tests/test_one_writer_gate.py` (the gate proves the refusal fires on a foreign dirty file
-and that every path a refusal names actually exists).
+coder per repository**, and it has two mechanisms in this order.
+
+**1. An atomic lock, and it is the gate.** A dirty-tree snapshot is not a one-writer gate: two
+jobs that both look at the same CLEAN tree both see nothing to refuse, both proceed, and both
+write. Measured, on one tree, both calls returning proceed. So the shipped proceed path is
+winning an exclusive create (`O_CREAT|O_EXCL`) on a lock file that records the OWNER, the SCOPE
+(the claimed paths), the pid and the time. Exactly one contender can win, whatever the tree looks
+like. The winner holds it for the transaction and releases it afterwards; only the owner may
+release it. A lock whose holder process is gone is reported STALE and is **not** broken
+automatically — an auto-breaking lock is a lock with a social off-switch — so clearing one is an
+explicit operator action that refuses while the holder is alive.
+
+**2. The dirty-tree refusal, evaluated under the lock.** A working tree carrying another job's
+dirty files means someone edited without the lock, and the pass still refuses to start — commit
+or stash between passes. The refusal names only real paths, verbatim from the version-control
+ledger and never assembled: only a rename or copy carries an original path, so splitting every
+status line on ` -> ` fabricated a path that did not exist out of a file literally NAMED
+`foo -> bar.txt`. A path that is dirty because it was DELETED is named as a deletion, not as a
+file to go and look at, and a claim given as an absolute path is normalized to the ledger's
+root-relative form instead of being refused as foreign.
+
+Enforcement and gate: `guard/one_writer_gate.py` and `guard/tests/test_one_writer_gate.py` (the
+gate races contenders and proves exactly one acquires, proves the refusal fires on a foreign dirty
+file, and checks every named path against the filesystem rather than by re-running the parser
+under test).
 
 ## The lock file
 
