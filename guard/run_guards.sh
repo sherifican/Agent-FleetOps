@@ -23,9 +23,22 @@ WITH_CANARY=0
 [ "${1:-}" = "--with-canary" ] && WITH_CANARY=1
 
 worst=0
+n_ok=0; n_violation=0; n_unmeasured=0; n_skipped=0
 note() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 # 2 must win over 1, so never take a plain max of the raw codes.
-roll() { local rc=$1; if [ "$rc" = 2 ] || [ "$worst" = 2 ]; then worst=2; elif [ "$rc" != 0 ]; then worst=1; fi; }
+roll() { local rc=$1
+  case "$rc" in
+    0) n_ok=$((n_ok + 1)) ;;
+    2) n_unmeasured=$((n_unmeasured + 1)) ;;
+    *) n_violation=$((n_violation + 1)) ;;
+  esac
+  if [ "$rc" = 2 ] || [ "$worst" = 2 ]; then worst=2; elif [ "$rc" != 0 ]; then worst=1; fi; }
+# NOT CONFIGURED is a THIRD outcome, and keeping it distinct is the point: 2 = UNMEASURED means
+# a check that WAS configured did not run, and you do not know what it would have said. An
+# optional integration nobody supplied is not that — there is nothing to run and nothing missing.
+# Rolling it in as UNMEASURED made every pristine clone report worse-than-a-violation forever,
+# which is the same zero-information failure as always reporting clean.
+skip() { n_skipped=$((n_skipped + 1)); printf '   NOT CONFIGURED (skipped, not UNMEASURED): %s\n' "$1"; }
 
 note "1. TEETH-PROVER — can every guard actually fail?"
 echo "   (nothing below this line means anything until this passes)"
@@ -44,9 +57,7 @@ python3 guard/scrub_arm.py --selftest; roll $?
 if [ -f detect_poison.py ]; then
   python3 guard/fetch_gate.py --selftest; roll $?
 else
-  echo "   NOTE: detect_poison.py (the adopter-supplied detector) is not present, so the fetch-gate"
-  echo "   selftest cannot run here. 2 = UNMEASURED — an absent check must be loud, never green."
-  roll 2
+  skip "the fetch-gate selftest needs the adopter-supplied detector (detect_poison.py at the repo root)"
 fi
 # The passback teeth test needs an outbox that exists on THIS box. There is no default: a
 # fallback would ship one machine's directory layout to every adopter, and a check aimed at a
@@ -64,23 +75,17 @@ if [ -n "${PASSBACK_OUTBOX:-}" ]; then
     roll 2
   fi
 else
-  echo "   NOT CONFIGURED: the passback teeth test needs PASSBACK_OUTBOX (an outbox on this box)."
-  echo "   Nothing to measure and nothing missing — skipped, not UNMEASURED."
+  skip "the passback teeth test needs PASSBACK_OUTBOX (an outbox directory on this box)"
 fi
 
 note "5. NEGATIVE CONTROL — the runner itself must be able to fail"
 echo "   A committed, deliberately broken config MUST read as broken. If it reads clean, every"
 echo "   green above is a light wired to nothing."
-nc_out="$(HONESTY_GATE_CONFIG=guard/tests/fixtures/honesty_gate.config.broken.json \
-   python3 guard/honesty_stop_gate.py --check-config 2>&1)"; nc_rc=$?
-if [ "$nc_rc" -eq 0 ] || ! printf '%s' "$nc_out" | grep -q "nonexistent-verifier-9f3a"; then
-  echo "   ⛔ the broken fixture was NOT detected for its OWN reason (rc=$nc_rc) — the runner has"
-  echo "   lost the ability to fail. A non-zero for an environmental reason does not count:"
-  printf '%s\n' "$nc_out"
-  roll 1
-else
-  echo "   broken fixture detected for its own named reason (rc=$nc_rc) — the runner can fail"
-fi
+# The acceptance test lives in guard/negative_control.py, where it can be unit-gated against
+# impostors. It used to be two lines here: non-zero exit AND the token appearing anywhere in the
+# output — which `echo <token>; exit 13` satisfies, as does any crash that prints the config it
+# just read. Both were measured being accepted as proof the runner can fail.
+python3 guard/negative_control.py; roll $?
 
 note "6. PUBLIC-BYTE SCRUB — no private material in public-bound bytes"
 echo "   Two pattern classes: private material and quoted speech. A rule name generalizes;"
@@ -104,6 +109,9 @@ else
 fi
 
 note "RESULT"
+# One machine-readable line, so the step accounting can be asserted instead of eyeballed.
+printf 'steps: ok=%d violations=%d unmeasured=%d skipped=%d\n' \
+  "$n_ok" "$n_violation" "$n_unmeasured" "$n_skipped"
 case "$worst" in
   0) echo "clean — every guard proved, every surface agrees" ;;
   1) echo "VIOLATIONS found (see above)" ;;

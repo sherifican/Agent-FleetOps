@@ -72,6 +72,18 @@ def test_enforced_names_are_the_tool_neutral_pair():
     assert set(match.group(1).split("|")) == ACCEPTED, match.group(1)
 
 
+def test_the_hook_is_executable_in_the_index():
+    """git SKIPS a hook without the execute bit — and says so only as a hint, on stderr.
+
+    The tracked mode is what a clone gets, and guard/hooks/install.sh copies it into place, so a
+    non-executable file here is a contract that quietly enforces nothing.
+    """
+    listing = subprocess.run(["git", "-C", REPO, "ls-files", "-s", "--", "guard/hooks/commit-msg"],
+                             capture_output=True, text=True)
+    assert listing.returncode == 0, listing.stderr
+    assert listing.stdout.split()[0] == "100755", listing.stdout.strip()
+
+
 def test_rejection_text_advertises_exactly_what_is_enforced():
     _, out = _run("guards: a change with no attribution\n")
     advertised = set(re.findall(r"^\s{6}([A-Za-z][A-Za-z-]*): <", out, re.M))
