@@ -477,9 +477,9 @@ open-source work. Each is credited inline where it lives; consolidated here:
 - **Solo-Rich Report** — the long-form writer scaffold is adapted from **Tongyi WebWeaver**.
 - **Leg-failure classification** — adapted from **opencode**'s retry classifier (`session/retry.ts`).
 - **`guard/` verification stack** — adapted from the `_breaker/` layer of the desktop application this
-  project was exported from.
+  project was exported from. (ParaKit)
 
-If we've adapted your work and the credit here is wrong or missing, open an issue — we'd rather correct
+If I've adapted your work and the credit here is wrong or missing, open an issue — I'd rather correct
 it than leave it implicit.
 
 ## License
