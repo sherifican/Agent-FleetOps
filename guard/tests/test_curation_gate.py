@@ -2,8 +2,12 @@
 one-model approval, vote-before-verification, and disagreement without an operator
 verdict.
 
-Red demo: mutation CG1 in guard/mutation_harness.py lowers the independent-reviewer floor
-to one and this gate must go red.
+Also held open here: the omission-shaped bypasses, every one of them measured returning
+"clean" on the first draft — two votes carrying the SAME reviewer id counting as a panel,
+a stringly `"independent": "false"` reading as TRUE, and a malformed element that CRASHED
+where the contract advertises exit 2. Red demos: CG1 lowers the independent-reviewer floor
+to one, CG2 stops counting DISTINCT identities so an echo passes, CG3 accepts a stringly
+boolean. Each must take this gate red.
 
 Runs two ways: under pytest and standalone —
 `python3 guard/tests/test_curation_gate.py` — printing the all-pass marker the mutation
@@ -60,6 +64,46 @@ def test_well_formed_record_passes():
 def test_invalid_record_is_cannot_check():
     rc, out = gate({})
     assert rc == 2, "an unreadable record must be loud, never green: %r" % out
+
+
+def test_one_model_echoing_itself_is_not_a_panel():
+    """Measured red: two votes with the SAME reviewer id and independent:true returned
+    (0, []). One identity is one opinion, whatever it is labelled."""
+    rec = {"proposals": [{"id": "prop-1", "verified_before_vote": True,
+                          "votes": [{"reviewer": "model-a", "independent": True,
+                                     "verdict": "accept"},
+                                    {"reviewer": "model-a", "independent": True,
+                                     "verdict": "accept"}],
+                          "operator_verdict": None}]}
+    rc, out = gate(rec)
+    assert rc == 1, "one model echoing itself counted as a panel"
+    assert any("one-model approval" in ln for ln in out), out
+    assert any("more than once" in ln for ln in out), out
+
+
+def test_stringly_booleans_are_rejected_not_coerced():
+    """`"independent": "false"` and `"verified_before_vote": "false"` returned rc=0."""
+    rec = {"proposals": [{"id": "prop-1", "verified_before_vote": "false",
+                          "votes": [{"reviewer": "model-a", "independent": "false",
+                                     "verdict": "accept"},
+                                    {"reviewer": "model-b", "independent": "false",
+                                     "verdict": "accept"}],
+                          "operator_verdict": None}]}
+    rc, out = gate(rec)
+    assert rc == 2, "a quoted \"false\" was coerced into a positive"
+    assert any("JSON boolean" in ln for ln in out), out
+
+
+def test_a_malformed_element_is_reported_not_raised():
+    """The contract advertises exit 2; the first draft raised AttributeError."""
+    rc, out = gate({"proposals": ["nope"]})
+    assert rc == 2, "a malformed record must be CANNOT CHECK: %r" % out
+    assert any("not an object" in ln for ln in out), out
+
+
+def test_a_proposal_with_no_votes_is_unjudgeable():
+    rc, out = gate({"proposals": [{"id": "p", "verified_before_vote": True, "votes": []}]})
+    assert rc == 2, "a proposal with no recorded votes is not a reviewed proposal: %r" % out
 
 
 def test_selftest_is_green():

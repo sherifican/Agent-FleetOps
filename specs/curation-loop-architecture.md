@@ -108,7 +108,14 @@ below is the mechanism, generalized; numbers are from the reference deployment.
 
 ## Minimal adoption
 
-A single agent + human can run this with: a git repo for the rule base, a line-count watcher, one
-audit prompt that outputs structured proposals, a review step (verifier first, then the
-panel/operator gate of rule 11), and a script that applies exact matches or refuses. The two components most tempting to skip — the rejects log and the
-rebaseline — are the two that prevent the quiet failure modes.
+The true minimum is **two independent reviewers plus one accountable operator** — not one agent
+and a human. Rule 11 makes the panel part of the mechanism, so a deployment with a single reviewer
+cannot pass its own gate; `guard/curation_gate.py` rejects that record. Independent means distinct
+reviewer identities: the gate counts identities, because one model voting twice is an echo, not a
+second opinion.
+
+Everything else can be one agent: a git repo for the rule base, a line-count watcher, one audit
+prompt that outputs structured proposals, a review step (verifier first, then the panel/operator
+gate of rule 11), and a script that applies exact matches or refuses. The two components most
+tempting to skip — the rejects log and the rebaseline — are the two that prevent the quiet failure
+modes.

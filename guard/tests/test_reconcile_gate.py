@@ -22,7 +22,7 @@ from guard.reconcile_gate import gate, selftest  # noqa: E402
 MARKER = "RECONCILE GATE HAS TEETH - ALL CHECKS PASSED"
 
 
-def _record(verified, mechanism="checked the cited source directly", action="ACT"):
+def _record(verified, mechanism="supported", action="ACT"):
     return {"claims": [{
         "id": "c1", "action": action,
         "legs": [{"leg": "A", "verdict": "supported"},
@@ -46,10 +46,55 @@ def test_verified_shared_premise_clears_act():
     assert rc == 0, "a verified shared premise must clear: %r" % out
 
 
-def test_act_without_mechanism_verdict_is_refused():
-    rc, out = gate(_record(verified=True, mechanism=""))
+def test_act_whose_mechanism_verdict_is_not_held_is_refused():
+    rc, out = gate(_record(verified=True, mechanism="unproven"))
     assert rc == 1, "the reason must be judged separately from the answer"
     assert any("R2" in ln for ln in out), out
+
+
+def test_act_missing_the_conclusion_verdict_field_is_unjudgeable():
+    """Measured red: an ACT carrying mechanism_verdict and NO conclusion_verdict field at
+    all returned (0, []). The contract requires BOTH, precisely so being accidentally
+    right is distinguishable from having diagnosed correctly."""
+    rec = _record(verified=True)
+    del rec["claims"][0]["conclusion_verdict"]
+    rc, out = gate(rec)
+    assert rc == 2, "a required verdict field can be omitted and the ACT still ships"
+    assert any("conclusion_verdict" in ln for ln in out), out
+
+
+def test_act_with_premises_omitted_is_unjudgeable():
+    rec = _record(verified=True)
+    del rec["claims"][0]["premises"]
+    rc, out = gate(rec)
+    assert rc == 2, "an ACT with no premises recorded shipped as clean"
+    assert any("premises is absent" in ln for ln in out), out
+
+
+def test_act_listing_zero_shared_premises_is_refused():
+    rec = _record(verified=True)
+    rec["claims"][0]["premises"] = []
+    rc, out = gate(rec)
+    assert rc == 1, "an ACT listing no shared premise shipped, so a correlated-error ACT rides"
+    assert any("R3" in ln for ln in out), out
+
+
+def test_a_stringly_boolean_is_rejected_not_coerced():
+    """`"verified": "false"` with `"verifier": "none"` returned rc=0: a quoted "false" is a
+    non-empty string, and every truthiness test passes it."""
+    rec = _record(verified=True)
+    rec["claims"][0]["premises"] = [{"id": "src-1", "shared": True,
+                                     "verified": "false", "verifier": "none"}]
+    rc, out = gate(rec)
+    assert rc == 2, "a stringly boolean was coerced into a positive"
+    assert any("JSON boolean" in ln for ln in out), out
+
+
+def test_a_malformed_element_is_reported_not_raised():
+    """The contract advertises exit 2; the first draft raised AttributeError."""
+    rc, out = gate({"claims": ["nope"]})
+    assert rc == 2, "a malformed record must be CANNOT CHECK: %r" % out
+    assert any("not an object" in ln for ln in out), out
 
 
 def test_hold_is_not_blocked():
