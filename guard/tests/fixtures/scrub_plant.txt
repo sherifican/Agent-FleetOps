@@ -1,7 +1,7 @@
 # scrub_plant.txt — the scrub arm's COMMITTED plant: a standing negative control, not a demo.
 # `scrub_arm.py --selftest` requires every baseline rule to flag at least one PLANT: line and
 # zero CLEAN: lines. This file is EXCLUDED from the arm's corpus scan; it exists to be caught.
-PLANT: reachable at 10.20.30.40 on the second box
+PLANT: reachable at 10.20.30.40 on a private host
 PLANT: the tree lives under /home/plantedmaintainer/projects/example
 PLANT: also staged at C:\Users\plantedmaintainer\work
 PLANT: and shorthanded as ~plantedmaintainer/projects/example

@@ -11,7 +11,7 @@ Values are never printed — only file, line number, class, and pattern name.
 Mutation proof (--self-test): a planted fake API key and a planted identity string
 must each go red; a clean fixture must pass.
 """
-import sys, os, re, tempfile, shutil
+import sys, os, re, subprocess, tempfile, shutil
 
 SECRET_PATTERNS = [
     ("openai-style-key",   re.compile(r"sk-[A-Za-z0-9]{20,}")),
@@ -60,16 +60,44 @@ def _allowlist(staging: str):
             out.append((parts[0], parts[1]))
     return out
 
+def _publishable_files(staging: str, skip_dirs):
+    """The bytes git will actually publish, not whatever is lying in the directory.
+
+    A working tree holds generated output, caches and scratch that .gitignore already excludes;
+    scanning those blocks a push over bytes that cannot leave. Ask git what is tracked. Falls back
+    to a filesystem walk when the target is not a git work tree, which is what the self-test uses.
+    """
+    try:
+        out = subprocess.run(["git", "-C", staging, "ls-files", "-z"],
+                             capture_output=True, check=True).stdout
+        rels = [r for r in out.decode("utf8", "replace").split("\0") if r]
+        if rels:
+            return [r for r in rels
+                    if not any(part in skip_dirs for part in r.split("/"))]
+    except (OSError, subprocess.SubprocessError):
+        # Not a git work tree, or git unavailable -> fall back to a filesystem walk.
+        # NARROW deliberately: a bare `except Exception` here swallowed a NameError (subprocess
+        # was never imported) and silently degraded to walking the tree, which then flagged
+        # gitignored build output and blocked a push over bytes that could never be published.
+        # The self-test could not catch it: it runs on a temp non-git dir, where the fallback IS
+        # the correct branch.
+        pass
+    walked = []
+    for root, dirs, files in os.walk(staging):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        for f in files:
+            walked.append(os.path.relpath(os.path.join(root, f), staging))
+    return walked
+
+
 def scan(staging: str):
     allow = _allowlist(staging)
     hits = []
     skip_dirs = {".git", "_reports", "_tools", "__pycache__", ".pytest_cache", ".venv", "node_modules"}
-    for root, dirs, files in os.walk(staging):
-        dirs[:] = [d for d in dirs if d not in skip_dirs]
-        for f in files:
-            rel = os.path.relpath(os.path.join(root, f), staging)
+    for rel in _publishable_files(staging, skip_dirs):
             try:
-                lines = open(os.path.join(root, f), encoding="utf8", errors="ignore").read().split("\n")
+                lines = open(os.path.join(staging, rel), encoding="utf8",
+                             errors="ignore").read().split("\n")
             except OSError:
                 continue
             for i, ln in enumerate(lines, 1):

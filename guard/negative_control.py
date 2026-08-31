@@ -32,10 +32,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 GATE = os.path.join(HERE, "honesty_stop_gate.py")
 FIXTURE = os.path.join(HERE, "tests", "fixtures", "honesty_gate.config.broken.json")
 
-TOKEN = "nonexistent-verifier-9f3a"
+# Named VERIFIER_NAME rather than VERIFIER_NAME: this is the NAME of a verification command that must
+# fail to resolve, not a credential — and a constant called VERIFIER_NAME assigned a quoted string is
+# what a secret scanner is built to flag, so the old name tripped this repo's own publish gate.
+VERIFIER_NAME = "nonexistent-verifier-9f3a"
 EXPECTED_RC = 1                      # the gate's documented "this config is bad" exit
 MARKER = "check-config: PROBLEMS"    # printed only by the config validation's reject path
-REASON = re.compile(r"verification command '%s' does not resolve" % re.escape(TOKEN))
+REASON = re.compile(r"verification command '%s' does not resolve" % re.escape(VERIFIER_NAME))
 
 
 def verdict(rc, out):

@@ -2,3 +2,11 @@
 README.md	owner-identity
 LICENSE	owner-identity
 specs/driver-lock-protocol.md	owner-identity
+# The scrub arm's plant file exists to CARRY these patterns: its self-test asserts each baseline
+# rule fires on its own plant, so a plant that this gate scrubbed would make that self-test
+# unfalsifiable. Exact path + exact pattern, one decision per line.
+guard/tests/fixtures/scrub_plant.txt	rfc1918-ip
+guard/tests/fixtures/scrub_plant.txt	home-user-path
+# The scrub arm's CLEAN-line fixture asserts a documentation example is NOT flagged; the line has
+# to contain the shape it is proving benign.
+guard/tests/test_scrub_arm.py	home-user-path

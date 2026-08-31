@@ -15,7 +15,7 @@ REAL = ("check-config: PROBLEMS\n"
         "  ✗ verification command '%s' does not resolve on this box (stair to nowhere — it "
         "would read as coverage and verify nothing)\n"
         "Fix these before trusting the gate: drop unresolved commands, fill empty lists.\n"
-        % nc.TOKEN)
+        % nc.VERIFIER_NAME)
 
 
 def test_the_real_rejection_is_accepted():
@@ -24,14 +24,14 @@ def test_the_real_rejection_is_accepted():
 
 
 def test_impostor_that_only_echoes_the_token_is_rejected():
-    accepted, why = nc.verdict(13, nc.TOKEN + "\n")
+    accepted, why = nc.verdict(13, nc.VERIFIER_NAME + "\n")
     assert not accepted, "a bare echo of the token was accepted as proof of teeth: " + why
 
 
 def test_impostor_that_prints_the_config_it_read_is_rejected():
     with open(nc.FIXTURE, encoding="utf-8") as fh:
         crash = "Traceback (most recent call last):\n" + fh.read() + "\nKeyError: 'subjects'\n"
-    assert nc.TOKEN in crash, "the fixture must carry the token for this case to mean anything"
+    assert nc.VERIFIER_NAME in crash, "the fixture must carry the token for this case to mean anything"
     accepted, why = nc.verdict(9, crash)
     assert not accepted, "a crash that echoed the config was accepted: " + why
 
@@ -63,4 +63,4 @@ def test_the_fixture_parses_to_the_plain_token():
     """
     with open(nc.FIXTURE, encoding="utf-8") as fh:
         cfg = json.load(fh)
-    assert cfg["verification_commands"] == [nc.TOKEN], cfg["verification_commands"]
+    assert cfg["verification_commands"] == [nc.VERIFIER_NAME], cfg["verification_commands"]
