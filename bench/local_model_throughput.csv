@@ -29,11 +29,11 @@ Qwythos-9B,28,decode,2,short context; degrades with depth,long-context eval reco
 Qwythos-9B,17,decode,2,past 512k context; needle retrieval perfect to 700k; 1M = timeout,long-context eval record,box-a,dgpu-a,,,,
 Qwythos-9B,2415,prefill,n/a,short context,long-context eval record,box-a,dgpu-a,,,,
 Qwythos-9B,646,prefill,n/a,past 512k context; real ceiling is SPEED not VRAM,long-context eval record,box-a,dgpu-a,,,,
-gemma4:26b-a4b-it-qat,83.3,generation,1,2026-08-22 cross-box comparison; one recorded run,2026-08-22 operating log,box-a,dgpu-a,q4_0-qat,,,
-qwen3-coder:30b,35.6,generation,1,2026-08-22 cross-box comparison; one recorded run,2026-08-22 operating log,box-a,dgpu-a,,,,
-qwen3.8:27b,21.2,generation,1,2026-08-22 cross-box comparison; one recorded run,2026-08-22 operating log,box-a,dgpu-a,,,,
-gemma4:31b-it-qat,18.2,generation,1,2026-08-22 cross-box comparison; one recorded run,2026-08-22 operating log,box-a,dgpu-a,q4_0-qat,,,
-Ornith-1.0-9B,52,generation,1,2026-08-22 cross-box comparison; one recorded run; hf.co GGUF,2026-08-22 operating log,box-a,dgpu-a,q4_K_M,,,
+gemma4:26b-a4b-it-qat,83.3,generation,1,2026-08-22 cross-box comparison; one recorded run; serving stack backfilled 2026-08-31 from box-a hardware (NVIDIA RTX 5060 Ti) plus the installed ollama cuda_v12/cuda_v13 runners — NOT captured in the original run log,2026-08-22 operating log,box-a,dgpu-a,q4_0-qat,ollama-cuda,,
+qwen3-coder:30b,35.6,generation,1,2026-08-22 cross-box comparison; one recorded run; serving stack backfilled 2026-08-31 from box-a hardware (NVIDIA RTX 5060 Ti) plus the installed ollama cuda_v12/cuda_v13 runners — NOT captured in the original run log,2026-08-22 operating log,box-a,dgpu-a,,ollama-cuda,,
+qwen3.8:27b,21.2,generation,1,2026-08-22 cross-box comparison; one recorded run; serving stack backfilled 2026-08-31 from box-a hardware (NVIDIA RTX 5060 Ti) plus the installed ollama cuda_v12/cuda_v13 runners — NOT captured in the original run log,2026-08-22 operating log,box-a,dgpu-a,,ollama-cuda,,
+gemma4:31b-it-qat,18.2,generation,1,2026-08-22 cross-box comparison; one recorded run; serving stack backfilled 2026-08-31 from box-a hardware (NVIDIA RTX 5060 Ti) plus the installed ollama cuda_v12/cuda_v13 runners — NOT captured in the original run log,2026-08-22 operating log,box-a,dgpu-a,q4_0-qat,ollama-cuda,,
+Ornith-1.0-9B,52,generation,1,2026-08-22 cross-box comparison; one recorded run; hf.co GGUF; serving stack backfilled 2026-08-31 from box-a hardware (NVIDIA RTX 5060 Ti) plus the installed ollama cuda_v12/cuda_v13 runners — NOT captured in the original run log,2026-08-22 operating log,box-a,dgpu-a,q4_K_M,ollama-cuda,,
 gemma4:26b-a4b-it-qat,105.2,generation,2,2026-08-22 Vulkan stack; dgpu-b reps 100.8/109.6; cell mean 105.2; functional task run,2026-08-22 operating log,box-b,dgpu-b,q4_0-qat,llama.cpp,T1 8/8,kept
 gemma4:26b-a4b-it-qat,66.25,generation,2,2026-08-22 Vulkan stack; igpu reps 66.2/66.3; cell mean 66.25; functional task run,2026-08-22 operating log,box-b,igpu,q4_0-qat,llama.cpp,T1 8/8,kept
 gemma4:31b-it-qat,28.25,generation,2,2026-08-22 Vulkan stack; dgpu-b reps 28.2/28.3; cell mean 28.25; functional task run,2026-08-22 operating log,box-b,dgpu-b,q4_0-qat,llama.cpp,T1 8/8,kept
