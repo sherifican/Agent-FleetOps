@@ -374,9 +374,7 @@ it needs no discrete card at all.
 
 ## The guard ladder
 
-![The guard ladder: eight rungs run in order; a guard that cannot fail stops the ladder](docs/anim/guard-ladder.svg)
-
-<sub>This one is an animated SVG (9 KB, vector text); the other three are GIFs (120-250 KB) &mdash; comparing crispness and smoothness before converting the rest.</sub>
+![The guard ladder: eight rungs run in order; a guard that cannot fail stops the ladder](docs/anim/guard-ladder.gif)
 
 <details><summary>diagram source (mermaid)</summary>
 
