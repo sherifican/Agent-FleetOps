@@ -13,6 +13,8 @@ The organizing idea, applied everywhere here:
 
 > **A report that cannot fail is indistinguishable from a report that passed.**
 > Bind every guard, test, count, path and status to a live target, and run the case that turns it red.
+>
+>Every model is a genie with a parser. FleetOps exists because “technically correct” is not the same thing as “what I actually wanted.”
 
 This repo is a pattern library. You do not need two workstations.
 **Hand it to your AI:** clone it, then paste the block under **Set it up with your own AI**; the agent records missing GPUs and CLIs as `ABSENT`.
