@@ -21,6 +21,10 @@ Start with `eval-integrity`, `generate-review-fix-loop`, and `model-routing-tabl
 
 ## How the pieces fit
 
+![How the pieces fit: fleet activity flows into the read-only monitor, the guard lane and the curation loop](docs/anim/how-the-pieces-fit.gif)
+
+<details><summary>diagram source (mermaid)</summary>
+
 ```mermaid
 flowchart TD
     W["Fleet activity <br/>local + cloud model legs"] --> T["fleet-tui <br/>OBSERVE - read-only monitor <br/>no model calls, no autonomous actions"]
@@ -34,6 +38,8 @@ flowchart TD
     style TP fill:#1a3a2a,stroke:#39d36f
     style H fill:#3a2a1a,stroke:#ffb347
 ```
+
+</details>
 
 Observation never mutates, writes serialize behind a lock, verification must be able to fail, and
 evolution of the rules themselves passes a review panel (verifier first, then independent-model vote). The three loops share one substrate: recorded artifacts and rule changes are file-backed and
@@ -368,6 +374,10 @@ it needs no discrete card at all.
 
 ## The guard ladder
 
+![The guard ladder: eight rungs run in order; a guard that cannot fail stops the ladder](docs/anim/guard-ladder.gif)
+
+<details><summary>diagram source (mermaid)</summary>
+
 ```mermaid
 flowchart LR
     S([run_guards.sh]) --> T1["1. teeth_prover <br/>plant defects, expect red"]
@@ -384,6 +394,8 @@ flowchart LR
     style X1 fill:#3a1a1a,stroke:#e63946
     style UM fill:#3a2a1a,stroke:#ffb347
 ```
+
+</details>
 
 ### The honesty stop gate — a guard that watches the agent's words
 
@@ -415,6 +427,10 @@ The laws are the same; consequence and reversibility decide the rung count. See 
 
 **A report is not an artifact** (from the dispatch/verification skills — both directions):
 
+![A report is not an artifact: read the artifact on success and on failure, in both directions](docs/anim/report-is-not-an-artifact.gif)
+
+<details><summary>diagram source (mermaid)</summary>
+
 ```mermaid
 flowchart LR
     L[delegated leg finishes] --> R{"report says?"}
@@ -425,6 +441,8 @@ flowchart LR
     A2 -->|work actually landed| SAVE(["false failure - keep it, <br/>correct the routing record"])
     A2 -->|nothing there| RETRY(["real failure - now retry"])
 ```
+
+</details>
 
 ### Why the routing table looks like that
 
@@ -444,6 +462,10 @@ and [`fleet-model-routing`](skills/fleet-model-routing/SKILL.md); use the [routi
 
 **Audit the test before trusting it** (from `skills/eval-integrity`):
 
+![Audit the test before trusting it: leak, control and eyeball questions decide whether a PASS is evidence](docs/anim/audit-the-test.gif)
+
+<details><summary>diagram source (mermaid)</summary>
+
 ```mermaid
 flowchart TD
     E[an eval says PASS] --> Q1{"could ground truth <br/>leak into input or scoring?"}
@@ -455,6 +477,8 @@ flowchart TD
     style DEC fill:#3a1a1a,stroke:#e63946
     style INF fill:#3a1a1a,stroke:#e63946
 ```
+
+</details>
 
 ## Provenance & sanitization
 
