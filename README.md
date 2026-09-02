@@ -67,18 +67,32 @@ another machine). The commit history tells that story.
 
 ![fleet-tui monitoring a two-box fleet](docs/fleet_tui_screenshot.png)
 
-A live two-box fleet in one screen with resizable/collapsible cards. Left column is the local box: health, the model kanban
-(in-flight / loaded / idle), lane governance, and artifact receipts. Right column is the second box
-reached over the LAN — its own GPU/thermal/memory readings, its scheduled jobs beside the local ones,
-posture alerts, inbox, and what was downloaded onto which box.
+A live two-box fleet in one screen, in resizable collapsible cards. The left column is this box:
+service and stability health beside CPU, disk and per-GPU readings; a model kanban splitting in-flight
+from loaded and idle; the lane governance table carrying live, admitted, shadow, refused and stale
+counts per provider; and the artifact receipts that every dispatch writes. The right column is the
+second box over the LAN — its own CPU, memory and disk, both of its GPUs read separately, its thermals,
+its ollama version and the model it is currently serving.
 
-Worth noticing, because it is what the tool is *for*: the second box's dGPU is at **96% / 68°C / 299 W**
-serving a 17 GB model at **60.4 tok/s** (a live TUI eval rate, not one of the CSV cells — the logged peak for that tag is 54.4–56.4) while its iGPU sits at 0% / 46°C — two devices, one box, wildly
-different states, both visible at a glance. Three cloud legs are in flight next to two resident local
-models. An automation failure is surfaced in the inbox rather than buried in a log, and the upstream
-panel shows exactly which dependencies are behind.
+Two panels deliberately interleave the boxes instead of separating them. Receipts give each box its own
+column, and the scheduled-jobs panel lists both crontabs side by side, so a job that exists on one box
+and not the other is visible without diffing anything. The header stamps the running version, which is
+how a relaunch proves it picked up fresh code rather than a cached build.
 
-*Hostnames, LAN addresses and box nicknames are redacted (grey boxes); every reading is real. The header shows a newer in-house build than the `tui/` sources exported here.*
+Worth noticing, because it is what the tool is *for*: the second box's discrete GPU is at **97% / 66°C /
+299 W** serving a 17 GB model at **77.1 tok/s** — a live rate read off the running model, not a CSV cell;
+the logged figures for that tag top out at 74.6 — while the integrated GPU on the same silicon sits at
+**0% / 46°C**. Two devices, one box, wildly different states, both visible at a glance. Seven models are
+in flight: one resident local model beside six cloud legs across four providers, each row naming the
+work it was given. The lane table separates this box's 908 claude admits from the 1 attributed to the
+second box, because a single pooled number hides which machine paid.
+
+Nothing here is green-washed. The posture panel is carrying a `PARTIAL` backup, a stale repo, an aborted
+mirror with the reason it aborted, and three dependencies behind upstream; the inbox holds three unread
+items; and a research-advice row at the bottom left records a past consult with its outcome still marked
+unknown. A monitor that only ever showed green would be the one worth distrusting.
+
+*The LAN address shown is a documentation placeholder; every reading is real and unretouched. The header stamps a newer in-house build than the `tui/` sources exported here.*
 
 ### The same fleet from a phone
 
