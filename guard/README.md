@@ -80,10 +80,8 @@ Then edit the copy: one term per line, for each class the example file names (pe
 names; machine nicknames and short hostnames, including any alias used in benchmark or log
 annotations; LAN domain suffixes; personal email local-parts). The file must be nonempty after
 comments. Never commit it — `.gitignore` already lists it, and `git status` must not show it. The
-scanner's own self-test derives its planted identity from the first term in the file; in the
-current scanner a first term containing a regex-special character such as `-` or `.` makes that
-self-test fail, and activation then refuses with `scanner self-test failed` — put a plain
-alphanumeric term first.
+scanner's own self-test derives its planted identity from the first term in the file;
+regex-special characters such as `-` or `.` are accepted in that first term.
 
 Approved identities. Inspect what is already configured before adding anything:
 
@@ -119,8 +117,9 @@ touching anything, when:
 - `_tools/approved_identities.txt` exists in any form — a file, an empty file, a symlink, a
   dangling symlink (`refused: _tools/approved_identities.txt exists ...`);
 - no nonblank `fleetops.approvedIdentity` is in the repository's `--local` config;
-- any value Git resolves for that key comes from global, system or environment config rather than
-  the local one (`... inherited from outside this repository's --local config ...`).
+- any identity Git resolves for that key from any scope is absent from the repository's `--local`
+  config (`... inherited from outside this repository's --local config ...`): every resolved
+  identity must also be present locally; an inherited value already present locally is accepted.
 
 The refusal names the category, never a value. When one of these fires and the file or variable is
 not something this procedure created, do not delete or unset it to make the check pass: it is
@@ -187,11 +186,22 @@ no warning. Passing this check does not establish that the config remains the so
 
 ### 6. Rehearse in an isolated repository first
 
-There is no rehearsal document under `docs/`; the rehearsal is small enough to describe here. Use a
-scratch clone and a disposable bare target — never a real remote — and expect these states:
+There is no rehearsal document under `docs/`; the rehearsal is small enough to describe here. Use an
+isolated synthetic repository with a one-commit clean history and a disposable bare target — never
+a real remote. From the package root, create that history with these two shell lines:
+
+```bash
+package=$PWD; rehearsal=$(mktemp -d); git init -b main "$rehearsal/source" && git init --bare "$rehearsal/target.git"
+git -C "$package" archive HEAD | tar -x -C "$rehearsal/source"; cd "$rehearsal/source" && git config user.name Fixture && git config user.email fixture@example.invalid && git add . && git -c commit.gpgsign=false commit -m 'Synthetic clean baseline'
+```
+
+The archived tree must pass the scanner with the synthetic policy below. Push `main` to
+`"$rehearsal/target.git"` for the following checks. A first push of the real clone to an empty target
+selects all reachable history, not just this clean tree; the one-commit expectation applies only
+to the synthetic repository. Expect these states:
 
 - Provision synthetic inputs: a repo-local `fleetops.approvedIdentity` of `fixture@example.invalid`
-  (also the commit author and committer), and a terms file whose first term is a plain word that
+  (also the commit author and committer), and a terms file whose first term
   does not occur in the clean content. Confirm that removing the config, and separately emptying
   the terms file, each make `--check-pre-push-config` refuse; then restore them.
 - Install (step 4), check (step 5).
@@ -202,9 +212,10 @@ scratch clone and a disposable bare target — never a real remote — and expec
   (assemble it at run time, e.g. `api_key = '<24 alphanumerics>'`), confirm
   `--check-pre-push-config` still passes (policy and parity are intact), then push. Expected:
   `PRE-PUSH BLOCKED: scanner rejected commit <sha>'s archived tree ...`, exit 1, the target's ref
-  unchanged. Do not plant under a directory the scanner skips (`_tools/`, `_reports/`, `.git/`,
-  caches — the list is in `_tools/scan_gate.py`'s docstring): such a plant is accepted, which
-  proves nothing about the scanner. Drop the planted commit before the next clean push.
+  unchanged. `_tools/` is scanned, so a plant there also refuses. Do not plant under a directory
+  the scanner skips (`_reports/`, `.git/`, caches — the list is in `_tools/scan_gate.py`'s
+  docstring): such a plant is accepted, which proves nothing about the scanner. Drop the planted
+  commit before the next clean push.
 - Identity refusal: a commit whose author, or whose `Co-authored-by:` trailer, is
   `outsider@example.invalid` is refused with `PRE-PUSH BLOCKED: <sha> carries a non-approved ...`.
 

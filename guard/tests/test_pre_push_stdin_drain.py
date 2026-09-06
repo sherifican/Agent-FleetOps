@@ -62,7 +62,8 @@ def repo(tmp_path):
 def _run(repo, drain):
     work, remote, base, new = repo
     env = dict(os.environ, DRAIN_STDIN="1" if drain else "0")
-    payload = f"refs/heads/main {new} refs/heads/main {base}\n"
+    payload = (f"refs/heads/main {new} refs/heads/main {base}\n"
+               f"refs/heads/main {new} refs/heads/next {'0' * 40}\n")
     return subprocess.run([str(HOOK), "public", str(remote)], cwd=work, input=payload,
                           capture_output=True, text=True, env=env)
 
@@ -74,6 +75,8 @@ def test_a_stdin_reading_self_test_cannot_turn_a_real_push_into_an_empty_one(rep
         + done.stdout + done.stderr)
     assert "empty push input" not in done.stdout, (
         "a two-ref push was described as empty: " + done.stdout)
+    assert "scanner rejected commit" in done.stdout, (
+        "expected the reject-all scanner to evaluate a tree: " + done.stdout + done.stderr)
 
 
 def test_control_the_same_push_is_still_evaluated_when_nothing_drains_stdin(repo):

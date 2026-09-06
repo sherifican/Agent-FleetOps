@@ -43,7 +43,9 @@ The repository contains `guard/hooks/install.sh`. It can change the adopter's Gi
 **ADOPTER COMMAND:**
 
 ```bash
-sed -n '1,240p' guard/hooks/install.sh
+cat guard/hooks/install.sh
 ```
+
+Supported activation route: [Activating the publication hook](../guard/README.md#activating-the-publication-hook).
 
 **VERIFY — expected outcome:** `MANUAL: the human approves or rejects hook installation after reading the script. No hook is installed by this package.`

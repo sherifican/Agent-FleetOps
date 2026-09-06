@@ -1,6 +1,6 @@
 ---
 name: should-we
-description: Before executing any directive ("do X", "fix Y", "send Z"), silently ask "should we do X? why or why not?" — five questions in a fixed order (premise true? already done? right unit of work? what breaks if we don't? what would make this wrong?) — then state the verdict in a line or two and ACT in the same turn. The verdict must be able to come back NO. Invoke on every imperative an operator gives an orchestrating agent; skip only trivial mechanical work with no alternative. Not a licence to stall: the output shape is explain + action, never ask-permission.
+description: Before executing any directive ("do X", "fix Y", "send Z"), silently ask "should we do X? why or why not?" — five questions in a fixed order (premise true? already done? right unit of work? what breaks if we don't? what would make this wrong?) — then state the verdict in a line or two and ACT in the same turn. The verdict must be able to come back NO. Invoke on every imperative an operator gives an orchestrating agent; skip only trivial mechanical work with no alternative. Not a licence to stall: the output shape is explain + action, never ask-permission, except a "don't do it" verdict is stated as a question and the turn ends there.
 license: MIT
 ---
 
