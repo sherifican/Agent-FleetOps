@@ -99,7 +99,7 @@ PY
 cd tui && .venv/bin/python -m pytest -q
 ```
 
-**VERIFY — expected output:** pytest exits `0`; this export's acceptance run reports `378 passed`. A different result is a blocker: retain the output and do not describe the TUI as verified.
+**VERIFY — expected output:** pytest exits `0`; this export's acceptance run reports `383 passed`. A different result is a blocker: retain the output and do not describe the TUI as verified.
 
 ## Step 5 — launch only after the acceptance run
 

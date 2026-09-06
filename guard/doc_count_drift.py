@@ -127,8 +127,15 @@ def _claims_bench_tags(line, rel):
 
 
 def _claims_tui_suite(line, rel):
-    return [int(m.group(1)) for m in
-            re.finditer(r"(\d+)[- ]test hermetic suite", line, re.I)]
+    out = [int(m.group(1)) for m in
+           re.finditer(r"(\d+)[- ]test hermetic suite", line, re.I)]
+    # The TUI adoption guide publishes a pytest result rather than a suite label.
+    # Scope this alternate phrasing to its acceptance assertion: historical results
+    # and other adoption guides need not describe the current TUI suite.
+    if rel == "adopt/10_tui.md" and "**VERIFY — expected output:**" in line:
+        out.extend(int(m.group(1)) for m in
+                   re.finditer(r"acceptance run reports `(\d+) passed`", line, re.I))
+    return out
 
 
 def _count_files(root, rel_dir, pred):
@@ -401,6 +408,28 @@ def _selftest():
             return check(td, measured=measured or sim)[0]
 
         case("every count correct passes (green)", rc_for(doc_for()) == 0)
+        tui = real["fleet-tui suite"]
+        if tui is not None:
+            adoption = pathlib.Path(td) / "adopt" / "10_tui.md"
+            adoption.parent.mkdir()
+            def acceptance(n):
+                return ("**VERIFY — expected output:** pytest exits `0`; this export's "
+                        f"acceptance run reports `{n} passed`.\n")
+            adoption.write_text(acceptance(tui - 5))
+            case("a stale TUI adoption acceptance count is caught (red)",
+                 rc_for(doc_for()) == 1)
+            adoption.write_text(acceptance(tui))
+            case("the current TUI adoption acceptance count passes (green)",
+                 rc_for(doc_for()) == 0)
+            adoption.write_text(f"A historical run reported `{tui - 5} passed`.\n")
+            case("a historical adoption result is not a current suite claim",
+                 rc_for(doc_for()) == 0)
+            adoption.unlink()
+            other = adoption.parent / "30_guards.md"
+            other.write_text(acceptance(tui - 5))
+            case("another adoption guide's acceptance is not a TUI claim",
+                 rc_for(doc_for()) == 0)
+            other.unlink()
         case("a wrong suite count is caught (red)",
              rc_for(doc_for("guard unit suite", +1)) == 1)
         case("a wrong bench row count is caught (red)",
