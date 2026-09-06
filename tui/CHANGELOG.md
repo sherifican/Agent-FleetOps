@@ -290,8 +290,8 @@
 - **[infra]** `FocusCommands` → `FleetCommands`; integration test broadened to assert the full set
   discovers with help + fuzzy-search still resolves focus. 238 tests green.
 
-## v3.15 — 2026-07-07 — WinClaude passback inbox + header attention counter
-- **[feat]** New `sources/passback.py` + **PassbackModal** (key **`p`**): WinClaude→Fleet passback files
+## v3.15 — 2026-07-07 — the peer orchestrator passback inbox + header attention counter
+- **[feat]** New `sources/passback.py` + **PassbackModal** (key **`p`**): the peer orchestrator→Fleet passback files
   (the two peer-message globs) newest-first with an unread `●` marker;
   opening the modal marks them seen. Seen-state lives in `~/.fleet_tui/passback_seen.json` — the passback
   files themselves are never touched. (Roadmap wave #5.)

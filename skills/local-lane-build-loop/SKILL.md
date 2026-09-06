@@ -76,6 +76,14 @@ them.
   asserts the DEFAULT palette, it breaks it — order-dependent, invisible until a new test file lands in the
   wrong alphabetical slot. **Fix: an autouse fixture (e.g. in `conftest.py`) that snapshots + restores those
   globals around every test.** It makes the whole suite order-independent.
+  A fixture that redirects is half of it. Assert AFTER each test that the real channel gained
+  no row of test shape — a redirect that silently stops applying looks exactly like a redirect
+  that worked.
+  Cover every runtime FORM of the redirected path: bare, separator-terminated, the variable and the
+  literal, and whatever the language's home-directory resolver returns; one uncovered form is enough
+  for a sandboxed run to write the live file. And make the redirected tool itself REFUSE any
+  invocation whose environment points outside the sandbox, so the isolation survives a refactor that
+  stops using the stub.
 - **A module-level time-cache poisons monkeypatched tests (order-dependent flake).** A TTL cache (e.g. a
   15s resource-reading cache) populated by an integration test's LIVE call makes a LATER
   monkeypatched-to-throw test read the cached REAL value instead of exercising the stub → passes alone,
@@ -89,6 +97,13 @@ them.
   on what happens to be running. (On the reference setup a live worker was busy, so a body-click opened the
   in-flight modal and broke the old "→ inventory" assertion.) Fix: stub the branch-deciding source so the
   test controls the branch.
+- **A scheduled check is proven under the scheduler's environment, not an interactive one.** Run it
+  with an empty environment plus only the variables the schedule sets (`env -i VAR=... cmd`), and treat
+  any difference from the interactive run as a defect in the check rather than as flakiness. A
+  scheduled job runs stripped of the session bus, most of the search path and per-user services, so a
+  failure born there does not reproduce in a shell. This repository ships the scar and not the rule:
+  `guard/leg_canary.py:137-139` records that cron's default PATH lacks the directory every leg binary
+  lives in, so the canary's first five days logged only UNMEASURED.
 - **Display-only cleaners touch the RENDERED string only — never mutate the real value in the source.**
   Pretty-printers (strip a long suffix for display, humanize an interval) exist for the screen; names,
   APIs, and matching logic depend on the real value. A cleaner that mutates upstream data turns a cosmetic

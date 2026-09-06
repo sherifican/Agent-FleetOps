@@ -5,7 +5,7 @@ from fleet_tui.sources import network
 
 def test_build_network_all_up():
     d = network.build_network(
-        ip_addr="enp42s0 UP 198.51.100.10/22\nenx9c69d3806283 UP 192.0.2.2/24\n",
+        ip_addr="enp42s0 UP 198.51.100.10/22\nenx02deadbeef01 UP 192.0.2.2/24\n",
         pc_reachable=True,
         gateway=True,
         cron_list="  Name:  telegram-inbound\n  Script: telegram_poller_cron.sh\n",

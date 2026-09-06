@@ -28,6 +28,8 @@ are indistinguishable from a correct pair.
   0  the banner matches its source and keeps its corners
   1  a violation — white corners, wrong geometry, or a PNG behind its SVG
   2  UNMEASURED — the files or the PNG's encoding could not be read
+
+GUARD-CLASS: guard — the rendered PNG and its stamp must still match the SVG they came from
 """
 
 import hashlib

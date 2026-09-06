@@ -1,0 +1,28 @@
+# identity_terms.example.txt — the SHAPE of the private list, with no values in it.
+#
+# Copy this file to _tools/identity_terms.txt (gitignored) and put one term per line. The scan
+# gate matches these case-insensitively as literals, and REFUSES TO RUN when the file is absent:
+# a personal-data scan with no identity list is a check that cannot fail, and a check that cannot
+# fail reports the same green as one that passed.
+#
+# Nothing here is a real value. An example file carrying a real term would publish the very string
+# the private file exists to keep out — so this ships classes, and the classes are the point:
+# each line below names a class that has actually leaked somewhere, in a public repo, at least once.
+#
+# 1. PERSONAL AND ACCOUNT NAMES
+#    Given names, family names, usernames, handles — every form that appears in a path, a git
+#    trailer, a log line or a quoted message.
+#
+# 2. MACHINE NICKNAMES AND SHORT HOSTNAMES
+#    The names boxes are called in conversation, INCLUDING ANY BOX ALIAS USED IN BENCHMARK OR LOG
+#    ANNOTATIONS. This is the class most often forgotten: a measurement table annotated with a
+#    per-box nickname reads as neutral prose and publishes the fleet's internal naming.
+#
+# 3. LAN DOMAIN SUFFIXES
+#    Internal search domains and any suffix appended to a short hostname on the local network.
+#
+# 4. PERSONAL EMAIL LOCAL-PARTS
+#    The part before the @ of a personal address. The domain half is already covered by a shipped
+#    shape; the local part is the identifying half and is not.
+#
+# One term per line below this comment block. Comments and blank lines are ignored.

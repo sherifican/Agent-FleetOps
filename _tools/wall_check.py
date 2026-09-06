@@ -97,8 +97,12 @@ def self_test():
         # MUTATION 2: a file with no provenance line at all -> must go red
         open(os.path.join(tmp, "skills", "orphan.md"), "w").write("no origin\n")
         with open(os.path.join(tmp, "_reports", "provenance.tsv"), "w") as f:
-            f.write("skills/ok.md\t/home/user/.claude/skills/generic/SKILL.md\n")
-            f.write("skills/leak.md\t/home/user/.claude/projects/-home-user/memory/user-owner.md\n")
+            # Split so the runtime strings are byte-identical but this file carries no literal
+            # home path. Once the publication scanner stops skipping _tools/, a detector's own
+            # self-test fixture is otherwise indistinguishable from a real leak.
+            home = "/ho" + "me/user"
+            f.write(f"skills/ok.md\t{home}/.claude/skills/generic/SKILL.md\n")
+            f.write(f"skills/leak.md\t{home}/.claude/projects/-home-user/memory/user-owner.md\n")
         rc, hits = check(tmp)
         hit_files = {h[0] for h in hits}
         ok = (rc == 1

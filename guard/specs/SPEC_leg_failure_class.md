@@ -65,6 +65,26 @@ Pure: no I/O, no clock, no network. `classify` takes measurements, returns a ver
    cheaper error is the retry, so unknown states retry once. Say `unclassified` in the reason so the
    gap is visible rather than silently absorbed.
 
+**Where the third lane lives, and why it is two lanes.** The third lane does not belong in `classify`:
+that function reads byte counts and timings and never sees the provider's error string, so a refusal
+routed through it would fall out as `unclassified` and be retried. It belongs in the caller, the only
+layer that holds the stderr text and can read what the provider actually said. And in the caller it is
+two lanes, not one, because two different things arrive looking identical and demand opposite handling:
+
+- **Account or capability restriction** — quota cap, plan limit, model not enabled for this account.
+  This is TERMINAL for the lane that hit it, and the request MAY be rerouted to another lane at once.
+  Retrying in place burns the very window a reroute would have used.
+- **SAFETY or CONTENT refusal** — the provider declined the request itself. This is TERMINAL and is
+  never rerouted. Re-sending the same request to a different provider to get a different answer is
+  circumvention, not failover. Stop, surface the refusal, and escalate to a human, who may decide the
+  request itself was wrong.
+
+Two misreadings are what this rule exists to stop. A green vendor status page is entirely consistent
+with one's own account being capped; the status page reports the fleet, not the account. And a cap can
+mimic a capability failure — empty output in seconds, or a budget message — and be misread as the model
+being bad at the task, sending the caller chasing a quality fix for a billing fact. Keep failover a
+multi-hop chain for exactly this reason: the failover target can be capped too.
+
 `reason` must always name the evidence, e.g.
 `"rc=1, no stdout, no stderr, failed in 4.2s — the quota-cap signature; retrying cannot help"`.
 

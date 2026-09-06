@@ -1,0 +1,286 @@
+#!/usr/bin/env bash
+# Publication gate: scan selected commit trees/messages and check identity emails.
+# Requires Bash 4+, Git, Python 3 and tar. The scanner is trusted local tooling.
+# New refs use a fresh advertisement from the actual push URL ($2), not tracking refs.
+# Existing refs use the old tip supplied by Git. No fetch or shared-repo writes occur.
+set -uo pipefail
+export GIT_NO_REPLACE_OBJECTS=1
+
+block() { echo "PRE-PUSH BLOCKED: $*"; exit 1; }
+root=$(git rev-parse --show-toplevel) || block "cannot locate repository."
+cd "$root" || exit 1
+
+# Take the push protocol input off stdin FIRST, before any subprocess runs.
+# A helper that reads stdin (a scanner taking a file list, a transport, a pager) would
+# otherwise drain Git's ref list, leaving this hook to conclude "empty push" and admit an
+# unscanned push. Measured 2026-09-05: a self-test that read stdin turned a real two-ref
+# push into "0 commits scanned: empty push input" with exit 0.
+push_input=$(mktemp) || block "cannot create push-input file."
+trap 'rm -f -- "$push_input"' EXIT
+cat > "$push_input" || block "cannot read the push protocol input."
+
+# First gate, even for empty input: prove the configured scanner can run its tests.
+# </dev/null so the scanner can never consume this hook's stdin.
+if ! python3 _tools/scan_gate.py --self-test >/dev/null 2>&1 </dev/null; then
+  block "the scan gate's own self-test failed; scanner cannot be trusted."
+fi
+
+APPROVED_FILE="${FLEETOPS_APPROVED_IDENTITIES:-_tools/approved_identities.txt}"
+approved=""
+if [ -f "$APPROVED_FILE" ]; then
+  approved=$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$APPROVED_FILE") ||
+    block "cannot read approved-identity list."
+fi
+if [[ ! "$approved" =~ [^[:space:]] ]]; then
+  approved=$(git config --get-all fleetops.approvedIdentity)
+  rc=$?
+  [ "$rc" -le 1 ] || block "cannot read approved-identity configuration."
+fi
+[[ "$approved" =~ [^[:space:]] ]] ||
+  block "MISSING INPUT — no approved-identity list; supply FLEETOPS_APPROVED_IDENTITIES or fleetops.approvedIdentity."
+is_approved() {
+  local entry
+  [ -n "$1" ] || return 1
+  while IFS= read -r entry || [ -n "$entry" ]; do
+    [ "$entry" = "$1" ] && return 0
+  done <<< "$approved"
+  return 1
+}
+
+format=$(git rev-parse --show-object-format) || block "cannot determine object format."
+case "$format" in
+  sha1) width=40 ;;
+  sha256) width=64 ;;
+  *) block "unsupported object format." ;;
+esac
+printf -v ZERO '%*s' "$width" ''
+ZERO=${ZERO// /0}
+valid_oid() { [[ "$1" =~ ^[0-9a-f]+$ ]] && [ "${#1}" -eq "$width" ]; }
+
+scratch=$(mktemp -d) || block "cannot create temporary workspace."
+# Both temporaries, in one trap: bash EXIT traps REPLACE rather than stack, so the earlier
+# push_input trap is discarded the moment this one is set and that file would survive every run.
+trap 'rm -rf -- "$scratch"; rm -f -- "$push_input"' EXIT
+trap 'exit 1' HUP INT TERM
+
+# Neither replacements nor truncated ancestry may change the traversal's meaning.
+history_checked=0
+check_history() {
+  [ "$history_checked" -eq 1 ] && return
+  local shallow grafts
+  shallow=$(git rev-parse --is-shallow-repository) || block "cannot inspect shallow state."
+  [ "$shallow" = false ] || block "shallow history cannot establish the commit range."
+  grafts=$(git rev-parse --git-path info/grafts) || block "cannot locate graft configuration."
+  [ ! -s "$grafts" ] || block "legacy grafts change ancestry; remove them before scanning."
+  history_checked=1
+}
+
+destination_known=0
+destination_tips=()
+load_destination() {
+  [ "$destination_known" -eq 1 ] && return
+  [ -n "${2:-}" ] || block "destination refs unknown: Git's push URL argument is missing."
+  # Do not use --exit-code: successful empty output proves a genuinely empty remote.
+  # Stdin must remain the pre-push protocol, not input to a transport/helper.
+  if ! git ls-remote --refs -- "$2" >"$scratch/destination" 2>/dev/null </dev/null; then
+    block "destination refs unknown: cannot query the push destination."
+  fi
+  local oid ref extra tip
+  while IFS=$' \t' read -r oid ref extra || [ -n "$oid$ref$extra" ]; do
+    valid_oid "$oid" && [ -n "$ref" ] && [ -z "$extra" ] ||
+      block "malformed destination advertisement."
+    git check-ref-format "$ref" >/dev/null 2>&1 || block "invalid destination ref."
+    tip=$(git rev-parse --verify "$oid^{commit}" 2>/dev/null) ||
+      block "destination-tip object unavailable locally or not commit-backed; fetch destination history first."
+    destination_tips+=("^$tip")
+  done < "$scratch/destination"
+  destination_known=1
+}
+
+# git archive normally obeys export-ignore/export-subst, which can hide/change bytes.
+# A private bare repository borrows objects and supplies higher-priority attributes.
+# It never modifies the source repo's info/attributes, config, refs, or worktree.
+archive_ready=0
+prepare_archive() {
+  [ "$archive_ready" -eq 1 ] && return
+  object_dir=$(git rev-parse --path-format=absolute --git-path objects) ||
+    block "cannot locate object database."
+  # Inherited git-dir variables must not reach this init: with GIT_COMMON_DIR (or GIT_DIR) set,
+  # `git init --bare` writes `bare = true` into the SOURCE repository's config instead of the
+  # scratch one, which breaks that working repo. Measured 2026-09-05 -- it flipped
+  # `bare = false` to `bare = true` in the very repo this hook was protecting.
+  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+      -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE \
+      git init -q --bare --template= --object-format="$format" "$scratch/archive.git" ||
+    block "cannot prepare archive repository."
+  mkdir -p "$scratch/archive.git/info" ||
+    block "cannot create archive attributes directory."
+  printf '* -export-ignore -export-subst\n' > "$scratch/archive.git/info/attributes" ||
+    block "cannot neutralize archive filtering."
+  archive_ready=1
+}
+
+records=0 deletions=0 noops=0 scanned=0 bad=0 changes=0
+declare -A seen=()
+while IFS=$' \t' read -r localref localsha remoteref remotesha extra ||
+      [ -n "$localref$localsha$remoteref$remotesha$extra" ]; do
+  records=$((records + 1))
+  [ -n "$localref" ] && [ -n "$remoteref" ] && [ -z "$extra" ] &&
+    valid_oid "$localsha" && valid_oid "$remotesha" || block "malformed pre-push input."
+  git check-ref-format "$remoteref" >/dev/null 2>&1 || block "invalid destination ref in input."
+  if [ "$localsha" = "$ZERO" ]; then
+    [ "$remotesha" != "$ZERO" ] || block "invalid deletion with no destination tip."
+    deletions=$((deletions + 1))
+    continue
+  fi
+  check_history
+  localtip=$(git rev-parse --verify "$localsha^{commit}" 2>/dev/null) ||
+    block "local tip unavailable or not commit-backed."
+  if [ "$remotesha" != "$ZERO" ]; then
+    remotetip=$(git rev-parse --verify "$remotesha^{commit}" 2>/dev/null) ||
+      block "destination-tip object unavailable locally or not commit-backed."
+    if [ "$localsha" = "$remotesha" ]; then
+      noops=$((noops + 1))
+      continue
+    fi
+    if ! range=$(git rev-list "$remotetip..$localtip" -- 2>/dev/null); then
+      block "git rev-list failed for destination-to-local range; no CLEAN verdict."
+    fi
+  else
+    load_destination "$@"
+    if ! range=$(git rev-list "$localtip" "${destination_tips[@]}" -- 2>/dev/null); then
+      block "git rev-list failed for destination-relative new-ref range; no CLEAN verdict."
+    fi
+  fi
+  changes=$((changes + 1))
+  # A ref can move backwards or alias a destination commit without introducing history.
+  # It is still a ref change: conservatively scan its reachable history, never zero.
+  if [ -z "$range" ]; then
+    echo "pre-push gate: empty difference for a changed ref; scanning its reachable history."
+    if ! range=$(git rev-list "$localtip" -- 2>/dev/null); then
+      block "git rev-list failed for conservative history scan."
+    fi
+    [ -n "$range" ] || block "changed ref produced an unexplained zero-commit range."
+  fi
+
+  for sha in $range; do
+    valid_oid "$sha" || block "invalid commit ID from git rev-list."
+    [ -z "${seen[$sha]+yes}" ] || continue
+    seen[$sha]=1
+    ae=$(git show -s --format='%ae' "$sha" --) || block "cannot read author identity."
+    ce=$(git show -s --format='%ce' "$sha" --) || block "cannot read committer identity."
+    if ! is_approved "$ae" || ! is_approved "$ce"; then
+      echo "PRE-PUSH BLOCKED: $sha carries a non-approved author or committer identity."
+      bad=1
+    fi
+    # Gitlinks have no archived contents. Refuse rather than implying they were scanned.
+    git ls-tree -r "$sha" > "$scratch/tree-entries" || block "cannot enumerate tree."
+    if grep -q '^160000 ' "$scratch/tree-entries"; then
+      block "commit $sha contains a gitlink; submodule contents are outside this scanner."
+    fi
+    prepare_archive
+    tree=$(mktemp -d "$scratch/tree.XXXXXXXX") || block "cannot create tree directory."
+    # Same sanitisation as the init above, for the same reason: with GIT_COMMON_DIR set, git
+    # resolves info/attributes against the COMMON dir, so the neutralising attributes written
+    # into the scratch repo are ignored and export-ignore hides the payload again. Measured
+    # 2026-09-05: the tree scanned CLEAN with a forbidden payload still in the commit.
+    if env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_NAMESPACE \
+        -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+        GIT_OBJECT_DIRECTORY="$object_dir" GIT_ATTR_NOSYSTEM=1 \
+      git --git-dir="$scratch/archive.git" -c core.attributesFile=/dev/null \
+        archive --format=tar "$sha" 2>/dev/null | tar -x -C "$tree" 2>/dev/null; then
+      if python3 _tools/scan_gate.py "$tree" >/dev/null 2>&1 </dev/null; then
+        scanned=$((scanned + 1))
+      else
+        echo "PRE-PUSH BLOCKED: scanner rejected commit $sha's archived tree (content violation or scanner error)."
+        bad=1
+      fi
+    else
+      echo "PRE-PUSH BLOCKED: could not materialise commit $sha's tree; it was not scanned."
+      bad=1
+    fi
+    rm -rf -- "$tree"
+
+    # Keep message bytes outside the archived tree: no path collision or archive
+    # attribute can hide them, and scanner refusals name the surface explicitly.
+    message_dir=$(mktemp -d "$scratch/message.XXXXXXXX") ||
+      block "cannot create commit-message directory."
+    git cat-file commit "$sha" > "$scratch/commit-object" ||
+      block "cannot read commit $sha's message object."
+    if ! python3 - "$scratch/commit-object" "$message_dir/commit-message.txt" <<'PY_MESSAGE'
+from pathlib import Path
+import sys
+raw = Path(sys.argv[1]).read_bytes()
+headers, separator, message = raw.partition(b"\n\n")
+if not separator:
+    raise SystemExit("commit object has no header/message separator")
+Path(sys.argv[2]).write_bytes(message)
+PY_MESSAGE
+    then
+      block "cannot extract commit $sha's full message."
+    fi
+    if ! python3 _tools/scan_gate.py "$message_dir" >/dev/null 2>&1 </dev/null; then
+      echo "PRE-PUSH BLOCKED: scanner rejected commit $sha's message (content violation or scanner error)."
+      bad=1
+    fi
+
+    # Parse only the terminal trailer block; ordinary prose is not an identity.
+    # Even --parse rewrites configured trailer aliases. Use the private bare
+    # repo and disable inherited config so literal identity keys stay literal,
+    # and Delegated-to cannot be remapped into an identity. --no-divider treats
+    # the input as a commit message, not a patch ending at the first '---'.
+    env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+        -u GIT_NAMESPACE -u GIT_CONFIG -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT \
+        GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
+      git --git-dir="$scratch/archive.git" -c trailer.separators=: \
+        -c core.commentChar='#' -c core.commentString='#' \
+        interpret-trailers --parse --no-divider \
+      < "$message_dir/commit-message.txt" > "$scratch/trailers" ||
+      block "cannot parse commit $sha's trailers."
+    if ! trailer_emails=$(python3 - "$scratch/trailers" "$message_dir/commit-message.txt" <<'PY_TRAILERS'
+from pathlib import Path
+import re
+import sys
+if b"\0" in Path(sys.argv[2]).read_bytes():
+    raise SystemExit("NUL in commit message prevents reliable trailer parsing")
+for line in Path(sys.argv[1]).read_bytes().split(b"\n"):
+    key, separator, value = line.partition(b":")
+    if key.strip().lower() not in (b"co-authored-by", b"signed-off-by"):
+        continue
+    value = value.strip()
+    # Conventional Name <email> (including an empty name), or a bare email.
+    # The existing exact approved list remains the authority, without adding
+    # an email-syntax policy that author/committer identities do not have.
+    # Reject unreadable identity values rather than silently dropping them.
+    match = re.fullmatch(rb"[^<>]*<([^<>]+)>", value)
+    email = match.group(1) if match else value
+    if not separator or not email or b"<" in email or b">" in email:
+        raise SystemExit("identity trailer has no single readable email address")
+    sys.stdout.buffer.write(email + b"\n")
+PY_TRAILERS
+    ); then
+      block "cannot read commit $sha's Co-authored-by/Signed-off-by trailer identities."
+    fi
+    if [ -n "$trailer_emails" ]; then
+      while IFS= read -r trailer_email; do
+        if ! is_approved "$trailer_email"; then
+          echo "PRE-PUSH BLOCKED: $sha carries a non-approved Co-authored-by or Signed-off-by trailer identity."
+          bad=1
+        fi
+      done <<< "$trailer_emails"
+    fi
+    rm -rf -- "$message_dir" || block "cannot remove commit-message directory."
+  done
+done < "$push_input"
+
+[ "$bad" -eq 0 ] || exit 1
+if [ "$scanned" -gt 0 ]; then
+  echo "pre-push gate: CLEAN — scanned $scanned distinct selected commit tree(s) and their full message(s); author/committer and Co-authored-by/Signed-off-by trailer emails approved; deleted refs=$deletions; identical-tip no-ops=$noops."
+elif [ "$changes" -ne 0 ]; then
+  block "changed refs but zero scanned commits."
+elif [ "$records" -eq 0 ]; then
+  echo "pre-push gate: CLEAN — 0 commits scanned: empty push input; no ref updates supplied."
+else
+  echo "pre-push gate: CLEAN — 0 commits scanned: only deletions ($deletions) and identical-tip no-ops ($noops); no added commits."
+fi
+exit 0

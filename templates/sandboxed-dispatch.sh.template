@@ -32,6 +32,17 @@ exec bwrap \
   -- "$MODEL_CLI" "$@"
 
 # --ro-bind / /: exposes system binaries, libraries, and configuration read-only.
+#
+#   ALTERNATIVE to the line above — commented out on purpose, and NOT ready to swap in.
+#   This narrow set is distribution-specific and incomplete; the distribution's own library
+#   directories have to be added by name before it will run anything.
+#     --ro-bind /usr /usr                          the system binary and library tree.
+#     --ro-bind /etc/ssl/certs /etc/ssl/certs      the TLS certificate directory.
+#     --ro-bind /etc/resolv.conf /etc/resolv.conf  the resolver configuration file.
+#   The trade, both directions: the narrow set can break a CLI that reads something the set
+#   does not include; the wide default gives the worker the whole host readable; the choice
+#   belongs to whoever knows the destination.
+#
 # --dev /dev: supplies a minimal device filesystem required by ordinary CLIs.
 # --proc /proc: supplies process information without binding a host directory.
 # --tmpfs /tmp: gives the child disposable temporary storage.

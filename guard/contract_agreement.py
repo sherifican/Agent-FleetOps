@@ -168,14 +168,20 @@ def _banned_prescriptions(readings: list[Reading]) -> list[str]:
                    if reading.surface == "validator" and reading.vocab == "__BANNED__"), frozenset())
     messages = []
     exempt = re.compile(r"NOT valid|not valid|do NOT|Rejected|banned|instead of", re.I)
+    postposed = re.compile(r"^\s*(?:and\s+[A-Z]+\s+)?(?:is|are|was|were)\s+(?:NOT valid|not valid|banned|Rejected)")
     for surface in ("addendum", "preamble"):
         lines = next((reading.values for reading in readings
                       if reading.surface == surface and reading.vocab == "__TEXT__"), frozenset())
         for line in lines or ():
-            if "~~" in line or exempt.search(line):
-                continue
+            strike_spans = [(m.start(), m.end()) for m in re.finditer(r"~~[^~]*~~", line)]
             for verb in banned or ():
-                if re.search(rf"\b{re.escape(verb)}\b", line):
+                for m in re.finditer(rf"\b{re.escape(verb)}\b", line):
+                    if exempt.search(line[:m.start()]):
+                        continue
+                    if postposed.match(line[m.end():]):
+                        continue
+                    if any(s <= m.start() and m.end() <= e for s, e in strike_spans):
+                        continue
                     message = f"{surface} prescribes banned verb {verb!r}"
                     if message not in messages:
                         messages.append(message)

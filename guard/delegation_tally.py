@@ -11,6 +11,8 @@ one trailer per commit, so the question becomes answerable.
 commit as "direct" would manufacture the datum this exists to collect — the same defect as a dry run that
 writes the state it claims to preview. They are shown as UNTAGGED (pre-measurement) with a count.
 
+GUARD-CLASS: reporter — reads out the commit-msg hook's trailers; it has no pass/fail verdict
+
 Usage: delegation_tally.py [--since 2026-08-03] [--repo /path]
 """
 import collections, re, subprocess, sys

@@ -23,6 +23,8 @@ byte-identical forwarding by chaining two taps and comparing what each recorded.
 
   envelope_tap.py --port 11435 --upstream http://127.0.0.1:11434 --arm qwen-code --log runs.jsonl
   envelope_tap.py --selftest            # prove forwarding is byte-identical; no upstream needed
+
+GUARD-CLASS: reporter — a traffic tap, not a verdict-producing guard; it records what crossed and never decides
 """
 import argparse, http.server, json, socketserver, sys, threading, time, urllib.error, urllib.request
 

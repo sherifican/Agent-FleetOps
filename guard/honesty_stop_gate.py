@@ -37,6 +37,8 @@ completion prose; a quoted claim). A guard that cannot be shown to fail is not a
 Never blocks twice: `stop_hook_active` short-circuits so a genuine disagreement cannot
 trap the turn in a loop. A broken or degenerate config falls back to the built-in
 defaults rather than silently disabling the gate.
+
+GUARD-CLASS: guard — a turn asserting unmeasured live state must be blocked
 """
 import json, os, re, shutil, sys
 

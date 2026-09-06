@@ -11,3 +11,14 @@ batch is pushed — that is the point: a secret is caught before it lands, not a
 additionally reads the provenance ledger at `_reports/provenance.tsv`, which is gitignored and
 deliberately NOT published (it records private source paths). So `wall_check.py` is present in a
 clone but cannot pass from one — it is not a check a downstream user is expected to run.
+
+Two scanners ship in this repo, and they do not have the same reach. guard/scrub_arm.py reads the
+bytes of each file (UTF-8, then UTF-16 in both byte orders when NUL bytes are present, then
+latin-1) and picks up the printable ASCII runs inside genuinely binary bytes; _tools/scan_gate.py
+opens each file decoded as UTF-8 with decode errors ignored and has no byte view at all, so a
+wide-encoded payload is invisible to it. On four of the five surfaces the two scanners agree:
+contents: covered; filenames and paths: covered by the name arm, as a separate case from
+contents; compressed payloads: NOT covered (bytes are read as stored); git history: NOT covered. They differ on binaries: covered for
+guard/scrub_arm.py, as the printable ASCII runs inside them, NOT covered for _tools/scan_gate.py.
+On git history neither scanner reaches: each scans one tree, so a value removed in a later commit
+is still published by the earlier one. ref_gate.py is the instrument for that surface.

@@ -43,6 +43,15 @@ skip() { n_skipped=$((n_skipped + 1)); printf '   NOT CONFIGURED (skipped, not U
 note "1. TEETH-PROVER — can every guard actually fail?"
 echo "   (nothing below this line means anything until this passes)"
 python3 guard/teeth_prover.py; roll $?
+# --verify-anchors proves every mutation needle still binds exactly once in its target file —
+# a stale needle silently stops proving the guard has teeth. It does NOT prove the mutants die;
+# that is the full harness below, which needs the measurement corpus.
+python3 guard/mutation_harness.py --verify-anchors; roll $?
+if [ -n "${RUN_MUTATION_HARNESS:-}" ]; then
+  python3 guard/mutation_harness.py; roll $?
+else
+  skip "the full mutation harness needs the measurement corpus this clone does not carry (set RUN_MUTATION_HARNESS=1 on a maintainer box); --verify-anchors above ran without it"
+fi
 
 note "2. CONTRACT AGREEMENT — do all surfaces state the same contract?"
 python3 guard/contract_agreement.py; roll $?
@@ -99,6 +108,14 @@ if [ -n "${PASSBACK_OUTBOX:-}" ]; then
   fi
 else
   skip "the passback teeth test needs PASSBACK_OUTBOX (an outbox directory on this box)"
+fi
+# The comms-filing check has no default root either: one machine's directory layout is not an
+# adopter's, and a check aimed at a guessed path reads "nothing misfiled" — a clean-looking result
+# for a check that was never aimed at anything.
+if [ -n "${COMMS_ROOT:-}" ]; then
+  python3 guard/comms_filing.py --root "$COMMS_ROOT"; roll $?
+else
+  skip "the comms-filing check needs COMMS_ROOT (a comms directory on this box)"
 fi
 
 note "5. NEGATIVE CONTROL — the runner itself must be able to fail"

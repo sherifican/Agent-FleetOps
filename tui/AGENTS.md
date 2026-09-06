@@ -50,3 +50,7 @@ blocker in one line (do not thrash) — Claude fixes that module only.
 ## v4.0 box schema
 
 `~/.fleet_tui/boxes.json` is optional. It accepts either a top-level list or `{ "boxes": [...] }`; each box requires `name` and `kind` (`local` or `remote`). Relay paths are local file paths and are read-only: `receipts_path`, `models_path`, `health_path`, `ledger_path`, `downloads_path`, and `throughput_path`. `device_labels` maps a relay device key to `{ "badge", "color", "power_cap_w" }`. Missing or malformed configuration returns one usable `local` box. Use `docs/boxes.example.json` as a neutral two-box dGPU/iGPU/eGPU example.
+
+## Peer passback labels
+
+Passback prose calls its sender the peer orchestrator. The app uses `PEER_BOX_LABEL` for the displayed box label; this does not change passback paths, readers, or seen-state handling.

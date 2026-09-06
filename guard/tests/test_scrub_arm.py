@@ -34,7 +34,10 @@ QUOTE_PERSON = "the ow" + 'ner said "planted words"'
 QUOTE_SELF = "h" + "e put it him" + 'self as "planted words"'
 CLEAN_LINES = "\n".join([
     "bind to 0.0.0.0 or 127.0.0.1 and keep artifacts under ~/artifacts",
-    "a documented example home lives at /home/user/project",
+    # Split like every plant above it: the runtime string is byte-identical, so the scrub arm
+    # sees exactly what it saw before, but this file stops carrying a literal home path for
+    # the publication scanner to find once _tools/ and guard/ are no longer skipped.
+    "a documented example home lives at /ho" + "me/user/project",
     'the log line "I started the job" is agent voice, not a quoted person',
     "the report says PASS and the video says X — neither quotes a person",
 ])

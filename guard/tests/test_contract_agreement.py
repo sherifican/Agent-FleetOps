@@ -194,6 +194,16 @@ def test_strikethrough_banned_verb_is_allowed(tmp_path):
     assert not any("TRY" in m for m in msgs)
 
 
+def test_a_postposed_exemption_does_not_excuse_a_prescription(tmp_path):
+    """A line that documents one banned verb must not excuse a second banned verb
+    that is genuinely prescribed on the same line."""
+    pre = 'TEXT = "Use TRY to check the run; MONITOR is NOT valid"\n'
+    msgs = compare(readings_for(write_surfaces(tmp_path, preamble=pre)))
+    joined = " ".join(msgs)
+    assert "TRY" in joined, "the prescribed verb must be flagged"
+    assert "MONITOR" not in joined, "the documented verb must not be flagged"
+
+
 # --- exit codes: UNMEASURED must be loud -------------------------------------------------------------
 
 def test_exit_zero_when_clean(tmp_path, capsys):

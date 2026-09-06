@@ -19,6 +19,7 @@ jobs:
       - name: Guard layer — teeth-prover, contract agreement, unit gates
         run: |
           python3 guard/teeth_prover.py
+          python3 guard/mutation_harness.py --verify-anchors
           python3 guard/contract_agreement.py
           python -m pytest guard/tests/ -q
 

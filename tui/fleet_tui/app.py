@@ -16,6 +16,8 @@ from fleet_tui.widgets.format import _clean_model_name, _color_model
 from textual.binding import Binding
 from fleet_tui.widgets.terminal import TerminalPane
 
+PEER_BOX_LABEL = "peer-box"
+
 THEME_FILE = os.path.expanduser("~/.config/fleet_tui/theme")   # persists the chosen theme across reopen
 VERSION = "4.0"  # bump per shipped feature wave; shown in the Header sub-title (next to the clock)
 
@@ -90,7 +92,7 @@ def gather_data() -> dict:
         "ops": ops.build_ops(jobs_list, dispatches),   # reuse the already-fetched jobs+dispatches (no extra I/O)
         "cloud": cloud_legs.cloud_snapshot(dispatches),   # running codex/grok/kimi legs (dispatches + ext sessions) → MODELS
         "posture": posture.snapshot(),   # backup + supply-chain + upstream ledgers → POSTURE panel
-        "passback": passback.list_passback(),   # WinClaude→Fleet passback files (w) + header pb counter
+        "passback": passback.list_passback(),   # the peer orchestrator→Fleet passback files (w) + header pb counter
         "research_playlists": research_playlists.read_playlists(),   # video-research source queues → Research Playlists panel
         "boxes": fleet_boxes,
         "models_by_box": models_by_box,
@@ -237,7 +239,7 @@ class HelpModal(FleetModal):
         "  c  cosmetics menu             a  alerts history\n"
         "  F  cycle Ops filter           u  unload idle models\n"
         "  w  warm a model into VRAM     m  installed-models inventory\n"
-        "  p  WinClaude passback inbox   /  filter Ops tasks (type to filter)\n"
+        f"  p  {PEER_BOX_LABEL} passback inbox   /  filter Ops tasks (type to filter)\n"
         "  j/k or ↑/↓  move Ops selection   Enter  open selected Ops item\n"
         "  C  curation log + trigger a pass   ?  this help\n"
         "  Ctrl+`  embedded terminal     Ctrl+Q  quit\n"
@@ -863,7 +865,7 @@ class FailuresModal(FleetModal):
 
 
 class PassbackModal(FleetModal):
-    """WinClaude→Fleet passback files, newest-first with an unread (●) marker. Opening marks all seen
+    """the peer orchestrator→Fleet passback files, newest-first with an unread (●) marker. Opening marks all seen
     so the header's pb counter clears. Read-only: it never touches the passback files, only the seen-state."""
     BINDINGS = [("escape", "dismiss", "Close")]
 
@@ -874,7 +876,7 @@ class PassbackModal(FleetModal):
     def compose(self) -> ComposeResult:
         with Vertical(id="modalbox"):
             n_new = sum(1 for it in self._items if it.get("new"))
-            yield Static(f"WINCLAUDE PASSBACK — {len(self._items)} file(s), {n_new} new", id="modaltitle")
+            yield Static(f"the peer orchestrator PASSBACK — {len(self._items)} file(s), {n_new} new", id="modaltitle")
             with VerticalScroll(id="modalbody"):
                 if not self._items:
                     yield Static("No passback files yet. ✓")
@@ -934,8 +936,8 @@ class FleetCommands(Provider):
             ("Inbox: pending items + acknowledge",
              "Open the INBOX detail — pending alerts across all channels; ack clears them. Same as i.",
              app.action_show_inbox),
-            ("Passback: WinClaude → Fleet files",
-             "Open the WinClaude passback inbox (newest-first, unread markers). Same as p.",
+            (f"Passback: {PEER_BOX_LABEL} → Fleet files",
+             f"Open the {PEER_BOX_LABEL} passback inbox (newest-first, unread markers). Same as p.",
              app.action_show_passback),
             ("Alerts: proactive alert history",
              "The rolling log of proactive attention alerts (fail / down / hot). Same as a.",

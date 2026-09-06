@@ -88,10 +88,18 @@ this constant — that is the point: the extension becomes a deliberate, reviewa
    deliberately ("The six buckets MATCH the six RELEVANCE projects"); when they drifted apart we
    flagged legs for being correct.
 3. **No surface may PRESCRIBE a banned verb.** Read `BANNED` from the validator. A banned verb appearing
-   in the preamble or addendum as a *prescription* is the original incident. Distinguish prescription
-   from documentation: a banned verb is ACCEPTABLE where it appears inside a `~~strikethrough~~`, or on a
-   line that also contains "NOT valid", "not valid", "do NOT", "Rejected", "banned", or "instead of".
-   Anywhere else it is a violation. Report as `preamble prescribes banned verb 'TRY'`.
+   in the preamble or addendum as a *prescription* is the original incident.
+   Distinguish prescription from documentation, and keep the exclusion NARROWER than the construct it
+   excuses. A banned verb is ACCEPTABLE in exactly three shapes: inside a `~~strikethrough~~`; where
+   one of "NOT valid", "not valid", "do NOT", "Rejected", "banned" or "instead of" appears
+   BEFORE the verb on that line; or where the verb is the SUBJECT of a postposed negation
+   — "TRY and MONITOR are NOT valid here" — which is how the addendum documents its own
+   bans. Anywhere else it is a violation.
+   A line-wise exclusion, which is what this rule used to be, excuses everything else on
+   the line too, so a real prescription sharing a line with a later "instead of" reads clean. The
+   sibling scanner proved the narrower half already: `guard/tests/test_brief_scan.py:81-82` — "only
+   text BEFORE the match suppresses, so a leak whose sentence happens to contain a later 'not' is
+   still a leak." Report as `preamble prescribes banned verb 'TRY'`.
 
 ## Surfacing — the exit codes matter
 

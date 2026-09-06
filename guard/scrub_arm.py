@@ -28,9 +28,20 @@ OVERLAY FORMAT: one Python regex per line, matched case-insensitively per line o
       the very strings it exists to keep out. A literal one at least flags itself; one written in
       regex syntax does not match its own line, so nothing would ever say so.
 
-CORPUS: the INDEX under --root (`git ls-files -s`) — names AND bytes both come from what git
-  will publish, so a value staged for commit cannot hide behind a worktree file that was edited
-  afterwards. A symlink is scanned as the path it STORES, not as the file it points at. Outside a
+CORPUS: the INDEX under --root (`git ls-files -s`) supplies the file SET — names and bytes alike
+  come from what git will publish, so a value staged for commit cannot hide behind a worktree file
+  that was edited afterwards. The index is where the corpus comes from, not what the rules are
+  matched against: the rules are matched against the file's BYTES only. Of the five surfaces:
+  contents: covered.
+  filenames and paths: covered by the name arm, as a separate case from contents: the path is
+  matched against the same rules as the bytes and reported under its own surface.
+  binaries: covered, as the printable ASCII runs inside genuinely binary bytes.
+  compressed payloads: NOT covered (bytes are read as stored).
+  git history: NOT covered (one tree is scanned, so a value removed in a later commit is still
+  published by the earlier one).
+  This list is written down because a scanner that does not say which of the five it reads gets
+  read as covering all five.
+  A symlink is scanned as the path it STORES, not as the file it points at. Outside a
   git tree it walks the directory instead and says so. Bytes that fail to decode are still
   scanned (UTF-16 in both byte orders, then latin-1): a decode failure is a fact about the
   decoder, never evidence the bytes are clean. Only the committed plant is exempt, BY NAME.
@@ -254,12 +265,20 @@ def scan(root, rules):
                 unreadable.append((rel, str(e)))
                 continue
         scanned += 1
+        # THE NAME ARM. A path is published bytes too, and it is the one surface no decoder can
+        # reach: a file named after a private host leaks that name whatever its contents say.
+        # Line 0 means "the path, not a line in it"; the surface field keeps the two findings
+        # distinguishable in the report instead of collapsing them into one.
+        for cls, name, cre in compiled:
+            if cre.search(rel):
+                found.setdefault((rel, 0, cls, name, "name"), rel[:120])
         for text in _views(data):
             for n, line in enumerate(text.splitlines(), 1):
                 for cls, name, cre in compiled:
                     if cre.search(line):
-                        found.setdefault((rel, n, cls, name), line.strip()[:120])
-    hits = [(rel, n, cls, name, frag) for (rel, n, cls, name), frag in sorted(found.items())]
+                        found.setdefault((rel, n, cls, name, "content"), line.strip()[:120])
+    hits = [(rel, n, cls, name, surface, frag)
+            for (rel, n, cls, name, surface), frag in sorted(found.items())]
     return hits, scanned, exempt, unreadable, mode
 
 
@@ -287,11 +306,44 @@ def selftest(plant_path):
         if wrong:
             print("  FAIL  clean control flagged by %s — too wide: %s" % (wrong, l[:80]))
             failures += 1
+    failures += _selftest_name_arm()
     if failures:
         print("SELFTEST RED — %d failure(s); a scrub pass from this arm proves nothing" % failures)
         return 1
-    print("scrub selftest: every baseline rule flags its plant; the clean controls stay clean")
+    print("scrub selftest: every baseline rule flags its plant, the name arm flags a planted PATH, "
+          "and the clean controls stay clean")
     return 0
+
+
+def _selftest_name_arm():
+    """The name arm gets its own teeth, driven through scan() rather than through the regexes.
+
+    A rule matching a string in memory says nothing about whether scan() ever shows it the path;
+    that is the arm the whole item exists to add, so the check runs the real function over a
+    throwaway tree. The planted address is built by concatenation so this file's own bytes stay
+    clean under its own scan.
+    """
+    import tempfile
+    planted = "10." + "20.30.40"
+    with tempfile.TemporaryDirectory() as d:
+        dirty = "notes-%s.md" % planted
+        with open(os.path.join(d, dirty), "w", encoding="utf-8") as fh:
+            fh.write("nothing private in this body\n")
+        with open(os.path.join(d, "clean-name.md"), "w", encoding="utf-8") as fh:
+            fh.write("nothing private in this body either\n")
+        hits, _scanned, _exempt, _unreadable, _mode = scan(d, BASELINE)
+    named = [h for h in hits if h[0] == dirty and h[4] == "name"]
+    control = [h for h in hits if h[0] == "clean-name.md"]
+    failures = 0
+    if named:
+        print("  ok    [name-arm] flags a private value carried by a FILENAME")
+    else:
+        print("  FAIL  [name-arm] a private value in a filename was not flagged — the arm has no teeth")
+        failures += 1
+    if control:
+        print("  FAIL  clean control filename flagged: %s" % (control[:1],))
+        failures += 1
+    return failures
 
 
 def main(argv=None):
@@ -345,8 +397,14 @@ def main(argv=None):
     hits, scanned, exempt, unreadable, mode = scan(args.root, rules)
     print("scrub arm — profile=%s · %s · %d file(s) scanned, %d exempt by name (committed plant)"
           % (args.profile, mode, scanned, exempt))
-    for rel, n, cls, name, frag in hits:
-        print("  ⛔ %s:%d [%s/%s] %s" % (rel, n, cls, name, frag))
+    for rel, n, cls, name, surface, frag in hits:
+        # The CONTENT line keeps its exact shape: guard/tests/test_scrub_arm.py pins it, and that
+        # gate is asserting the old format for a reason that A11 does not change. The name arm is
+        # the new finding, so it is the one that announces its surface.
+        if surface == "name":
+            print("  ⛔ %s:%d [%s/%s] NAME-ARM: the PATH carries it — %s" % (rel, n, cls, name, frag))
+        else:
+            print("  ⛔ %s:%d [%s/%s] %s" % (rel, n, cls, name, frag))
     for rel, err in unreadable:
         print("  ? %s: UNREADABLE — %s" % (rel, err))
     if unreadable:

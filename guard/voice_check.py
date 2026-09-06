@@ -11,8 +11,8 @@ got it wrong. Material under `skills/` and `templates/` is written to be pulled 
 somebody else's fleet, where it becomes that team's own operating instructions — "we"
 there reads as the adopting team and is self-explanatory in place. Enforcing singular on
 it would be correcting prose that is not addressed to a reader at all. So this checks
-what a visitor READS to understand the project: README files, `docs/`, `adopt/`, and
-`specs/`.
+what a visitor READS to understand the project: README files, any document at the
+repository ROOT, `docs/`, `adopt/`, and `specs/`.
 
 The hazard is that some of these words are DATA, not voice. `guard/brief_scan.py`
 exists to detect leaked hypotheses and appeals to consensus in dispatch briefs, so it
@@ -28,6 +28,8 @@ permission the way a hand-kept exception list usually does.
   0  the published prose is first-person singular
   1  plural voice found in prose, or a stale exemption
   2  UNMEASURED — the file list could not be read, or nothing was scanned
+
+GUARD-CLASS: guard — published prose that slips into the plural must go red
 """
 
 import os
@@ -55,6 +57,12 @@ FRONT_DIRS = ("docs/", "adopt/", "specs/")
 def in_scope(rel):
     rel = rel.replace(os.sep, "/")
     if os.path.basename(rel).lower().startswith("readme") and rel.endswith(".md"):
+        return True
+    # A document at the ROOT is what a visitor opens next after the README, whatever it
+    # is named — an addendum pasted into an adopting fleet's brief, a staging note. Keying
+    # the scope on the name README alone left those unread, and a file this guard never
+    # opens reports exactly the same green as one it opened and cleared.
+    if "/" not in rel and rel.endswith(".md"):
         return True
     return rel.startswith(FRONT_DIRS)
 
@@ -204,6 +212,14 @@ def _selftest():
 
         doc.write_text("We measured it.\n")
         case("plural in a front-facing README still goes red", check(td)[0] == 1)
+
+        # The other half of the scope rule: a root-level document is front-facing
+        # whatever it is called, so a name that is not README may not buy an exemption.
+        doc.write_text("Singular prose.\n")
+        addendum = pathlib.Path(td) / "ADDENDUM.md"
+        addendum.write_text("We run this loop, and our stack depends on it.\n")
+        case("plural in a root-level document that is not a README goes red",
+             check(td)[0] == 1)
 
     if failures:
         print(f"SELFTEST FAILED ({len(failures)}): " + ", ".join(failures))

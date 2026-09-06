@@ -4,6 +4,14 @@
 # exit with an artifact produces <output>.PARTIAL and is never treated as success.
 set -eu
 
+# THE RECEIPT. Every exit path writes <output>.receipt.json — seven fields, one of which is an
+# `outcome` a reader can act on without re-running the dispatch. Two limits, stated here because a
+# reader will otherwise assume them away:
+#   * SIGKILL IS UNCOVERED BY CONSTRUCTION. An untrappable signal leaves no receipt, so the ABSENCE
+#     of one is not evidence of anything.
+#   * A usage failure that happens before an output path is known (no arguments at all) cannot write
+#     a receipt: there is nothing to derive its path from. Every other usage failure can, and does.
+
 BRIEF_FILE=${1:-}
 OUTPUT_FILE=${2:-}
 MODEL='<MODEL_ID>'
@@ -15,6 +23,59 @@ if [ -z "$BRIEF_FILE" ] || [ -z "$OUTPUT_FILE" ]; then
   printf '%s\n' 'usage: dispatch-wrapper.sh.template <brief-file> <output-file>' >&2
   exit 2
 fi
+
+RECEIPT_FILE="${OUTPUT_FILE}.receipt.json"
+RECEIPT_WRITTEN=0
+OUTCOME=usage
+WORKER_RC=2
+
+# ONE-SHOT. A signal handler that wrote and then fell through to the EXIT trap would emit the
+# receipt twice, and the second write would carry the handler's status rather than the run's.
+write_receipt() {
+  [ "$RECEIPT_WRITTEN" -eq 1 ] && return 0
+  RECEIPT_WRITTEN=1
+  # A JSON ENCODER, never printf interpolation: a path or a model name carrying a quote or a
+  # backslash must still produce valid JSON.
+  ARTIFACT_PATH="$OUTPUT_FILE" OUTCOME="$OUTCOME" EXIT_STATUS="$WORKER_RC" \
+  LANE="$MODEL $MODEL_CLI $EFFORT" python3 -c '
+import hashlib, json, os, sys
+path = os.environ["ARTIFACT_PATH"]
+data = b""
+try:
+    with open(path, "rb") as fh:
+        data = fh.read()
+except OSError:
+    data = b""
+json.dump({
+    "artifact_path": os.path.abspath(path),
+    "bytes": len(data),
+    "sha256": hashlib.sha256(data).hexdigest() if data else None,
+    "exit_status": int(os.environ["EXIT_STATUS"]),
+    "lane": os.environ["LANE"],
+    "timestamp": __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+                 .strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "outcome": os.environ["OUTCOME"],
+}, sys.stdout, indent=2)
+sys.stdout.write("\n")
+' > "${RECEIPT_FILE}.tmp" 2>/dev/null && mv "${RECEIPT_FILE}.tmp" "$RECEIPT_FILE"
+}
+
+on_signal() {
+  sig=$1
+  # An artifact that exists is PARTIAL work, not an empty run; the status is the conventional
+  # 128 + signal number, so a reader sees which signal ended it.
+  if [ -s "$OUTPUT_FILE" ]; then OUTCOME=partial; else OUTCOME=empty; fi
+  case "$sig" in TERM) WORKER_RC=143 ;; INT) WORKER_RC=130 ;; esac
+  write_receipt
+  exit "$WORKER_RC"
+}
+
+trap 'write_receipt' EXIT
+trap 'on_signal TERM' TERM
+trap 'on_signal INT' INT
+
+mkdir -p "$(dirname "$OUTPUT_FILE")"
+
 if [ "$MODEL" = '<MODEL_ID>' ] || [ "$EFFORT" = '<EFFORT_TIER>' ] || [ "$MODEL_CLI" = '<MODEL_CLI>' ]; then
   printf '%s\n' 'Replace <MODEL_ID>, <EFFORT_TIER>, and <MODEL_CLI>; this template is not runnable.' >&2
   exit 2
@@ -24,7 +85,6 @@ if [ ! -f "$BRIEF_FILE" ]; then
   exit 2
 fi
 
-mkdir -p "$(dirname "$OUTPUT_FILE")"
 LOG_FILE="${OUTPUT_FILE}.log"
 {
   printf 'dispatch start %s\n' "$(date -u +%FT%TZ)"
@@ -39,6 +99,18 @@ timeout "$DISPATCH_TIMEOUT_SECONDS" "$MODEL_CLI" \
   > "$OUTPUT_FILE" 2>> "$LOG_FILE"
 worker_rc=$?
 set -e
+WORKER_RC=$worker_rc
+# The timeout tool's own exit code is checked FIRST: a worker that outlived its window usually
+# leaves nothing behind, and `empty` would report the symptom while hiding the cause.
+if [ "$worker_rc" -eq 124 ]; then
+  OUTCOME=timeout
+elif [ ! -s "$OUTPUT_FILE" ]; then
+  OUTCOME=empty
+elif [ "$worker_rc" -eq 0 ]; then
+  OUTCOME=ok
+else
+  OUTCOME=partial
+fi
 
 {
   printf 'dispatch end %s\n' "$(date -u +%FT%TZ)"

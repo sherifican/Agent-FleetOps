@@ -3,5 +3,13 @@ __pycache__/
 .pytest_cache/
 _reports/
 _tools/identity_terms.txt
+# private local input: the approved-identity list the pre-push hook reads (never publish it)
+/_tools/approved_identities.txt
 graphify-out/
 adopt-scratch/
+
+# Local coder-lane scratch — an aider chat transcript in a PUBLIC repo would publish
+# brief text, file contents and model output. Near-miss 2026-09-04: aider-edit dropped
+# .aider.chat.history.md and three siblings into the root during wave 1 (org_lint 0 -> 4
+# strays); a `git add -A` would have committed them.
+.aider*

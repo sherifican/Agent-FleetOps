@@ -157,6 +157,38 @@ def test_load_state_of_a_missing_or_corrupt_file_is_empty_not_a_crash(tmp_path):
     assert load_state(str(bad)) == {}
 
 
+# --- corrupt vs bootstrap state files -----------------------------------------------------------------
+
+def test_a_corrupt_state_file_is_preserved_and_not_overwritten(tmp_path, monkeypatch, capsys):
+    p = str(tmp_path / "state.json")
+    bad_bytes = b"{this is not valid json at all"
+    (tmp_path / "state.json").write_bytes(bad_bytes)
+    monkeypatch.setattr("guard.leg_canary.LEGS", [L])
+    monkeypatch.setattr("guard.leg_canary._default_runner", runner_returning(0, "nope"))
+    main(["--state", p])
+    out = capsys.readouterr().out
+    # (a) original file bytes are byte-identical afterwards
+    assert (tmp_path / "state.json").read_bytes() == bad_bytes
+    # (b) a sibling .corrupt-* exists with the same bytes
+    siblings = list(tmp_path.glob("state.json.corrupt-*"))
+    assert len(siblings) == 1
+    assert siblings[0].read_bytes() == bad_bytes
+    # (c) the run reported UNMEASURED
+    assert "UNMEASURED" in out
+
+
+def test_a_missing_state_file_is_bootstrap_not_a_fault(tmp_path, monkeypatch, capsys):
+    p = str(tmp_path / "state.json")
+    monkeypatch.setattr("guard.leg_canary.LEGS", [L])
+    monkeypatch.setattr("guard.leg_canary._default_runner", runner_returning(0, CANARY_TOKEN))
+    main(["--state", p])
+    out = capsys.readouterr().out
+    assert "BOOTSTRAP" in out
+    assert "UNMEASURED" not in out
+    assert (tmp_path / "state.json").exists()
+    assert "testleg" in load_state(p)
+
+
 # --- state must never launder a failure ---------------------------------------------------------------
 
 def test_a_dead_probe_never_updates_last_alive(tmp_path, monkeypatch):

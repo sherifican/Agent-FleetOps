@@ -20,7 +20,8 @@ import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 NESTED = "GUARD_RUNNER_NESTED"
-OPTIONAL = ("PASSBACK_OUTBOX", "PASSBACK_TEETH_TARGET", "SCRUB_OVERLAY", "SCRUB_PROFILE")
+OPTIONAL = ("PASSBACK_OUTBOX", "PASSBACK_TEETH_TARGET", "SCRUB_OVERLAY", "SCRUB_PROFILE",
+            "COMMS_ROOT", "RUN_MUTATION_HARNESS")
 
 
 def _run_the_runner(extra_env=None):
@@ -44,11 +45,37 @@ def test_unconfigured_optional_integrations_are_skipped_not_unmeasured():
     _, out = _run_the_runner()
     steps = _summary(out)
     assert steps["violations"] == "0", out
-    assert steps["skipped"] == "2", (
+    assert steps["skipped"] == "4", (
         "an optional integration nobody supplied must be a skip, not UNMEASURED:\n" + out)
     # The one remaining UNMEASURED is the leg-liveness DRY RUN: a check that ran and declined to
     # assert, because no leg was probed. That distinction is the whole point of the split.
     assert steps["unmeasured"] == "1", out
+
+
+@pytest.mark.skipif(os.environ.get(NESTED) == "1", reason="inner run of the guard runner")
+def test_a_misfiled_comms_tree_reaches_the_runner_as_a_violation(tmp_path):
+    """The wiring, observed end to end rather than inferred from a grep.
+
+    A module-level unit test and an `rg` for the module's name can both pass while the runner never
+    invokes the check. So this arm supplies a comms tree with an ANSWER parked in the ASK queue and
+    reads the runner's own violation count, then moves the same file into replies/ as the control:
+    one arm alone would not distinguish "the guard fired" from "the runner is always red".
+    """
+    root = tmp_path / "comms"
+    for direction in ("outbound", "inbound"):
+        for folder in ("requests", "replies"):
+            (root / direction / folder).mkdir(parents=True, exist_ok=True)
+    misfiled = root / "outbound" / "requests" / "REPLY_to_a_question.md"
+    misfiled.write_text("an answer parked in the ask queue\n")
+
+    _, out = _run_the_runner({"COMMS_ROOT": str(root)})
+    assert _summary(out)["violations"] == "1", (
+        "a misfiled answer must reach the runner as a violation:\n" + out)
+
+    misfiled.rename(root / "outbound" / "replies" / "REPLY_to_a_question.md")
+    _, out = _run_the_runner({"COMMS_ROOT": str(root)})
+    assert _summary(out)["violations"] == "0", (
+        "the same file, correctly filed, must leave the runner clean:\n" + out)
 
 
 @pytest.mark.skipif(os.environ.get(NESTED) == "1", reason="inner run of the guard runner")
@@ -57,6 +84,6 @@ def test_a_configured_check_that_cannot_run_is_still_unmeasured(tmp_path):
     _, out = _run_the_runner({"PASSBACK_OUTBOX": str(tmp_path)})
     steps = _summary(out)
     assert steps["violations"] == "0", out
-    assert steps["skipped"] == "1", out
+    assert steps["skipped"] == "3", out
     assert steps["unmeasured"] == "2", (
         "a configured check with nothing to compare must stay UNMEASURED:\n" + out)

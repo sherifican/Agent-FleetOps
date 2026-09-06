@@ -1,5 +1,5 @@
 """
-Pure headless reader for WinClaude->Fleet passback files.
+Pure headless reader for the peer orchestrator->Fleet passback files.
 """
 import glob
 import json

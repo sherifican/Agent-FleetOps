@@ -61,7 +61,7 @@ another machine). The commit history tells that story.
 | `skills/` | **Generalized agent-discipline procedures** — evaluation integrity, model routing (the living-table method), the local-lane build loop, multi-agent code workflow, research dispatch/verification, memory ops, brain bookkeeping, protected-function guards, blocked-page retrieval, and more. Each encodes failure stories from real operation. The portable start-list is in [`adopt/20_skills.md`](adopt/20_skills.md); you are not expected to install them all. |
 | `templates/` | Copyable dispatch, honesty, pinned-environment, and research-artifact patterns. Templates are adoption patterns, not automatic enforcement. |
 | `_tools/` | The export pipeline's own gates — provenance wall-checker, secrets/personal-data scanner, and a **ref gate**, all mutation-proven (`--self-test`). The first two ask "is this tree safe to publish?"; the third asks the question they structurally cannot: **"what would a push actually publish?"** A history rewrite is only true of the branch you rewrote — this repo's own rewrite left a clean `main` beside two leftover refs still carrying the trailers and build artifacts the rewrite removed, one `push --all` away from being republished. Content gates scan a worktree; pushes carry refs. |
-| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 309 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
+| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 480 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
 | `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, the verified-system-map pattern, and the [research-team](specs/research-team-protocol.md), [rigor-spectrum](specs/rigor-spectrum.md), and [honesty-stop-gate](specs/honesty-stop-gate.md) guides. |
 | `bench/` | **The two-box throughput operating log** — 67 measurements over 22 model tags, with sample sizes and device labels attached. See below. |
 
@@ -142,7 +142,10 @@ rather than because each needs commentary.
 
 *Host names, LAN addresses and box nicknames are substituted, not masked: the address bar reads
 `box-a.lan` and remote addresses use the RFC 5737 documentation range, which is the same replacement
-this repository's own publish scanner treats as sanctioned. Every reading is real. As with the
+this repository's own publish scanner treats as sanctioned. What is substituted is the VALUE.
+Field and key NAMES stay intact, because a key name is the interface a delegate codes against:
+aliasing the name instead of the value produces code that compiles against a schema that does
+not exist, which is a second failure bought for nothing. Every reading is real. As with the
 terminal screenshot above, this is a newer in-house build than the `tui/` sources exported here — the
 exported `tui/fleet_tui/serve.py` wraps `textual-serve` and gives an adopter the same
 serve-to-the-LAN capability, not this exact layout.*

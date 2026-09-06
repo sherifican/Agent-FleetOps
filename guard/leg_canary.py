@@ -110,6 +110,18 @@ def load_state(path) -> dict:
         return {}
 
 
+def read_state(path) -> tuple[dict, str]:
+    """Distinguish absent (bootstrap), corrupt, and ok state files."""
+    p = Path(path)
+    if not p.exists():
+        return {}, "bootstrap"
+    try:
+        state = json.loads(p.read_text(encoding="utf-8"))
+        return (state if isinstance(state, dict) else {}), "ok"
+    except (OSError, ValueError, TypeError):
+        return {}, "corrupt"
+
+
 def save_state(path, state) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -149,7 +161,16 @@ def main(argv=None) -> int:
         wanted = {name.strip() for name in args.legs.split(",") if name.strip()}
         selected = [leg for leg in LEGS if leg.name in wanted]
     now = int(time.time() // 3600)
-    state = load_state(args.state)
+    state, state_status = read_state(args.state)
+    if state_status == "bootstrap":
+        print(f"BOOTSTRAP: no state file at {args.state} — first run")
+    elif state_status == "corrupt":
+        raw = Path(args.state).read_bytes()
+        ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        sibling = f"{args.state}.corrupt-{ts}"
+        Path(sibling).write_bytes(raw)
+        print(f"UNMEASURED: state file at {args.state} did not parse — bytes preserved at {sibling}")
+        state = {}
     runner = _dry_runner if args.dry_run else None
     if args.dry_run:
         print("DRY RUN: built-in fake runner; no cloud calls made")
@@ -166,7 +187,8 @@ def main(argv=None) -> int:
     if args.dry_run:
         print("DRY RUN: state NOT written (a fake probe must never count as evidence of liveness)")
     else:
-        save_state(args.state, state)
+        if any(r.outcome == "ALIVE" for r in results):
+            save_state(args.state, state)
 
     if args.dry_run:
         # Wiring proved, nothing measured. 2 = UNMEASURED, and 2 DOMINATES 1 in this subsystem.

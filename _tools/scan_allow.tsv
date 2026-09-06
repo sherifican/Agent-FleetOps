@@ -1,4 +1,8 @@
 # deliberate self-references, one human decision per line
+# ROW SHAPE: path<TAB>pattern<TAB>surface, where surface is `content` or `name`.
+# A two-column row means `content` — that is the whole of its meaning, not a shorthand for
+# both: the scanner reads filenames as well as bytes, and a decision made about a file's TEXT
+# is not a decision about its NAME. To excuse a name, the row has to say `name` out loud.
 README.md	owner-identity
 LICENSE	owner-identity
 specs/driver-lock-protocol.md	owner-identity

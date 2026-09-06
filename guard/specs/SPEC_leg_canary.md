@@ -69,6 +69,15 @@ fully exercisable with no network and no cloud spend. A guard you cannot test of
 UNMEASURED means we never got to ask (the probe is broken). Conflating them sends you debugging the
 wrong system — a sibling team burned a day on three false reds that were all broken measurements.
 
+A third distinction sits one level below those two, on the state file rather than on the probe:
+ABSENT and CORRUPT are not the same either. A missing state file on a first run is BOOTSTRAP —
+not a fault, not UNMEASURED, and it is written normally by the first ALIVE probe. A state file
+that exists and will not parse is UNMEASURED for the state: the run says so in its own line,
+preserves the unparseable bytes beside the original before doing anything else, and never writes
+over them on a tick that measured nothing. Collapsing the two makes a destroyed accumulator
+print the same staleness line as a fresh install, which is the one reading that stops anyone
+looking.
+
 `evidence` for a DEAD leg must include the first ~200 chars of what came back instead, so a human can
 tell a quota message from a crash from an empty string without re-running anything.
 
@@ -109,7 +118,9 @@ meaningful.
 
 Update state only for legs that probed ALIVE. Never write a "last alive" for a DEAD or UNMEASURED
 probe — that would launder a failure into the health record, which is the same laundering problem a
-stored baseline has.
+stored baseline has. A corrupt state file is rebuilt only from a successful acquisition, and only
+with the unparseable bytes kept beside it; an UNMEASURED or DEAD tick freezes the state file
+exactly as it freezes a value.
 
 ## Hard rules
 

@@ -24,6 +24,8 @@ the caller's guard tested for verdicts "poisoned"/"suspicious", which match NOTH
 vocabulary (CLEAN · DATA_QUALITY · POTENTIAL_POISON · CERTAIN_POISON). The envelope was applied while the
 payload passed straight through, and the gate LOOKED like it worked. Caught only by asserting the payload
 was ABSENT — not by reading the code. Hence `verdict_blocks()` below is a named function with its own test.
+
+GUARD-CLASS: guard — fetched bytes that fail the adopter-supplied detector must be refused
 """
 import importlib.util, os
 

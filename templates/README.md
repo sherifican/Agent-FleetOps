@@ -8,11 +8,23 @@ Pattern: runs a worker under bubblewrap with a read-only system view, disposable
 
 **The defect this prevents:** a worker was accused of inventing results when it had accurately described a different sandbox filesystem view. Deliberately scope the workspace bind and state the sandbox boundary in the brief so the receiver knows what the worker can see.
 
+**The read bind and the writable workspace bind are two different exposures.** The template's shipped read-only root bind makes the whole host READABLE to the worker; only the home directory is re-pointed. Therefore a brief scrubbed of identifiers does not scrub the files the worker can read: redaction of the brief reaches neither bind. That read bind is a decision to make for the destination, per task, not once for every task. A distribution-specific narrow alternative is written out in the template's trailing comments and is deliberately incomplete. The following paragraph already covers the writable workspace bind.
+
+The separate writable workspace bind is the WRITE channel, and it is the one exposure the per-invocation isolation does not cover: the temporary storage and the sandbox home are fresh tmpfs on every run, but the workspace is host storage, and a workspace reused across runs is what makes an output unattributable — a file falling inside two runs' windows can only be recorded as belonging to neither. Give every run its own workspace directory.
+
 ## `dispatch-wrapper.sh.template`
 
 Pattern: accepts a brief file and output file, logs start and end metadata with the explicit model and effort, applies a no-hang `timeout`, and retains every non-empty artifact. A nonzero worker exit with output writes a `.PARTIAL` marker and prints `PARTIAL — exists but UNVERIFIED`.
 
 **The defect this prevents:** a worker report said failure while the artifact had landed on disk; retrying would have overwritten good work. The artifact is ground truth in both directions, and the marker forces inspection before retry. This occurred repeatedly on a reference fleet.
+
+Every run also writes `<output>.receipt.json` beside the artifact, carrying seven fields — the artifact path, its byte length, its sha256, the worker's exit status, the lane, a UTC timestamp, and an `outcome` of `ok`, `partial`, `empty`, `usage` or `timeout` — so how a dispatch ended can be read without re-running it or reading a log by eye. It is written from a trap on every exit path the shell can trap; an untrappable kill leaves none, and the template says so rather than letting an absent receipt be read as evidence.
+
+**Arm the watcher in the same turn as the dispatch.** A watcher armed later, or not at all, makes a human the polling mechanism. Tell the watcher which artifact to expect, and key its death test on process absence plus the absence of a valid artifact — a vocabulary of known failure strings is a supplement to that test, never the whole of it.
+
+**Containment of a dispatch already in flight has to be arranged at launch.** The topology has to put the worker inside the group that gets recorded. Measured with one coreutils implementation (uutils coreutils 0.8.0): a wrapper started under `setsid` leads its own process group; a worker run under plain `timeout` lands in a DIFFERENT group, because that tool puts itself and its child in a new one; the same worker run under `timeout --foreground` stays in the wrapper's group. Whether a given implementation behaves this way is a property to CHECK on the tool at hand, not to assume. So start the wrapper as its own session or process-group leader, keep the timeout tool inside that group rather than around it, record that group id at launch, and — before killing — verify both that the recorded group still belongs to that dispatch and that the worker is actually a member of it. Where the topology cannot be arranged, record and verify the worker's actual group instead of assuming the wrapper's.
+
+**Killing the inner model process instead is the wrapper's retry trigger.** A fallback lane resurrects the payload unless the wrapper dies first. Killing "the wrapper's group" without having made one targets whatever group the caller happens to be in. This paragraph is doctrine: no containment test ships beside it here.
 
 **The defect this prevents:** two workers hung indefinitely during network stalls until a timeout bounded them. A dispatch without a ceiling can stall the whole fleet.
 

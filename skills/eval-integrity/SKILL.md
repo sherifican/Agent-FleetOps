@@ -409,6 +409,18 @@ periodic-texture case produced a real hardening (a ratio-only similarity test ne
 it, or fail-CLOSED deletes a new screen), so the honest verdict was *both*; (3) a fixture you had to reason
 about to interpret is a fixture that needs simplifying, because the next reader will not repeat the reasoning.
 
+## A PASSING TEST CAN BE PINNING THE DEFECT — on a fix, search the suite for the OLD behaviour
+When you fix a defect, search the suite for tests that assert the OLD behaviour and update them
+deliberately, in the same commit as the fix. A test that fails BECAUSE of your fix may be the wrong
+artifact to preserve: a green test protects whatever it asserts, including the bug — it passes for
+months while the defect misleads real runs, and then it converts the eventual fix into an apparent
+regression. This repository carries its own instance, and it is worth opening:
+`tui/tests/test_cloud_legs_claude.py:28-31` records an assertion that a model id came back unchanged,
+which is exactly what printed a vendor name twice in a live panel — "The old assertion was pinning
+the defect in place." The search is part of the fix, not a follow-up: name the tests the search
+returned, say which you changed and why, and treat "no test asserts the old behaviour" as a finding
+you state rather than an absence you assume.
+
 ## PRE-FLIGHT CHECKLIST — run before EVERY test
 - [ ] Rendered/executed every test input and **EYEBALLED it — especially the control**.
 - [ ] The control is genuinely clean/correct, verified by inspection (not assumption).
@@ -429,6 +441,7 @@ about to interpret is a fixture that needs simplifying, because the next reader 
 - [ ] The pass/fail BAR: every defensible READING enumerated + scored (the one your stated target implies BINDS); the %-bar converted to item units (margin ≥ 1 item, else "not provable at this n"); the threshold's commit provably predates the result — else claim only "not moved".
 - [ ] Every budget/cap/keep-count inside the HARNESS is a constant of the comparison, not derived from the arm under test; shared denominators stated explicitly when reporting absolute counts across arms.
 - [ ] Any FIX-validation metric was checked for direction: it must be able to FALL if the fix is wrong.
+- [ ] On a FIX: the suite was searched for tests asserting the OLD behaviour, and every one found was updated deliberately in the same commit — a test that fails because of your fix may be the wrong artifact to keep.
 - [ ] For quality evals: raw outputs captured for human judgment, not just a binary.
 - [ ] **If any subject-consensus contradicts your GT → re-audit the test; do NOT blame the subjects.**
 

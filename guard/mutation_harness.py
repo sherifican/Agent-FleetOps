@@ -56,6 +56,12 @@ GUARDS = {
     "curation":  ("guard/tests/test_curation_gate.py",   "CURATION GATE HAS TEETH - ALL CHECKS PASSED"),
     "org_lint":  ("guard/tests/test_org_lint.py",        "ORG LINT HAS TEETH - ALL CHECKS PASSED"),
     "roster":    ("guard/tests/test_roster_check.py",    "ROSTER CHECK HAS TEETH - ALL CHECKS PASSED"),
+    # Two guards whose red/green case lives HERE rather than in a pytest module of their own. The
+    # harness runs a guard as `python3 <path>` with no arguments, so each is reached through a thin
+    # runnable proof beside it; the checks themselves stay in the module.
+    "fetch_gate": ("guard/tests/teeth_fetch_gate.py",   "FETCH GATE HAS TEETH - ALL CHECKS PASSED"),
+    "honesty_stop_gate": ("guard/tests/teeth_honesty_stop_gate.py",
+                          "HONESTY STOP GATE HAS TEETH - ALL CHECKS PASSED"),
 }
 # files copied into the sandbox (guards + code under test), relative to REPO
 FILES = [
@@ -72,6 +78,9 @@ FILES = [
     "guard/brief_scan.py",
     "guard/curation_gate.py",
     "guard/org_lint.py",
+    "guard/fetch_gate.py",
+    "guard/honesty_stop_gate.py",
+    "guard/honesty_gate.config.example.json",
     "templates/roster-check.sh.template",
 ] + [path for path, _ in GUARDS.values()]
 
@@ -128,6 +137,8 @@ def M(mid, guard, path, desc, claims, old, new):
 # THE MUTATIONS — each reintroduces the bug a specific guard check claims to make impossible.
 # `claims` names the guard property under test, so a SURVIVED line reads as a finding.
 # ────────────────────────────────────────────────────────────────────────────────────────────
+FG = "guard/fetch_gate.py"
+HS = "guard/honesty_stop_gate.py"
 RC = "vision_measure/replay_cascade.py"
 VI = "vision_ingest.py"
 VM = "vision_motion.py"
@@ -135,6 +146,15 @@ VS = "vision_semantic.py"
 
 MUTATIONS = [
     # ── cascade replay: verdict() ───────────────────────────────────────────────────────────
+    # ── the two harness-backed guards ────────────────────────────────────────────────────────
+    M("FG1", "fetch_gate", FG, "a scan error stops counting as a reason to withhold the payload",
+      "verdict_blocks() withholds a payload whenever the verdict is poisoned OR the scan itself failed",
+      'BLOCKING_PREFIXES = ("POTENTIAL_POISON", "CERTAIN_POISON", "scan-error")',
+      'BLOCKING_PREFIXES = ("POTENTIAL_POISON", "CERTAIN_POISON")'),
+    M("HS1", "honesty_stop_gate", HS, "unbacked claims are collected but never reported, so the turn passes",
+      "scan_turn returns the unbacked claims it found, so the gate can block on them",
+      "    return bad\n\n\ndef block_message",
+      "    return []\n\n\ndef block_message"),
     M("CR1", "cascade", RC, "gate boundary >= becomes >: score_p == gate now skips the auditor",
       "'score_p == gate is ABOVE the gate (>=, not >)'",
       "    if gate > 0 and isinstance(sp, (int, float)) and kp is not None and sp < gate:",

@@ -20,7 +20,7 @@ Three states, because two is what caused the original failure:
 ★ WHY "NOT-PUSHED" IS NOT A VIOLATION — this check was WRONG on its first run and this is the
 correction. There are TWO delivery paths, and this box can only observe one:
   (1) push script -> lands in the receiver's dated transfer dir  -- observable here
-  (2) a peer agent reading the outbox IN PLACE from this box over the .100 SSH link (documented in
+  (2) a peer agent reading the outbox IN PLACE from this box over the SSH link (documented in
       the channel's SSH key and its logins are real)  -- NOT observable
 So "absent from Downloads" cannot distinguish NEVER-SENT from READ-IN-PLACE. Reporting it as a violation
 would assert knowledge we do not have, and would be the same two-states-one-output defect this whole

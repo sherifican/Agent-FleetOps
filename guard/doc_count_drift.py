@@ -27,6 +27,8 @@ Breadth is not rigour, either. The first cut matched any "<n> hermetic tests" an
 immediately flagged a changelog line reading "6 hermetic tests" — a true sentence about
 how many tests one change added. A guard that reports true sentences as drift gets
 muted, and a muted guard catches nothing, so the patterns below name their subject.
+
+GUARD-CLASS: guard — a documented count that no longer matches its instrument must go red
 """
 
 import csv
@@ -106,6 +108,10 @@ def _claims_guard_suite(line, rel):
            re.finditer(r"(\d+)\s+hermetic\s+unit\s+gates?", line, re.I)]
     if not out and "guard/tests" in line:
         out = [int(m.group(1)) for m in re.finditer(r"(\d+)\s+tests?\b", line, re.I)]
+    if not out and rel.endswith(".svg"):
+        m = re.match(r"^\s*(\d+)\s+guard\b", line, re.I)
+        if m:
+            out = [int(m.group(1))]
     return out
 
 
