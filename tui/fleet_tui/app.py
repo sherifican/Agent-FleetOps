@@ -247,7 +247,7 @@ class HelpModal(FleetModal):
         "  C  curation log + trigger a pass   ?  this help\n"
         "  Ctrl+`  embedded terminal     Ctrl+Q  quit\n"
         "  Ctrl+P  command palette\n"
-        "  phone/browser view:  ./serve.sh  → http://<fleet-LAN-ip>:8011  (home wifi only)\n\n"
+        "  phone/browser view:  ./serve.sh  → http://<fleet-LAN-ip>:8011  (no authentication; configure firewall first)\n\n"
         "[b]MOUSE[/b]\n"
         "  click a panel's TITLE row (▼/▶) → collapse/expand it (others grow to fill)\n"
         "  click a JOB row                 → that job's detail + ▶ Run-now\n"

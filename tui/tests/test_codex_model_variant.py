@@ -24,7 +24,7 @@ def _procs(monkeypatch, *cmdlines):
 
     The cache MUST be busted: a sibling test (or the app itself) can populate it with real data,
     which would make these assertions read live state instead of the stub — the order-dependent
-    flake documented in the fleet-tui-dev skill.
+    flake prevented here by resetting the cache before each simulated process set.
     """
     rows = [(1000 + i, list(c)) for i, c in enumerate(cmdlines)]
     monkeypatch.setattr(cloud_legs, "_iter_proc_cmdlines", lambda: iter(rows))

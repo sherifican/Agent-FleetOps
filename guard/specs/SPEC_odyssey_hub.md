@@ -1,6 +1,7 @@
-# SPEC — odyssey_crawl_hub.py (the Odysseus data-crawl hub renderer)
+# SPEC — proposed odyssey_crawl_hub.py (the Odysseus data-crawl hub renderer)
 
-Write the file COMPLETELY at `../odyssey_crawl_hub.py`.
+Status: design only; `odyssey_crawl_hub.py` is not shipped. The contract below describes
+a future implementation; its example invocation is not an available command.
 
 ## What this is
 
@@ -18,7 +19,7 @@ script must pick up every file currently on disk and rebuild the page. Never har
             <research-root>/odysseus_crawl/reconciled/*.md
     OUTPUT  <research-root>/odysseus_crawl/reports/ODYSSEUS_CRAWL_HUB.html
 
-    usage: odyssey_crawl_hub.py [--root DIR] [--out FILE]
+    proposed usage (not shipped): odyssey_crawl_hub.py [--root DIR] [--out FILE]
 
 ## THE STRUCTURAL RULE (the owner asked for this explicitly)
 

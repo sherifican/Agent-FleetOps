@@ -238,11 +238,11 @@
 - **[feat]** `./serve.sh` (`fleet_tui/serve.py`, `textual-serve`) serves the TUI over HTTP so it opens in
   a **browser — including the phone on home wifi** at `http://<fleet-LAN-ip>:8011`. Each browser session
   spawns its own `python -m fleet_tui`, so it's the same monitor, just reachable.
-- **[infra/security]** Binds `0.0.0.0:8011` (so the phone can reach it) but **firewall-scoped** with the
-  houselan-fw pattern to loopback + PC-link (192.0.2.0/24) + home-LAN (198.51.100.0/24), DROP for
-  anything off the home network — verified reachable on the LAN IP, never public; persisted to
-  `/etc/iptables/rules.v4`. Host/port env-overridable. 242 tests green. (Roadmap wave #8, owner-approved
-  "both" = loopback + home-LAN.)
+- **[infra/security]** The server binds all interfaces by default and has no authentication.
+  Host/port are environment-overridable. Adopters must choose a loopback-only bind or configure
+  a host firewall for trusted clients, and add authentication before admitting untrusted clients.
+  The package does not provision or verify network restrictions. Historical test count: 242.
+
 
 ## v3.20 — 2026-07-07 — Trends tab: live GPU/CPU sparkline plots (wave 7)
 - **[feat]** New **Trends** tab with two live `textual-plotext` charts — **utilization %** (gpu0/gpu1/cpu,

@@ -88,3 +88,12 @@ as executed when those modules cannot import.
 its dictionary shape, the five panel IDs with external path dependencies, and
 string notice values. Keep this contract aligned when adding or removing such
 panel dependencies; the notice mapping remains present when its strings are empty.
+
+
+## Browser serving contract
+
+`./serve.sh` launches `fleet_tui.serve` from this directory using `FLEET_TUI_PYTHON`,
+the local venv when present, or `python3`. Dependencies must be installed first.
+The server has no authentication and defaults to all interfaces; deployment needs
+a deliberate bind policy and host firewall. Never describe host restrictions as
+provided or checked by this package.

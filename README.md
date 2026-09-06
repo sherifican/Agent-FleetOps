@@ -99,7 +99,11 @@ unknown. A monitor that only ever showed green would be the one worth distrustin
 ### The same fleet from a phone
 
 The monitor also serves over the home LAN, so the whole fleet is readable from a phone browser on the
-same network — token-gated, loopback plus LAN only, never exposed publicly. It is the same data the
+same network. The shipped `tui/serve.sh` wrapper has no token authentication and binds all interfaces
+by default. Before running it, install the TUI dependencies and set `FLEET_TUI_SERVE_HOST` to a
+loopback-only bind, or configure a host firewall to admit only trusted clients. Add authenticated
+access before allowing untrusted clients; this package does not install or verify those controls.
+The phone captures below show my separate layout. It is the same data the
 terminal shows, re-laid-out for a narrow screen: cards stack, the model kanban becomes sections, and
 the wide tables scroll rather than truncate.
 
@@ -528,7 +532,8 @@ Not everything here was invented from scratch. Much of this repo's value is in *
 and generalizing** techniques — and several components are adapted from, or build on, existing
 open-source work. Each is credited inline where it lives; consolidated here:
 
-- **Odyssey Hub** (`odyssey_crawl_hub.py` and its editorial presentation) — the deterministic "the model
+- **Odyssey Hub** (the proposed `odyssey_crawl_hub.py`, not shipped;
+  [design specification](guard/specs/SPEC_odyssey_hub.md) and its editorial presentation) — the deterministic "the model
   emits markdown, a renderer styles it" design and its visual treatment are **adapted from Odysseus**,
   PewDiePie's multi-agent workspace tool (specifically its `visual_report.py`). The name deliberately
   stays in that family; the data model and the fleet pipeline around it are this repo's.
