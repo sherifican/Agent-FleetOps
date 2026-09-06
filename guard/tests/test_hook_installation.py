@@ -898,3 +898,27 @@ def test_private_identity_ignore(tmp_path, rel, ignored, pattern):
         assert matched == rel and source.split(":", 2)[2] == pattern, r.stdout
     else:
         assert r.returncode == 1, f"{rel} must stay publishable:\n{combined(r)}"
+
+
+@pytest.mark.parametrize("case,token", [
+    ("config-missing", TOKEN_CONFIG), ("terms-missing", TOKEN_TERMS),
+    ("scanner-fails", TOKEN_SELFTEST),
+])
+def test_no_argument_preflight_refuses_before_any_write(tmp_path, case, token):
+    """No-argument activation must preserve every hook when any preflight input fails.
+
+    The existing legacy-no-args case is the valid-input preservation control.
+    These cases fail on the pkg-c3 installer because it installs despite each defect.
+    """
+    fx = make_fixture(tmp_path)
+    plant_preexisting_sentinel(fx)
+    if case == "config-missing":
+        fx.git("config", "--unset-all", "fleetops.approvedIdentity")
+    elif case == "terms-missing":
+        (fx.repo / "_tools" / "identity_terms.txt").unlink()
+    else:
+        (fx.repo / "_tools" / "scan_gate.py").write_text(FAILING_SCANNER)
+    before = fx.snapshot()
+    result = fx.installer()
+    assert_refused(result, token)
+    assert fx.snapshot() == before, "failed preflight must not install or overwrite any hook"

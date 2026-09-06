@@ -18,7 +18,7 @@ staleness check could never fire. That defect is why the dry run now returns `2`
 |---|---|---|
 | Teeth-prover | `python3 guard/teeth_prover.py` | 10 planted mutations; every guard proves it can fail |
 | Contract agreement | `python3 guard/contract_agreement.py` | all four vocabulary surfaces agree (validator · addendum · rollup · preamble) |
-| Guard unit gates | `pytest guard/tests/ -q` | 571 tests, hermetic (one is environment-gated: it skips without `PASSBACK_OUTBOX`; one is a strict xfail that records a known gap) |
+| Guard unit gates | `pytest guard/tests/ -q` | 574 tests, hermetic (one is environment-gated: it skips without `PASSBACK_OUTBOX`; one is a strict xfail that records a known gap) |
 | Documented counts | `python3 guard/doc_count_drift.py` | every count written into prose or the banner matches what it describes |
 | Rendered banner | `python3 guard/banner_render.py` | the PNG keeps its transparent corners and was rendered from the SVG in the tree |
 | Full runner | `guard/run_guards.sh` | the above in order; leg-liveness dry-run returns `2 = UNMEASURED` by design |
@@ -154,8 +154,9 @@ Success prints the selected source category, the effective path, and one line be
 `installed <path> (guard/hooks/pre-push, mode 755, parity verified by sha256sum and cmp; identity
 route: git-config)`. Exit status: 0 installed · 1 refused (nothing changed; stderr says why) · 2
 usage error. Only `pre-push` is written. Running the installer with no arguments is the older route
-and installs every hook in `guard/hooks/` (currently `commit-msg` and `pre-push`) without this
-preflight; this recipe deliberately does not use it.
+and installs every hook in `guard/hooks/` (currently `commit-msg` and `pre-push`) after the same
+git-config identity and scanner preflight. A failed preflight writes no hooks. Use the explicit
+`--pre-push-config` route above to install only pre-push and preserve other existing hooks.
 
 ### 5. Check before every push
 

@@ -5,7 +5,7 @@
 # its own copy.
 #
 #   install.sh                                  legacy: install every guard/hooks/* (except this
-#                                               script) into the effective hooks directory
+#                                               script) after the git-config preflight
 #   install.sh --pre-push-config [--replace]    install ONLY guard/hooks/pre-push at Git's
 #                                               effective hook path via the git-config identity
 #                                               route; --replace backs up and replaces a
@@ -323,5 +323,5 @@ fi
 case "$mode" in
   install) do_install ;;
   check)   do_check ;;
-  legacy)  do_legacy ;;
+  legacy)  preflight; do_legacy ;;
 esac
