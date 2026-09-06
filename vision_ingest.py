@@ -28,6 +28,12 @@ Design rules baked in (owner-approved 2026-07-15):
 """
 import argparse, base64, glob, hashlib, json, math, os, re, shutil, subprocess, sys, urllib.request
 
+# External paths have no default; docs/vision_ingest.example.json is the authors' instance.
+def _configured_path(key):
+    value = os.environ.get(key, "")
+    return os.path.expanduser(value) if value.strip() and "\x00" not in value else None
+
+
 SIDECAR = os.environ.get("GEMMA_VISION_URL", "http://127.0.0.1:8336")
 GEMMA_MODEL = os.environ.get("GEMMA_VISION_MODEL", "gemma4-e4b-q4-k-m")
 SCENE_THRESH = float(os.environ.get("VI_SCENE_THRESH", "0.18"))
@@ -682,8 +688,8 @@ def crossmodal(root):
             r["verdict"] = "suspicious_topical_divergence_downgraded"
             json.dump(r, open(f"{root}/vision/crossmodal.json", "w"), indent=1)
             return 0
-        c = "~/.local/bin/fleet_alert.sh"
-        os.path.exists(c) and subprocess.run([c, "--raise", "crossmodal_poison",
+        c = _configured_path("VI_ALERT_SCRIPT")
+        c is not None and os.path.exists(c) and subprocess.run([c, "--raise", "crossmodal_poison",
             f"CROSS-MODAL AUDIT confirmed likely POISONED transcript in {os.path.basename(root)}: transcript content unsupported by on-screen evidence. Pipeline should CUT before synthesis. See vision/crossmodal.json"], check=False)
         return 3
     return 0
@@ -931,16 +937,22 @@ def harvest(root, title="", vid=""):
         print(f"harvest: {name} → {ledger}")
 
 
-BACKUP_ROOT = os.environ.get("VI_BACKUP_ROOT", "/mnt/backup/fleet_vision")
+BACKUP_ROOT = _configured_path("VI_BACKUP_ROOT")
+BACKUP_MOUNT = _configured_path("VI_BACKUP_MOUNT")
 
 
 def archive(root):
     """Move the SAVED companion images to the BACKUP drive so the primary stays lean (owner 2026-07-15).
     Copy → verify (size match) → delete the primary copy. Leaves companions.json annotated with backup paths +
     a self-contained MANIFEST (synthesis + companions) on the backup drive."""
+    if BACKUP_ROOT is None or BACKUP_MOUNT is None:
+        print("archive: not configured: VI_BACKUP_ROOT / VI_BACKUP_MOUNT — SKIP"); return
+    mount, destination = os.path.realpath(BACKUP_MOUNT), os.path.realpath(BACKUP_ROOT)
+    if os.path.commonpath([mount, destination]) != mount:
+        print("archive: backup root outside configured mount — SKIP"); return
     keeps = f"{root}/vision/keeps"
-    if not os.path.ismount("/mnt/backup"):
-        print("archive: /mnt/backup NOT mounted — SKIP (companions stay on primary; re-run when mounted)"); return
+    if not os.path.ismount(mount):
+        print("archive: configured backup mount NOT mounted — SKIP (companions stay on primary)"); return
     slug = os.path.basename(root.rstrip("/"))
     dest = f"{BACKUP_ROOT}/{slug}/companions"
     os.makedirs(dest, exist_ok=True)
@@ -949,7 +961,7 @@ def archive(root):
         dst = f"{dest}/{os.path.basename(fp)}"
         src_h = hashlib.sha256(open(fp, "rb").read()).hexdigest()
         shutil.copy2(fp, dst)
-        # HASH-verify the READ-BACK — /mnt/backup is the failing RTL9210 enclosure that SILENTLY corrupts
+        # HASH-verify the READ-BACK — the original backup enclosure SILENTLY corrupted data
         # (size alone is insufficient; it returns garbage with matching size + no error). See reference-backup-drive-usb-nvme.
         try:
             dst_h = hashlib.sha256(open(dst, "rb").read()).hexdigest()
@@ -961,9 +973,9 @@ def archive(root):
             corrupt += 1
             print(f"archive: ⚠ HASH MISMATCH (silent corruption on the backup drive?) for {os.path.basename(fp)} — KEPT on primary; backup copy is SUSPECT")
     if corrupt:
-        c = "~/.local/bin/fleet_alert.sh"
-        os.path.exists(c) and subprocess.run([c, "--raise", "vision_archive_corrupt",
-            f"{corrupt} companion image(s) FAILED hash-verify writing to /mnt/backup (failing RTL9210 drive) — kept on primary. The failing drive is now corrupting SMALL files too; stop archiving there."], check=False)
+        c = _configured_path("VI_ALERT_SCRIPT")
+        c is not None and os.path.exists(c) and subprocess.run([c, "--raise", "vision_archive_corrupt",
+            f"{corrupt} companion image(s) FAILED hash-verify writing to the configured backup mount — kept on primary. Stop archiving to this suspect drive."], check=False)
     cp = f"{root}/vision/companions.json"
     if os.path.exists(cp):
         comp = json.load(open(cp))

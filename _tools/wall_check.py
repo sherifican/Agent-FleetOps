@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# This file encodes the authors' policy; adopters replace the policy table documented in guard/README.md.
 """wall_check.py — the never-publish classification as code.
 
 Refuses any staged file whose PROVENANCE or CONTENT matches a never-publish wall:

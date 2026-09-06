@@ -1,4 +1,8 @@
-"""Daily, artifact-based reachability checks for fleet legs."""
+"""Daily, artifact-based reachability checks for fleet legs.
+
+This file encodes the authors' policy: the LEGS roster, wrapper call conventions
+and cron PATH are instance-specific; adopters replace these together.
+"""
 
 from __future__ import annotations
 

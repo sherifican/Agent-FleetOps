@@ -68,7 +68,8 @@ def test_the_shipping_entry_point_reads_the_newly_scoped_files():
     run = subprocess.run([sys.executable, os.path.join("guard", "voice_check.py")],
                          cwd=REPO, capture_output=True, text=True, timeout=120)
     assert run.returncode == 0, run.stdout + run.stderr
-    assert "scanned 23 text file(s)" in run.stdout, (
+    # The archive paths example adds one front-facing JSON document.
+    assert "scanned 24 text file(s)" in run.stdout, (
         "the two root-level documents did not join the scanned set: " + run.stdout)
     assert "1 declared exemption(s)" in run.stdout, (
         "the addendum's exemption is not being counted: " + run.stdout)

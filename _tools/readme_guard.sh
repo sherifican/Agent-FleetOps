@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# This file encodes the authors' policy; adopters replace the policy table documented in guard/README.md.
 # readme_guard — refuse a commit that DELETES critical README content.
 # Every other gate in this repo asks "is bad content present?"; deletion passes all of them and even
 # makes the naming grep greener. This asks the opposite question. (Twice-burned 2026-08-22.)

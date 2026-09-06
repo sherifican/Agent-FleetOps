@@ -1,0 +1,5 @@
+{"_comment": "authors' instance — export these variables only after editing them",
+  "VI_BACKUP_ROOT": "/mnt/backup/fleet_vision",
+  "VI_BACKUP_MOUNT": "/mnt/backup",
+  "VI_ALERT_SCRIPT": "~/.local/bin/fleet_alert.sh"
+}
