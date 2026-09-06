@@ -1,17 +1,20 @@
+from fleet_tui.paths import resolve
 import os
 import json
 import re
 
 # MODULE-LEVEL path constants
-BACKUP_LOG   = os.path.expanduser("~/.claude/curation/BACKUP_LOG.md")
-SUPPLY_LOG   = os.path.expanduser("~/.claude/curation/SUPPLY_CHAIN_LOG.md")
-UPSTREAM     = os.path.expanduser("~/.claude/curation/UPSTREAM_UPDATES.md")
-BACKUP_ALERT = os.path.expanduser("~/.claude/curation/.backup_alert")
-SUPPLY_ALERT = os.path.expanduser("~/.claude/curation/.supply_chain_alert")
+BACKUP_LOG   = resolve("curation_dir", "BACKUP_LOG.md")
+SUPPLY_LOG   = resolve("curation_dir", "SUPPLY_CHAIN_LOG.md")
+UPSTREAM     = resolve("curation_dir", "UPSTREAM_UPDATES.md")
+BACKUP_ALERT = resolve("curation_dir", ".backup_alert")
+SUPPLY_ALERT = resolve("curation_dir", ".supply_chain_alert")
 
 
 def _read(path):
     """Read file text or return "" on any error."""
+    if path is None:
+        return ""
     try:
         with open(path, 'r', encoding='utf-8') as f:
             return f.read()
@@ -21,6 +24,8 @@ def _read(path):
 
 def _read_json(path):
     """Read JSON dict or return {} on any error."""
+    if path is None:
+        return {}
     try:
         data = _read(path)
         if not data:

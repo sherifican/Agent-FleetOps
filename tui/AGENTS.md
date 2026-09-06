@@ -54,3 +54,15 @@ blocker in one line (do not thrash) — Claude fixes that module only.
 ## Peer passback labels
 
 Passback prose calls its sender the peer orchestrator. `PEER_BOX_LABEL = "peer orchestrator"` is the single source for displayed box labels and the modal title; passback paths, readers, and seen-state handling are unchanged.
+
+
+## External path configuration
+
+`fleet_tui/paths.py` owns external layout keys: environment then XDG-aware JSON,
+otherwise `None`. Never introduce an author-layout fallback. The earlier State
+contracts list describes only the authors' instance, now in `paths.example.json`;
+copy and edit that example explicitly. Preserve each reader's safe default and guard
+absent paths before I/O; controls refuse absent configuration. `panel_notices()` is
+sampled during data gathering, not the fast paint loop. Source constants resolve at
+startup, so configuration changes require restart. Headless verification includes
+`tests/test_paths.py`; shared fixtures must not import Textual when it is absent.

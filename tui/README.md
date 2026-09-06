@@ -29,3 +29,49 @@ Features are built cheaply via the local lane: Claude writes a tight spec + the 
 
 ## Backup & restore
 Mirrored by the authors' backup job. **Restore:** clone this branch back to `~/fleet_tui/`.
+
+
+## Point the TUI at your fleet
+
+External inputs are **not configured** until you choose their paths. Each key resolves
+from `FLEET_TUI_<KEY>` (uppercase), then `paths.json` in
+`${XDG_CONFIG_HOME:-~/.config}/fleet_tui/`; an absent, blank or invalid value resolves
+to `None`. Environment settings override JSON, including a blank setting that disables
+an input. Malformed JSON fails closed. Restart the TUI after changing these settings.
+
+Copy `tui/paths.example.json` to that config location and **EDIT** its values first:
+the example is the authors' instance, not a portable default. For the authors only,
+the one-time migration from the repository root is:
+
+```bash
+mkdir -p ~/.config/fleet_tui
+cp tui/paths.example.json ~/.config/fleet_tui/paths.json
+```
+
+Adopters using `XDG_CONFIG_HOME` should copy into its `fleet_tui` subdirectory instead.
+Alternatively set individual keys, for example
+`FLEET_TUI_CURATION_DIR=./my-fleet/curation`. Relative paths use the launch directory;
+`~` expands to the current user's home. Legacy `FLEET_RESEARCH_DIR`,
+`FLEET_HEALTH_FILE`, `FLEET_WATCHERS_LOCK` and `PASSBACK_PC_GLOB` settings must migrate
+to the corresponding keys below.
+
+| Key | Input |
+| --- | --- |
+| `curation_dir` | Curation ledger, triggers, alerts, focus lock, action queue, feedback ledger and notification script |
+| `hermes_cron_dir` | `jobs.json` and the `output/` subdirectory |
+| `hermes_state_db` | Read-only failure history database |
+| `research_dir` | Research briefs and `viz_assets/reports/fleet_pairings_scorecard.html` |
+| `comms_inbound_glob` | Peer passback file glob |
+| `passback_docs_glob` | Document passback file glob |
+| `gpu_forensics_log` | GPU stability log |
+| `hive_alert` | Hive drift alert file |
+| `reliability_file` | Reliability summary file |
+| `external_ssd_temp` | External SSD temperature cache |
+| `disk_path` | Filesystem to measure for free space |
+| `screenshots_dir` | Screenshot output directory |
+
+Unconfigured inputs return their source's safe default. Affected panels show muted
+`not configured: <key>` cells; independently configured inputs keep rendering.
+Controls requiring an absent path refuse with that message. The application's own
+state under `~/.fleet_tui/` and `~/.config/fleet_tui` is unchanged; OS interfaces such
+as `/proc` and `/sys` still supply native system metrics.

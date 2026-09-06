@@ -99,7 +99,7 @@ PY
 cd tui && .venv/bin/python -m pytest -q
 ```
 
-**VERIFY — expected output:** pytest exits `0`; this export's acceptance run reports `364 passed`. A different result is a blocker: retain the output and do not describe the TUI as verified.
+**VERIFY — expected output:** pytest exits `0`; this export's acceptance run reports `378 passed`. A different result is a blocker: retain the output and do not describe the TUI as verified.
 
 ## Step 5 — launch only after the acceptance run
 
@@ -110,3 +110,5 @@ cd tui && ./run.sh
 ```
 
 **VERIFY — expected outcome:** `MANUAL: in an interactive terminal, the monitor opens; missing state files render degraded cells rather than terminating the process. A noninteractive shell cannot confirm the rendered interface.`
+
+External input setup is fail-closed: follow [Point the TUI at your fleet](../tui/README.md#point-the-tui-at-your-fleet), copy and edit `tui/paths.example.json`, or set `FLEET_TUI_<KEY>`; absent keys display `not configured: <key>`.

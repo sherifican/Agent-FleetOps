@@ -1,11 +1,12 @@
 """Pure readers for network-bridge status in the Fleet fleet."""
+from fleet_tui.paths import resolve
 import os
 import subprocess
 
 # Defaults are RFC5737 documentation addresses — set these to your real link before use.
 PC_IP = os.environ.get("FLEET_PC_IP", "192.0.2.1")
 LINK_IP = os.environ.get("FLEET_LINK_IP", "192.0.2.2")
-TELEGRAM_SEEN = os.path.expanduser("~/.claude/curation/.telegram_seen")
+TELEGRAM_SEEN = resolve("curation_dir", ".telegram_seen")
 
 
 def read_ip_addr() -> str:
@@ -65,6 +66,8 @@ def read_cron_list() -> str:
 
 def read_telegram_seen_mtime(path: str = TELEGRAM_SEEN) -> float:
     """`os.path.getmtime(path)`; `0.0` on any error."""
+    if path is None:
+        return 0.0
     try:
         return os.path.getmtime(path)
     except Exception:

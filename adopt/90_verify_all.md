@@ -24,7 +24,7 @@ python3 -m pytest guard/tests/ -q
 guard/run_guards.sh; printf 'guard-runner-exit=%s\n' "$?"
 ```
 
-**VERIFY — expected output:** inventory, skill-manifest, clear-lock, curation-scaffold, and system-map checks exit `0`; the box probe prints one `local` box; TUI pytest exits `0` and reports `364 passed` in this export; teeth-prover, contract agreement, and guard tests exit `0`; the default guard runner prints `UNMEASURED` and `guard-runner-exit=2` by design. Keep every literal output block.
+**VERIFY — expected output:** inventory, skill-manifest, clear-lock, curation-scaffold, and system-map checks exit `0`; the box probe prints one `local` box; TUI pytest exits `0` and reports `378 passed` in this export; teeth-prover, contract agreement, and guard tests exit `0`; the default guard runner prints `UNMEASURED` and `guard-runner-exit=2` by design. Keep every literal output block.
 
 ## Fill before reporting
 

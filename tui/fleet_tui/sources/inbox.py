@@ -1,23 +1,26 @@
 """Source reader for inbox items."""
+from fleet_tui.paths import resolve
 from fleet_tui.models import InboxItem
 import json
 import os
 import re
 
-DEP_TRIGGER   = os.path.expanduser("~/.claude/curation/.dep_update_trigger")
-CURATION_TRIGGER = os.path.expanduser("~/.claude/curation/.trigger")
-GITHUB_ALERT  = os.path.expanduser("~/.claude/curation/.github_action_alert")
-HF_DIGEST     = os.path.expanduser("~/.claude/curation/HF_WATCH_DIGEST.md")
-REJECTS       = os.path.expanduser("~/.claude/curation/CURATION_REJECTS_REVIEW.md")
-AUTOMATION_ALERT = os.path.expanduser("~/.claude/curation/.automation_alert")
-BACKUP_ALERT     = os.path.expanduser("~/.claude/curation/.backup_alert")
-SUPPLY_ALERT     = os.path.expanduser("~/.claude/curation/.supply_chain_alert")
-HIVE_ALERT       = os.path.expanduser("~/.claude/hive/.hive_drift_alert")
-TELEGRAM_TRIGGER = os.path.expanduser("~/.claude/curation/.telegram_trigger")
+DEP_TRIGGER   = resolve("curation_dir", ".dep_update_trigger")
+CURATION_TRIGGER = resolve("curation_dir", ".trigger")
+GITHUB_ALERT  = resolve("curation_dir", ".github_action_alert")
+HF_DIGEST     = resolve("curation_dir", "HF_WATCH_DIGEST.md")
+REJECTS       = resolve("curation_dir", "CURATION_REJECTS_REVIEW.md")
+AUTOMATION_ALERT = resolve("curation_dir", ".automation_alert")
+BACKUP_ALERT     = resolve("curation_dir", ".backup_alert")
+SUPPLY_ALERT     = resolve("curation_dir", ".supply_chain_alert")
+HIVE_ALERT       = resolve("hive_alert")
+TELEGRAM_TRIGGER = resolve("curation_dir", ".telegram_trigger")
 
 
 def read_json(path) -> dict:
     """Read a JSON file, return empty dict on any error."""
+    if path is None:
+        return {}
     try:
         with open(path, 'r') as f:
             return json.load(f)
@@ -27,6 +30,8 @@ def read_json(path) -> dict:
 
 def read_text(path) -> str:
     """Read a text file, return empty string on any error."""
+    if path is None:
+        return ""
     try:
         with open(path, 'r') as f:
             return f.read()
@@ -284,6 +289,11 @@ def list_inbox() -> list[InboxItem]:
 def ack(source: str) -> bool:
     """Owner GATE action — acknowledge/clear a pending inbox item by source (via the existing gated path:
     truncate the alert / set the trigger's pending=false). Returns True if it cleared something."""
+    configured = {"github": GITHUB_ALERT, "dep": DEP_TRIGGER,
+                  "curation": CURATION_TRIGGER, "automation": AUTOMATION_ALERT,
+                  "hive": HIVE_ALERT, "backup": BACKUP_ALERT, "supply": SUPPLY_ALERT}
+    if configured.get(source) is None:
+        return False
     try:
         if source == "github":
             open(GITHUB_ALERT, "w").close()          # truncate the alert file

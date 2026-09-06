@@ -20,7 +20,7 @@ from fleet_tui.sources.focus import (
 def setup_lock_path(tmp_path, monkeypatch):
     """Set up a temporary lock file path for each test."""
     lock_file = tmp_path / "watchers.lock"
-    monkeypatch.setenv("FLEET_WATCHERS_LOCK", str(lock_file))
+    monkeypatch.setenv("FLEET_TUI_CURATION_DIR", str(lock_file.parent))
     return lock_file
 
 

@@ -1,4 +1,5 @@
 """Pure readers for health status in the Fleet fleet."""
+from fleet_tui.paths import resolve
 
 from fleet_tui.models import HealthSnapshot, LoadedModel
 import glob
@@ -12,8 +13,8 @@ import urllib.request
 
 DEFAULT_SERVICES = ["hermes-gateway", "openrgb-server"]
 BIG_MODEL_BYTES = 15_000_000_000
-RELIABILITY_PATH = os.path.expanduser(os.environ.get("FLEET_HEALTH_FILE", "~/comms/FLEET_HEALTH_latest.txt"))  # EDIT ME
-DISK_PATH = "~"   # the partition holding models (~/.ollama) + logs; what fills up
+RELIABILITY_PATH = resolve("reliability_file")  # EDIT ME
+DISK_PATH = resolve("disk_path")   # the configured model/log partition
 
 # The UI refreshes ~every 3s, but `fleet-doctor --json` spawns nvidia-smi + systemctl + subprocess probes;
 # hammering that every 3s is wasteful and can aggravate a busy GPU. Cache the heavy probes. (2026-07-02)
@@ -187,7 +188,9 @@ def read_sensors() -> dict:
         out = {"cpu_temp": 0, "ssd_temp": 0, "ssd_ext_temp": 0}
         # external USB-NVMe SSD temp — written by the root cron (/etc/cron.d/fleet-ssd-temp); read sudo-free
         try:
-            out["ssd_ext_temp"] = int(open(os.path.expanduser("~/.cache/ext_ssd_temp")).read().strip())
+            temp_path = resolve("external_ssd_temp")
+            if temp_path is not None:
+                out["ssd_ext_temp"] = int(open(temp_path).read().strip())
         except Exception:
             out["ssd_ext_temp"] = 0
         try:
@@ -229,8 +232,8 @@ def read_stability() -> dict:
         except Exception:
             pass
         try:
-            log = os.path.expanduser("~/gpu_forensics.log")
-            if os.path.exists(log):
+            log = resolve("gpu_forensics_log")
+            if log is not None and os.path.exists(log):
                 hits = [ln for ln in open(log, errors="replace").read().splitlines()
                         if "xid" in ln.lower() or "gpu has fallen" in ln.lower()]
                 out["xid"] = (hits[-1].split("KERR", 1)[-1].strip()[:48]) if hits else "none"
@@ -244,6 +247,8 @@ def read_reliability_tail(path=RELIABILITY_PATH, n=6) -> str:
     """Compact reliability signal from FLEET_HEALTH_latest.txt — the EVENT counts (tool-errors, 402
     credit/rate-limit failures, loop-breaker), which are far higher-signal than the tiny per-window
     tool success-rate (which reads 100% off a single call). Empty string if unreadable."""
+    if path is None:
+        return ""
     try:
         text = open(path, errors="replace").read()
 
@@ -269,6 +274,8 @@ def read_reliability_tail(path=RELIABILITY_PATH, n=6) -> str:
 
 def read_disk(path: str = DISK_PATH) -> dict:
     """Free/total GB on the model+log partition. Cached 30s; safe {} default on error."""
+    if path is None:
+        return {}
     def _do():
         try:
             u = shutil.disk_usage(path)

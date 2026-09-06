@@ -1,16 +1,19 @@
 """Recent per-job output for the JOBS drill-in — the tail of each Hermes cron job's latest output file.
 
-Hermes writes cron output to ~/.hermes/cron/output/<job_id>/<timestamp> ; this surfaces the tail so you
+Hermes writes cron output to the configured cron output directory, under <job_id>/<timestamp> ; this surfaces the tail so you
 can see WHAT a job did, not just that it ran. Pure/safe: returns [] / "" on any error.
 """
+from fleet_tui.paths import resolve
 import glob
 import os
 
-OUTPUT_DIR = os.path.expanduser("~/.hermes/cron/output")
+OUTPUT_DIR = resolve("hermes_cron_dir", "output")
 
 
 def job_output_tail(job_id, n=12) -> str:
     """Tail (last n lines) of a Hermes job's most-recent output file; '' if none/unreadable."""
+    if OUTPUT_DIR is None:
+        return ""
     if not job_id:
         return ""
     try:

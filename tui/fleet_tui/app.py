@@ -1,3 +1,4 @@
+from fleet_tui.paths import resolve, missing, notice, panel_notices
 import os
 import re
 import time
@@ -80,6 +81,7 @@ def gather_data() -> dict:
     else:
         cloud_rows = []
     return {
+        "path_notices": panel_notices(),
         "jobs": jobs_list,
         "health": snap,
         "models": models,
@@ -204,7 +206,7 @@ class FocusHelpModal(FleetModal):
     HELP = (
         "FOCUS MODE\n\n"
         "Toggle with the  f  key (or from this command palette).\n\n"
-        "When ON, it writes a lock file (~/.claude/curation/watchers.lock) that PAUSES the fleet's\n"
+        "When ON, it writes a lock file (the configured watchers.lock) that PAUSES the fleet's\n"
         "high-frequency autonomous watchers so they don't interrupt you mid-task:\n"
         "   • curation-watcher      (would fire a memory/skill audit)\n"
         "   • github-activity-watch (would surface new GitHub actionables)\n\n"
@@ -219,7 +221,8 @@ class FocusHelpModal(FleetModal):
             with VerticalScroll(id="modalbody"):
                 st = focus.read_state()
                 _cur = f"CURRENT: {'● ON' if st.on else '○ off'}" + (f"  (scope={st.scope})" if st.on else "")
-                yield Static(f"{_cur}\n\n{self.HELP}")
+                yield Static(notice(missing(("curation_dir",))) or _cur)
+                yield Static(self.HELP)
             yield Static("press  f  to toggle · Esc to close", id="modalhint")
 
     def on_click(self) -> None:
@@ -296,10 +299,12 @@ _TGT_GROUP_COLOR = {"Cloud legs": "deepskyblue", "Local models": "cyan",
                     "Combos": "orange", "Teams": "magenta"}
 
 
-SCORECARD_FILE = os.path.expanduser(os.environ.get("FLEET_RESEARCH_DIR", "~/research") + "/viz_assets/reports/fleet_pairings_scorecard.html")
+SCORECARD_FILE = resolve("research_dir", "viz_assets/reports/fleet_pairings_scorecard.html")
 
 
 def _scorecard_brief(summary: dict) -> str:
+    if SCORECARD_FILE is None:
+        raise ValueError("not configured: research_dir")
     import json
     return (
         "Build a RICH, self-contained, dark-theme HTML SCORECARD of these fleet dispatch pairings and "
@@ -524,6 +529,9 @@ class DispatchModal(FleetModal):
             event.button.disabled = True                     # one rating per button press
             return
         if bid.startswith("card-"):                          # 📊 → hand the pairings data to visual/vega
+            if SCORECARD_FILE is None:
+                self.app.notify("not configured: research_dir")
+                return
             summ = ratings.summary()
             if not summ:
                 self.app.notify("no ratings yet — 👍/👎 a few dispatches first", severity="warning", timeout=5)
@@ -850,7 +858,7 @@ class FailuresModal(FleetModal):
             yield Static("RECENT TOOL FAILURES", id="modaltitle")
             with VerticalScroll(id="modalbody"):
                 if not self._fails:
-                    yield Static("No failed tool calls in the recent window. ✓")
+                    yield Static(notice(missing(("hermes_state_db",))) or "No failed tool calls in the recent window. ✓")
                 else:
                     for f in self._fails:
                         yield Static(f"[{f['when']}]  {f['tool']}  ·  {_color_model(f['model'])}",
@@ -875,11 +883,12 @@ class PassbackModal(FleetModal):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="modalbox"):
+            yield Static(notice(missing(("passback_docs_glob", "comms_inbound_glob"))))
             n_new = sum(1 for it in self._items if it.get("new"))
             yield Static(f"{PEER_BOX_LABEL.upper()} PASSBACK — {len(self._items)} file(s), {n_new} new", id="modaltitle")
             with VerticalScroll(id="modalbody"):
                 if not self._items:
-                    yield Static("No passback files yet. ✓")
+                    yield Static(notice(missing(("passback_docs_glob", "comms_inbound_glob"))) or "No passback files yet. ✓")
                 else:
                     for it in self._items:
                         dot = "[cyan]●[/] " if it.get("new") else "[gray]○[/] "
@@ -912,7 +921,7 @@ class JobOutputModal(FleetModal):
             yield Static("JOBS — recent output", id="modaltitle")
             with VerticalScroll(id="modalbody"):
                 if not self._outputs:
-                    yield Static("No recent job output on disk (Hermes crons write to ~/.hermes/cron/output).")
+                    yield Static(notice(missing(("hermes_cron_dir",))) or "No recent job output on disk (Hermes crons write to the configured cron output directory).")
                 else:
                     for o in self._outputs:
                         yield Static(o["name"], classes="itemtitle")
@@ -1080,6 +1089,7 @@ class CurationModal(FleetModal):
         self._passes = curation.recent_passes(25)
         with Vertical(id="modalbox"):
             yield Static("🔄 CURATION PASSES — recent log + trigger", id="modaltitle")
+            yield Static(notice(missing(("curation_dir",))))
             if st.get("pending"):
                 reasons = ", ".join(str(r) for r in st.get("reasons", []))[:90]
                 yield Static(f"[yellow]● a pass is QUEUED[/] (pass {st.get('pass_n','?')}) — runs on the next "
@@ -1087,7 +1097,8 @@ class CurationModal(FleetModal):
             else:
                 yield Static("[dim]no pass queued right now[/]", classes="itembody")
             with Horizontal(id="cur_tools"):
-                yield Button("▶ Trigger curation pass", id="cur-trigger", variant="primary")
+                yield Button("▶ Trigger curation pass", id="cur-trigger", variant="primary",
+                             disabled=resolve("curation_dir") is None)
             with VerticalScroll(id="modalbody"):
                 if not self._passes:
                     yield Static("no curation passes logged yet.")
@@ -1351,6 +1362,9 @@ class FleetTUI(App):
         fp = f if cats.get("posture", True) else None
 
         def put(pid, text):
+            gap = d.get("path_notices", {}).get(pid, "")
+            if gap:
+                text = gap + "\n" + text
             self.query_one(f"#{pid}", Static).update("" if self._is_collapsed(pid) else text)
 
         try:
@@ -1480,10 +1494,16 @@ class FleetTUI(App):
             self._paint()
 
     def action_toggle_focus(self) -> None:
-        if focus.is_on():
-            focus.turn_off()
-        else:
-            focus.turn_on(scope="noisy", by="tui")
+        if resolve("curation_dir") is None:
+            self.notify("not configured: curation_dir")
+            return
+        try:
+            if focus.is_on():
+                focus.turn_off()
+            else:
+                focus.turn_on(scope="noisy", by="tui")
+        except (OSError, ValueError, TypeError):
+            self.notify("focus state unavailable", severity="warning")
         self.refresh_panels()
 
     def request_playlist_check(self, playlist) -> None:
@@ -1497,8 +1517,12 @@ class FleetTUI(App):
             pass
         try:
             import subprocess
+            script = resolve("curation_dir", "claude_tg.sh")
+            if script is None:
+                self.notify("not configured: curation_dir")
+                return
             subprocess.Popen(
-                ["bash", os.path.expanduser("~/.claude/curation/claude_tg.sh"),
+                ["bash", script,
                  f"📋 TUI: requested a new-video check of the '{name}' research playlist — to be staged for the research team."],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
@@ -1638,7 +1662,10 @@ class FleetTUI(App):
 
     def action_screenshot(self) -> None:
         import os, time
-        outdir = os.path.expanduser("~/Pictures/Screenshots")
+        outdir = resolve("screenshots_dir")
+        if outdir is None:
+            self.notify("not configured: screenshots_dir")
+            return
         try:
             os.makedirs(outdir, exist_ok=True)
             svg = _tighten_svg(self.export_screenshot(title="Fleet Fleet"))

@@ -3,6 +3,7 @@
 """
 Fleet control-plane CLI.
 """
+from fleet_tui.paths import resolve
 
 import argparse
 import json
@@ -106,7 +107,10 @@ def fleet_feedback(args) -> None:
                 handle_error("note is required for 'fleet feedback close'")
             
             # Append to the ledger file
-            ledger_path = os.path.expanduser("~/.claude/curation/FEEDBACK_LOOP_LEDGER.md")
+            ledger_path = resolve("curation_dir", "FEEDBACK_LOOP_LEDGER.md")
+            if ledger_path is None:
+                handle_error("not configured: curation_dir")
+                return
             os.makedirs(os.path.dirname(ledger_path), exist_ok=True)
             
             with open(ledger_path, "a") as f:

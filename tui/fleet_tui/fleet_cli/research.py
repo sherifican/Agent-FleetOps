@@ -1,6 +1,7 @@
 """
 Research launcher for fleet CLI.
 """
+from fleet_tui.paths import resolve
 
 import os
 import json
@@ -8,7 +9,7 @@ from typing import Dict, Any
 
 from fleet_tui.sources import dispatch
 
-RESEARCH_DIR = os.path.expanduser(os.environ.get("FLEET_RESEARCH_DIR", "~/research"))  # EDIT ME
+RESEARCH_DIR = resolve("research_dir")  # EDIT ME
 
 def launch_research(slug: str, question: str) -> Dict[str, Any]:
     """
@@ -21,6 +22,8 @@ def launch_research(slug: str, question: str) -> Dict[str, Any]:
     - 'stage': always 'launched'
     """
     # Create research directory
+    if RESEARCH_DIR is None:
+        raise ValueError("not configured: research_dir")
     os.makedirs(RESEARCH_DIR, exist_ok=True)
     
     # Write brief to file

@@ -1,13 +1,14 @@
 """
 Pure headless reader for the peer orchestrator->Fleet passback files.
 """
+from fleet_tui.paths import resolve
 import glob
 import json
 import os
 import time
 
-DOCS_GLOB = os.path.expanduser("~/Documents/PASSBACK_*.md")
-PC_GLOB   = os.path.expanduser(os.environ.get("PASSBACK_PC_GLOB", "~/comms/inbound/PC_CLAUDE_*.md"))  # EDIT ME
+DOCS_GLOB = resolve("passback_docs_glob")
+PC_GLOB   = resolve("comms_inbound_glob")  # EDIT ME
 SEEN_FILE = os.path.expanduser("~/.fleet_tui/passback_seen.json")
 
 
@@ -69,10 +70,12 @@ def _age(mtime, now=None):
 
 def list_passback():
     """List passback files newest-first with metadata."""
+    if DOCS_GLOB is None and PC_GLOB is None:
+        return []
     try:
         # Collect all matching files
-        docs_files = glob.glob(DOCS_GLOB)
-        pc_files = glob.glob(PC_GLOB)
+        docs_files = glob.glob(DOCS_GLOB) if DOCS_GLOB is not None else []
+        pc_files = glob.glob(PC_GLOB) if PC_GLOB is not None else []
         
         # Deduplicate by absolute path
         all_paths = set(docs_files + pc_files)

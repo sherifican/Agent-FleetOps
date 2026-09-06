@@ -9,7 +9,7 @@ from textual.widgets import Static
 
 async def test_app_mounts_and_toggles_focus(tmp_path, monkeypatch):
     # never touch the real ~/.claude/curation/watchers.lock
-    monkeypatch.setenv("FLEET_WATCHERS_LOCK", str(tmp_path / "watchers.lock"))
+    monkeypatch.setenv("FLEET_TUI_CURATION_DIR", str(tmp_path))
     from fleet_tui.app import FleetTUI
     from fleet_tui.sources import focus
 
@@ -32,7 +32,7 @@ async def test_app_mounts_and_toggles_focus(tmp_path, monkeypatch):
 
 async def test_panels_populate_from_live_sources(tmp_path, monkeypatch):
     """Let the thread-worker refresh run and assert the panels render non-empty content."""
-    monkeypatch.setenv("FLEET_WATCHERS_LOCK", str(tmp_path / "watchers.lock"))
+    monkeypatch.setenv("FLEET_TUI_CURATION_DIR", str(tmp_path))
     import asyncio
     from fleet_tui.app import FleetTUI
 
@@ -47,7 +47,7 @@ async def test_panels_populate_from_live_sources(tmp_path, monkeypatch):
 
 async def test_inbox_click_opens_detail_modal(tmp_path, monkeypatch):
     """Clicking the inbox panel opens the pending-items detail modal (owner ask)."""
-    monkeypatch.setenv("FLEET_WATCHERS_LOCK", str(tmp_path / "watchers.lock"))
+    monkeypatch.setenv("FLEET_TUI_CURATION_DIR", str(tmp_path))
     from fleet_tui.app import FleetTUI, DetailModal
     app = FleetTUI()
     # large enough that all 4 panels (incl. the tall JOBS list) fit + INBOX is on-screen to click
@@ -64,7 +64,7 @@ async def test_inbox_click_opens_detail_modal(tmp_path, monkeypatch):
 
 async def test_section_collapse_toggle(tmp_path, monkeypatch):
     """Clicking a panel's TITLE ROW (y==0) collapses it (and re-clicking restores) — the fill/share layout."""
-    monkeypatch.setenv("FLEET_WATCHERS_LOCK", str(tmp_path / "watchers.lock"))
+    monkeypatch.setenv("FLEET_TUI_CURATION_DIR", str(tmp_path))
     from fleet_tui.app import FleetTUI
     app = FleetTUI()
     async with app.run_test(size=(120, 50)) as pilot:
@@ -80,7 +80,7 @@ async def test_section_collapse_toggle(tmp_path, monkeypatch):
 
 async def test_focus_help_and_palette(tmp_path, monkeypatch):
     """The focus-help modal opens, and the command palette exposes the focus commands with help."""
-    monkeypatch.setenv("FLEET_WATCHERS_LOCK", str(tmp_path / "watchers.lock"))
+    monkeypatch.setenv("FLEET_TUI_CURATION_DIR", str(tmp_path))
     from fleet_tui.app import FleetTUI, FocusHelpModal, FleetCommands
     app = FleetTUI()
     async with app.run_test() as pilot:
@@ -104,7 +104,7 @@ async def test_focus_help_and_palette(tmp_path, monkeypatch):
 
 async def test_theme_persists_across_reopen(tmp_path, monkeypatch):
     """Changing the theme saves it; a fresh app instance restores it (Textual doesn't persist by default)."""
-    monkeypatch.setenv("FLEET_WATCHERS_LOCK", str(tmp_path / "watchers.lock"))
+    monkeypatch.setenv("FLEET_TUI_CURATION_DIR", str(tmp_path))
     import fleet_tui.app as A
     monkeypatch.setattr(A, "THEME_FILE", str(tmp_path / "theme"))
     app1 = A.FleetTUI()

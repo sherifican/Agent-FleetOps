@@ -1,4 +1,5 @@
 """Pure readers for the jobs source."""
+from fleet_tui.paths import resolve
 
 from fleet_tui.models import Job
 import json
@@ -6,11 +7,13 @@ import os
 import subprocess
 import time
 
-HERMES_JOBS_PATH = os.path.expanduser("~/.hermes/cron/jobs.json")
+HERMES_JOBS_PATH = resolve("hermes_cron_dir", "jobs.json")
 
 
 def read_hermes_jobs(path=HERMES_JOBS_PATH) -> list:
     """Read Hermes jobs from JSON file, return safe default on any error."""
+    if path is None:
+        return []
     try:
         with open(path, "r") as f:
             data = json.load(f)

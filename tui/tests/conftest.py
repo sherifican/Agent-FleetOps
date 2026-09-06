@@ -37,6 +37,10 @@ def _isolate_app_refresh(monkeypatch, request):
     module attribute leaves a test's directly imported ``gather_data`` function available for its own
     explicit source seams while making every `run_test()` mount hermetic and quick to tear down.
     """
+    # Headless source tests must not require the optional UI dependency.
+    import importlib.util
+    if importlib.util.find_spec("textual") is None:
+        return
     import fleet_tui.app as app
     snapshot = {
         "jobs": [], "health": HealthSnapshot(), "models": [], "focus": FocusState(), "inbox": [],

@@ -1,0 +1,14 @@
+{"_comment": "authors' instance — copy and EDIT before use",
+  "curation_dir": "~/.claude/curation",
+  "hermes_cron_dir": "~/.hermes/cron",
+  "hermes_state_db": "~/.hermes/state.db",
+  "research_dir": "~/research",
+  "comms_inbound_glob": "~/comms/inbound/PC_CLAUDE_*.md",
+  "passback_docs_glob": "~/Documents/PASSBACK_*.md",
+  "gpu_forensics_log": "~/gpu_forensics.log",
+  "hive_alert": "~/.claude/hive/.hive_drift_alert",
+  "reliability_file": "~/comms/FLEET_HEALTH_latest.txt",
+  "external_ssd_temp": "~/.cache/ext_ssd_temp",
+  "disk_path": "~",
+  "screenshots_dir": "~/Pictures/Screenshots"
+}

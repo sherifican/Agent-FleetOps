@@ -4,15 +4,17 @@ from fleet_tui.models import FocusState
 import json
 import os
 import datetime
+from fleet_tui.paths import resolve
 
 
 def _lock_path():
-    return os.environ.get("FLEET_WATCHERS_LOCK", os.path.expanduser("~/.claude/curation/watchers.lock"))
+    return resolve("curation_dir", "watchers.lock")
 
 
 def is_on() -> bool:
     """Check if the focus mode lock file exists."""
-    return os.path.exists(_lock_path())
+    path = _lock_path()
+    return path is not None and os.path.exists(path)
 
 
 def read_state() -> FocusState:
@@ -52,6 +54,8 @@ def turn_on(scope="noisy", by="tui") -> FocusState:
         FocusState: The newly created focus state
     """
     lock_path = _lock_path()
+    if lock_path is None:
+        return FocusState(on=False, scope="noisy")
     since = datetime.datetime.now(datetime.timezone.utc).isoformat()
     
     data = {
@@ -72,6 +76,8 @@ def turn_off() -> None:
     Does not raise if the file doesn't exist (idempotent).
     """
     lock_path = _lock_path()
+    if lock_path is None:
+        return None
     try:
         os.remove(lock_path)
     except OSError:

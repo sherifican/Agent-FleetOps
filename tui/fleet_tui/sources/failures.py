@@ -1,14 +1,15 @@
 """Recent FAILED tool calls from Hermes state.db — WHAT tool, WHO (model), WHEN, and the TASK context.
 
-Read-only query of ~/.hermes/state.db (the same source fleet_monitor.py uses). A tool call is a 'fail'
+Read-only query of the configured Hermes database (the same source fleet_monitor.py uses). A tool call is a 'fail'
 only by its JSON success/error KEY (never substring-matched). Safe: returns [] on any error.
 """
+from fleet_tui.paths import resolve
 import json
 import os
 import sqlite3
 import time
 
-DB = os.path.expanduser("~/.hermes/state.db")
+DB = resolve("hermes_state_db")
 
 
 def _classify(content) -> str:
@@ -41,6 +42,8 @@ def _task_context(c, sid, n=90) -> str:
 
 def recent_failures(limit=15, days=2) -> list:
     """[{tool, model, when, task, error, session}] for recent failed tool calls, newest first."""
+    if DB is None:
+        return []
     try:
         since = time.time() - days * 86400
         c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)

@@ -3,6 +3,7 @@ Pure/headless (no textual), never raises. `queue_pass()` is the one CONTROL acti
 existing gated `.trigger` to pending=true so the NEXT orchestrator turn runs a full curation pass —
 the TUI never runs the pass itself (that's Claude's job), it just queues it (monitor, not orchestrator).
 """
+from fleet_tui.paths import resolve
 import json
 import os
 import re
@@ -18,11 +19,13 @@ except Exception:
     def _locked_write_json(path, obj):
         with open(path, "w", encoding="utf-8") as f: json.dump(obj, f, indent=2)
 
-LEDGER  = os.path.expanduser("~/.claude/curation/CURATION_LEDGER.md")
-TRIGGER = os.path.expanduser("~/.claude/curation/.trigger")
+LEDGER  = resolve("curation_dir", "CURATION_LEDGER.md")
+TRIGGER = resolve("curation_dir", ".trigger")
 
 
 def _read(path) -> str:
+    if path is None:
+        return ""
     try:
         with open(path, encoding="utf-8") as f:
             return f.read()
@@ -31,6 +34,8 @@ def _read(path) -> str:
 
 
 def _read_json(path) -> dict:
+    if path is None:
+        return {}
     try:
         with open(path, encoding="utf-8") as f:
             obj = json.load(f)
@@ -110,6 +115,8 @@ def queue_pass() -> bool:
     """CONTROL action — flip the gated `.trigger` to pending=true so the next orchestrator turn runs a
     full curation pass. Preserves the rest of the trigger JSON; records a manual reason. Returns True on
     success. (The TUI queues the pass; Claude runs it — never runs a pass itself.)"""
+    if TRIGGER is None:
+        return False
     try:
         d = _read_json(TRIGGER)
         d["pending"] = True
