@@ -58,10 +58,10 @@ another machine). The commit history tells that story.
 | Dir | Contents |
 |---|---|
 | `tui/` | **fleet-tui** — a Textual terminal monitor for a local/cloud model fleet. 27 headless source modules (excluding `__init__.py`) behind a 364-test hermetic suite; strict one-way pipeline (pure readers → pure formatters → app), frozen dataclass contracts, safe-default degradation. CI runs the full suite on every push. |
-| `skills/` | **Generalized agent-discipline procedures** — evaluation integrity, model routing (the living-table method), the local-lane build loop, multi-agent code workflow, research dispatch/verification, memory ops, brain bookkeeping, protected-function guards, blocked-page retrieval, and more. Each encodes failure stories from real operation. The portable start-list is in [`adopt/20_skills.md`](adopt/20_skills.md); you are not expected to install them all. |
+| `skills/` | **Generalized agent-discipline procedures** — evaluation integrity, model routing (the living-table method), the local-lane build loop, multi-agent code workflow, research dispatch/verification, memory ops, brain bookkeeping, protected-function guards, blocked-page retrieval, the [should-we](skills/should-we/SKILL.md) directive check (interrogate the premise before executing an imperative), and more. Each encodes failure stories from real operation. The portable start-list is in [`adopt/20_skills.md`](adopt/20_skills.md); you are not expected to install them all. |
 | `templates/` | Copyable dispatch, honesty, pinned-environment, and research-artifact patterns. Templates are adoption patterns, not automatic enforcement. |
 | `_tools/` | The export pipeline's own gates — provenance wall-checker, secrets/personal-data scanner, and a **ref gate**, all mutation-proven (`--self-test`). The first two ask "is this tree safe to publish?"; the third asks the question they structurally cannot: **"what would a push actually publish?"** A history rewrite is only true of the branch you rewrote — this repo's own rewrite left a clean `main` beside two leftover refs still carrying the trailers and build artifacts the rewrite removed, one `push --all` away from being republished. Content gates scan a worktree; pushes carry refs. |
-| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 544 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
+| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 567 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
 | `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, the verified-system-map pattern, and the [research-team](specs/research-team-protocol.md), [rigor-spectrum](specs/rigor-spectrum.md), and [honesty-stop-gate](specs/honesty-stop-gate.md) guides. |
 | `bench/` | **The two-box throughput operating log** — 67 measurements over 22 model tags, with sample sizes and device labels attached. See below. |
 
@@ -210,6 +210,19 @@ Clone this repository, then point your orchestrator at `adopt/README.md`. The ag
 ```text
 Read adopt/README.md and follow it in order. Inventory this host before prescribing configuration. Show me the plan and diffs before installing any cron entry, service, or shell hook, then retain the literal verification output.
 ```
+
+### Activate the publication hook
+
+Cloning this repository installs no Git hook, and running pytest does not install one either. `guard/hooks/pre-push` is tracked source; Git does not track its hooks directory, so a fresh clone has no publication gate until one is installed on purpose. Two policy inputs have to be provisioned first, and neither travels with a clone: the scanner's identity terms in `_tools/identity_terms.txt` (gitignored — copy `_tools/identity_terms.example.txt` and fill it with your own terms, one per line) and the approved commit identities in this repository's local Git config (`git config --local --add fleetops.approvedIdentity '<owner-email>'` — a GitHub handle such as `<owner-gh>` is not automatically the right e-mail). With both in place, install into Git's effective hook path, confirm the installed bytes match the tracked hook, and rehearse a clean acceptance and a planted refusal in an isolated repository before relying on it:
+
+```bash
+cp _tools/identity_terms.example.txt _tools/identity_terms.txt   # then edit it: your terms, one per line
+git config --local --add fleetops.approvedIdentity '<owner-email>'
+bash guard/hooks/install.sh --pre-push-config          # preflight, install pre-push only, verify byte parity
+bash guard/hooks/install.sh --check-pre-push-config    # read-only: preflight + byte parity; rerun before a push
+```
+
+The installer refuses, installing nothing, when either input is missing, when an approved-identity file or `FLEETOPS_APPROVED_IDENTITIES` would shadow the config route, or when a different hook already occupies the destination. The detailed sequence — prerequisites, precedence between the identity sources, handling an existing hook, the isolated rehearsal with its expected accepted and refused outputs, and rollback — is [Activating the publication hook](guard/README.md#activating-the-publication-hook) in `guard/README.md`. Once active, the hook scans each selected outgoing commit's tree and full message and checks the author, committer and `Co-authored-by`/`Signed-off-by` trailer e-mails against the approved list. It is a local hook, not a server-side gate: it does not stop anyone who deliberately bypasses local hooks, and it refuses to run from a shallow clone — clone without `--depth`, or run `git fetch --unshallow` first.
 
 ## Measured on two boxes
 

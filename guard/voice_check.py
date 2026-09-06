@@ -41,8 +41,20 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALLOW = os.path.join("guard", "voice_allow.tsv")
 
 # Word-boundary matching only: "between", "answer", "power" and "thus" are not hits.
+#
+# The boundary is NOT `\b`. A hyphen is a word break to `\b`, so a hyphen-joined compound
+# reads as the pronoun: README.md line 61 links the shipped skill by its NAME,
+# `[should-we](skills/should-we/SKILL.md)`, and both tokens went red as "we". Rewriting
+# correct prose to satisfy the regex is what this file's header says not to do, so the
+# boundary is a word character OR a hyphen on either side: `should-we`, `we-first`,
+# `us-east`, `our-team` are names, while `we ship`, `our fleet`, `let us`, `(we)`, `. We`
+# are still voice. A path or code span containing such a compound is covered by the same
+# rule, because the pronoun inside it is still hyphen-joined.
+_EDGE = r"[\w-]"
 PLURAL = re.compile(
-    r"\b(?:we|us|our|ours|ourselves|we['']re|we['']ve|we['']ll|we['']d|let['']s)\b",
+    r"(?<!" + _EDGE + r")"
+    r"(?:we|us|our|ours|ourselves|we['']re|we['']ve|we['']ll|we['']d|let['']s)"
+    r"(?!" + _EDGE + r")",
     re.IGNORECASE)
 
 TEXT_EXT = {".md", ".py", ".sh", ".tsv", ".txt", ".yml", ".yaml", ".toml",
@@ -185,6 +197,14 @@ def _selftest():
 
         doc.write_text("We measured it, and our result stands.\n")
         case("plural prose goes red", check(td)[0] == 1)
+
+        # README.md line 61: a skill NAMED `should-we`, linked by name. A hyphen-joined
+        # compound is a name, not the pronoun, and neither is a path containing one.
+        doc.write_text("The [should-we](skills/should-we/SKILL.md) check, and `we-first`.\n")
+        case("a hyphen-joined compound (should-we, we-first) is not a hit", check(td)[0] == 0)
+
+        doc.write_text("The should-we check is one we ship.\n")
+        case("the bare pronoun beside a compound still goes red", check(td)[0] == 1)
 
         allow.write_text("README.md\tthe scanner's own fixtures live here\n")
         case("a declared exemption with a reason is honoured", check(td)[0] == 0)
