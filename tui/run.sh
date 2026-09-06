@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run.sh — launch the Fleet Fleet TUI.
+# run.sh — launch the Fleet TUI.
 #
 # The terminal is now EMBEDDED in the app:  press  Ctrl+`  to toggle it (hidden by default),
 # Ctrl+Q  to quit.  So there is NO tmux shell pane anymore, and NO persistent tmux session that

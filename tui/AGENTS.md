@@ -145,3 +145,10 @@ neutral counterpart, so an unread directory cannot produce an unearned pass.
 `tests/fixtures/crontab.txt` and `jobs.json` contain obviously synthetic names,
 IDs and paths. Preserve cron command forms and JSON field/type coverage when
 changing them; never replace them with live roster dumps.
+
+
+## Product title
+
+The application title, exported screenshot title, browser server title and launcher
+copy use `Fleet TUI`. The serving regression gate asserts that title when constructing
+the server; keep these public surfaces aligned.

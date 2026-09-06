@@ -1129,9 +1129,9 @@ class CurationModal(FleetModal):
 # ---------------------------------------------------------------- app
 
 class FleetTUI(App):
-    """Main application for the Fleet Fleet TUI."""
+    """Main application for the Fleet TUI."""
 
-    TITLE = "Fleet Fleet"
+    TITLE = "Fleet TUI"
     # Footer legend was overcrowded (all bindings show → overflow, some hidden). Keep only the
     # highest-traffic keys visible (show=True); everything else stays fully active but hidden from the
     # footer — the complete list lives in the ? help overlay + the Ctrl+P command palette. (2026-07-07)
@@ -1671,7 +1671,7 @@ class FleetTUI(App):
             return
         try:
             os.makedirs(outdir, exist_ok=True)
-            svg = _tighten_svg(self.export_screenshot(title="Fleet Fleet"))
+            svg = _tighten_svg(self.export_screenshot(title="Fleet TUI"))
             path = os.path.join(outdir, "Fleet_Fleet_" + time.strftime("%Y-%m-%dT%H-%M-%S") + ".svg")
             with open(path, "w", encoding="utf-8") as f:
                 f.write(svg)

@@ -48,6 +48,7 @@ def test_main_builds_server_with_our_python_and_module(monkeypatch, serve, capsy
     serve.main()
     assert "-m fleet_tui" in captured["command"]        # serves our package
     assert captured["host"] == "127.0.0.1" and captured["port"] == 8011
+    assert captured["title"] == "Fleet TUI"
     assert captured["served"] is True                   # main() actually calls serve()
     assert "Serving the Fleet TUI on http://127.0.0.1:8011" in capsys.readouterr().out
 
