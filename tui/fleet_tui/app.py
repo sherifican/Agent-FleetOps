@@ -16,7 +16,7 @@ from fleet_tui.widgets.format import _clean_model_name, _color_model
 from textual.binding import Binding
 from fleet_tui.widgets.terminal import TerminalPane
 
-PEER_BOX_LABEL = "peer-box"
+PEER_BOX_LABEL = "peer orchestrator"
 
 THEME_FILE = os.path.expanduser("~/.config/fleet_tui/theme")   # persists the chosen theme across reopen
 VERSION = "4.0"  # bump per shipped feature wave; shown in the Header sub-title (next to the clock)
@@ -876,7 +876,7 @@ class PassbackModal(FleetModal):
     def compose(self) -> ComposeResult:
         with Vertical(id="modalbox"):
             n_new = sum(1 for it in self._items if it.get("new"))
-            yield Static(f"the peer orchestrator PASSBACK — {len(self._items)} file(s), {n_new} new", id="modaltitle")
+            yield Static(f"{PEER_BOX_LABEL.upper()} PASSBACK — {len(self._items)} file(s), {n_new} new", id="modaltitle")
             with VerticalScroll(id="modalbody"):
                 if not self._items:
                     yield Static("No passback files yet. ✓")

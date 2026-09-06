@@ -53,4 +53,4 @@ blocker in one line (do not thrash) — Claude fixes that module only.
 
 ## Peer passback labels
 
-Passback prose calls its sender the peer orchestrator. The app uses `PEER_BOX_LABEL` for the displayed box label; this does not change passback paths, readers, or seen-state handling.
+Passback prose calls its sender the peer orchestrator. `PEER_BOX_LABEL = "peer orchestrator"` is the single source for displayed box labels and the modal title; passback paths, readers, and seen-state handling are unchanged.

@@ -373,7 +373,7 @@ def _b64(path):
 # `except Exception` (vs the narrow tuple here), so it was measuring a call production would have
 # abandoned and swallowing errors production would have raised — while its docstring claimed it
 # "replicates the REAL _gemma_call body, only the named variable changes". A guard or a probe must
-# never mirror the logic it measures; it must import it. (2026-08-03, after the peer orchestrator's INV44.)
+# never mirror the logic it measures; it must import it. (2026-08-03, after an incident on the peer orchestrator.)
 GEMMA_MAX_TOKENS = 1200
 GEMMA_TIMEOUT_S = 150
 GEMMA_TRIES = 4

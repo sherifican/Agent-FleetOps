@@ -1,6 +1,6 @@
 # SPEC — extend fleet_tui/sources/cloud_legs.py: show running CLAUDE worker legs + their model
 
-Edit ~/fleet_tui/fleet_tui/sources/cloud_legs.py IN PLACE, preserving every existing function
+Edit tui/fleet_tui/sources/cloud_legs.py IN PLACE, preserving every existing function
 and behavior EXACTLY, and ADDING Claude-worker-leg support. Pure/headless (no textual), never raises.
 Must pass tests/test_cloud_legs_claude.py AND the existing tests/test_cloud_legs.py unchanged.
 
