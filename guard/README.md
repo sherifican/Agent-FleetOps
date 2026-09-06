@@ -18,7 +18,7 @@ staleness check could never fire. That defect is why the dry run now returns `2`
 |---|---|---|
 | Teeth-prover | `python3 guard/teeth_prover.py` | 10 planted mutations; every guard proves it can fail |
 | Contract agreement | `python3 guard/contract_agreement.py` | all four vocabulary surfaces agree (validator · addendum · rollup · preamble) |
-| Guard unit gates | `pytest guard/tests/ -q` | 574 tests, hermetic (one is environment-gated: it skips without `PASSBACK_OUTBOX`; one is a strict xfail that records a known gap) |
+| Guard unit gates | `pytest guard/tests/ -q` | 578 tests, hermetic (one is environment-gated: it skips without `PASSBACK_OUTBOX`; one is a strict xfail that records a known gap) |
 | Documented counts | `python3 guard/doc_count_drift.py` | every count written into prose or the banner matches what it describes |
 | Rendered banner | `python3 guard/banner_render.py` | the PNG keeps its transparent corners and was rendered from the SVG in the tree |
 | Full runner | `guard/run_guards.sh` | the above in order; leg-liveness dry-run returns `2 = UNMEASURED` by design |
@@ -263,3 +263,5 @@ missing feature. A synthetic public corpus is planned.
 During export, this directory's own gates caught the exporter twice: a sanitization pass made the
 contract surfaces cwd-relative and the `isabs()` unit gate refused it; the mutation harness refused
 its baseline in the corpus-less tree. Guards that police their own maintainers are the point.
+
+The ref gate defaults to `refs/heads/main`; adopters publishing another branch can set `git config fleetops.publishRef refs/heads/release` before running `python3 _tools/ref_gate.py .`. Other local publishing refs still fail the gate.

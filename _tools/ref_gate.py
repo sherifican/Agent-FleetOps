@@ -41,7 +41,7 @@ import sys
 import tempfile
 
 # Refs that are legitimately publishable. Anything else in a pushable namespace fails.
-PUBLISHABLE = {"refs/heads/main"}
+DEFAULT_PUBLISH_REF = "refs/heads/main"
 
 # Namespaces a push can actually reach. refs/remotes/* is local bookkeeping, never pushed.
 PUSHABLE_PREFIXES = ("refs/heads/", "refs/tags/", "refs/original/")
@@ -60,6 +60,21 @@ def git(args, cwd):
     return p.stdout
 
 
+def publishable_refs(repo):
+    """An adopter may select one publishing ref; absent config preserves the CI default."""
+    result = subprocess.run(["git", "config", "--get", "fleetops.publishRef"],
+                            cwd=repo, capture_output=True, text=True)
+    if result.returncode == 1:
+        return {DEFAULT_PUBLISH_REF}
+    if result.returncode != 0:
+        raise RuntimeError("cannot read fleetops.publishRef")
+    ref = result.stdout.strip()
+    if subprocess.run(["git", "check-ref-format", ref], cwd=repo,
+                      capture_output=True).returncode != 0:
+        raise RuntimeError("fleetops.publishRef must name a valid full ref")
+    return {ref}
+
+
 def stray_refs(repo):
     """Rule 1 — every ref a push could carry must be allow-listed."""
     out = git(["for-each-ref", "--format=%(refname) %(objectname)"], repo)
@@ -70,7 +85,7 @@ def stray_refs(repo):
         name, _, sha = line.partition(" ")
         if not name.startswith(PUSHABLE_PREFIXES):
             continue  # refs/remotes/* etc — not publishable
-        if name not in PUBLISHABLE:
+        if name not in publishable_refs(repo):
             strays.append((name, sha[:9]))
     return strays
 
@@ -116,7 +131,7 @@ def check(repo, quiet=False):
     trailers = banned_trailers(repo)
 
     say(f"ref_gate: {repo}")
-    say(f"  publishable allow-list: {sorted(PUBLISHABLE)}")
+    say(f"  publishable allow-list: {sorted(publishable_refs(repo))}")
 
     if strays:
         say(f"  [FAIL] {len(strays)} ref(s) outside the allow-list — a push --all/--mirror would publish these:")
