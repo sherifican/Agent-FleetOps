@@ -60,7 +60,7 @@ def test_request_check_writes_intent_and_stamps(tmp_path, monkeypatch):
     pls = rp.read_playlists()
     assert pls[0].last_checked != ""
 
-    # pending_requests surfaces it (for Claude to process)
+    # pending_requests surfaces it (for the orchestrator to process)
     pend = rp.pending_requests()
     assert len(pend) == 1 and pend[0]["playlist"] == "AI Stuff"
 

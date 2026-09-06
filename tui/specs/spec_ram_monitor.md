@@ -108,7 +108,7 @@ Formatting details:
 
 ## The gate
 
-`tests/test_ram_monitor.py` is Claude-authored and is the real gate. It feeds fixture text rather than
+`tests/test_ram_monitor.py` is orchestrator-authored and is the real gate. It feeds fixture text rather than
 the live `/proc/meminfo`, so it is hermetic. Run the WHOLE suite, not just the new file:
 
     cd tui && .venv/bin/python -m pytest -q

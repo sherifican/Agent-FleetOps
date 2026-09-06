@@ -1,4 +1,4 @@
-"""Claude-authored gate: the in-flight model↔dispatch join that lets clicking an IN-FLIGHT model reveal
+"""orchestrator-authored gate: the in-flight model↔dispatch join that lets clicking an IN-FLIGHT model reveal
 the dispatch title it's working on. Pure/headless — build_inflight takes already-fetched data.
 
 Covers (v3.35): a REAL TUI-dispatch-linked local model gets a `base` (→ watch button); a persistent

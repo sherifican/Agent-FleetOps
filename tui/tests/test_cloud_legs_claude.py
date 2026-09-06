@@ -1,4 +1,4 @@
-"""Claude-authored gate for the Claude-worker-leg extension of sources/cloud_legs.py.
+"""orchestrator-authored gate for the Claude-worker-leg extension of sources/cloud_legs.py.
 Pure/headless; the external-process reader is monkeypatched (no real processes). Never raises."""
 from fleet_tui.sources import cloud_legs
 

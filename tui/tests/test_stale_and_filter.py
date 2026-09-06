@@ -1,4 +1,4 @@
-"""Gate for stale-run detection + the Ops filter (spec + tests authored by Claude; the local lane
+"""Gate for stale-run detection + the Ops filter (spec + tests authored by the orchestrator; the local lane
 implements the source to pass THIS — anti-cheatable-test rule).
 
 Two pieces are under test:

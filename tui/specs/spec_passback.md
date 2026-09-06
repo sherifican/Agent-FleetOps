@@ -2,7 +2,7 @@
 
 Create tui/fleet_tui/sources/passback.py — a PURE HEADLESS reader (NO textual import;
 never raises). It surfaces the peer orchestrator→Fleet passback files as a newest-first list with an unread marker.
-Ack/seen-state is stored in a small JSON file OUTSIDE the shared passback dirs. Must pass the Claude-authored
+Ack/seen-state is stored in a small JSON file OUTSIDE the shared passback dirs. Must pass the orchestrator-authored
 gate tests/test_passback.py EXACTLY. Do NOT edit models.py (return plain dicts, like sources/dispatch.py).
 
 MODULE-LEVEL constants (tests monkeypatch these — must be module attributes with these names):

@@ -212,11 +212,11 @@ def telegram_item(d: dict) -> InboxItem | None:
     if d.get("pending"):
         return InboxItem(
             source="telegram",
-            title="Telegram msg awaiting Claude",
+            title="Telegram msg awaiting the orchestrator",
             priority="fyi",
             pending=True,
             detail=f"{d.get('count',0)} message(s), {d.get('directed',0)} directed",
-            body="Owner message(s) pending in .telegram_context.md — Claude answers on next turn or headless cron."
+            body="Owner message(s) pending in .telegram_context.md — the orchestrator answers on next turn or headless cron."
         )
     return None
 

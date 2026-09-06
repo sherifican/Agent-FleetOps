@@ -153,7 +153,7 @@ class FleetModal(ModalScreen):
 
 
 class DetailModal(FleetModal):
-    """Inbox detail + per-item actions: ▶ Hand off (route the alert to Claude/whoever's responsible — it
+    """Inbox detail + per-item actions: ▶ Hand off (route the alert to the orchestrator — it
     queues for the next orchestrator turn) and, for clearable items, ✓ Acknowledge (clears via the existing
     gated path). Hand-off does NOT clear the item; ack does."""
     BINDINGS = [("escape", "dismiss", "Close")]
@@ -178,7 +178,7 @@ class DetailModal(FleetModal):
                             yield Button("▶ hand off", id=f"handoff-{i}", variant="primary")
                             if it.source in self._CLEARABLE:
                                 yield Button("✓ ack", id=f"ack-{i}", variant="success")
-            yield Static("▶ hand off routes it to Claude/responsible · ✓ ack clears it · Esc to close", id="modalhint")
+            yield Static("▶ hand off routes it to the orchestrator · ✓ ack clears it · Esc to close", id="modalhint")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         bid = event.button.id or ""
@@ -189,7 +189,7 @@ class DetailModal(FleetModal):
             return
         if bid.startswith("handoff-"):
             ok = actions.request_action(it.source, it.title, it.detail or it.body or "")
-            self.app.notify(f"▶ handed off: {it.title[:60]} — queued for Claude to action/route"
+            self.app.notify(f"▶ handed off: {it.title[:60]} — queued for the orchestrator to action/route"
                             if ok else "hand-off failed", timeout=8)
             # do NOT dismiss — the owner may hand off / ack several items in one visit
         elif bid.startswith("ack-"):
@@ -746,9 +746,9 @@ class JobsStatic(Panel):
 
 
 class ResearchPlaylistsStatic(Panel):
-    """Research Playlists — click a playlist ROW (▶ check) to ask Claude to check it for new videos and
+    """Research Playlists — click a playlist ROW (▶ check) to ask the orchestrator to check it for new videos and
     stage them for the research team. The TUI is NOT an orchestrator: the click writes a request intent to
-    a file + fires a Telegram confirmation; Claude runs the actual check→stage flow."""
+    a file + fires a Telegram confirmation; the orchestrator runs the actual check→stage flow."""
     def on_body_click(self, event) -> None:
         pls = (getattr(self.app, "_data", None) or {}).get("research_playlists", [])
         idx = self._clicked_row(event)
@@ -1114,7 +1114,7 @@ class CurationModal(FleetModal):
                                      f"[{kc}]{escape(str(p.get('kindraw','')))}[/]{head}", classes="itemtitle")
                         if p.get("summary"):
                             yield Static(f"  [dim]{escape(str(p['summary'])[:150])}[/]", classes="itembody")
-            yield Static("▶ queues a pass (Claude runs it next turn) · full log: CURATION_LEDGER.md · Esc to close",
+            yield Static("▶ queues a pass (the orchestrator runs it next turn) · full log: CURATION_LEDGER.md · Esc to close",
                          id="modalhint")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -1512,7 +1512,7 @@ class FleetTUI(App):
     def request_playlist_check(self, playlist) -> None:
         """Owner clicked a Research Playlists row → write the check-request intent + fire a Telegram
         confirmation. The TUI does NOT run the check (it is not an orchestrator); the request surfaces to
-        Claude, who runs the actual check→stage flow. Best-effort; never blocks or crashes the UI."""
+        the orchestrator, who runs the actual check→stage flow. Best-effort; never blocks or crashes the UI."""
         name = getattr(playlist, "name", "")
         try:
             research_playlists.request_check(name, getattr(playlist, "url", ""))
@@ -1530,7 +1530,7 @@ class FleetTUI(App):
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
-        self.notify(f"▶ Requested check: {name} — Claude will stage any new videos", title="Research", timeout=5)
+        self.notify(f"▶ Requested check: {name} — the orchestrator will stage any new videos", title="Research", timeout=5)
         self.refresh_panels()
 
     def action_refresh_now(self) -> None:

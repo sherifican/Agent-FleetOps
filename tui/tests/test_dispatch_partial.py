@@ -1,4 +1,4 @@
-"""Claude-authored gate for Wave 2 — dispatch PARTIAL/degraded surfacing.
+"""orchestrator-authored gate for Wave 2 — dispatch PARTIAL/degraded surfacing.
 A cloud-leg run that produced output but exited rc!=0 leaves a `<out>.PARTIAL` marker
 (codex-fleet / grok-dispatch, H3 audit fix). The TUI must treat that as a distinct
 'finished-but-degraded' state — NOT a clean done. Pure-source tests; no textual."""

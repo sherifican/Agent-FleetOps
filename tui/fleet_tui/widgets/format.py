@@ -705,14 +705,14 @@ def _human_checked(ts: str) -> str:
 
 
 def format_research_playlists(playlists, frame=None) -> str:
-    """Render the Research Playlists panel: one clickable row per playlist (▶ check = ask Claude to check
+    """Render the Research Playlists panel: one clickable row per playlist (▶ check = ask the orchestrator to check
     it for new videos + stage them). Pure — no I/O, no state. Names are escaped (Rich markup safety)."""
     if not playlists:
         return "[dim]No research playlists configured (~/.fleet_tui/research_playlists.json).[/]"
     lines = []
     for p in playlists:
         lines.append(f"[cyan]▶ check[/]  [b]{escape(p.name)}[/]   [dim]{_human_checked(p.last_checked)}[/]")
-    lines.append("[dim]click a playlist → Claude checks it for new videos + stages them for the research team[/]")
+    lines.append("[dim]click a playlist → the orchestrator checks it for new videos + stages them for the research team[/]")
     return "\n".join(lines)
 
 

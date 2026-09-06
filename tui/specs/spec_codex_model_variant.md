@@ -133,7 +133,7 @@ Follow the kimi precedent already in that function, which is the pattern to copy
 
 ## The gate
 
-tests/test_codex_model_variant.py is Claude-authored and is the real gate. It patches
+tests/test_codex_model_variant.py is orchestrator-authored and is the real gate. It patches
 _iter_proc_cmdlines with raising=True so it never touches the live process table. Run:
 
     cd tui && .venv/bin/python -m pytest -q

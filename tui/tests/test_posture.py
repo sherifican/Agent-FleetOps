@@ -1,4 +1,4 @@
-"""Claude-authored gate for Wave 3 — backup + supply-chain + upstream POSTURE source.
+"""orchestrator-authored gate for Wave 3 — backup + supply-chain + upstream POSTURE source.
 Pure headless reader; no textual. Fixtures mirror the REAL log formats on the box (2026-07-07)."""
 import json
 from fleet_tui.sources import posture

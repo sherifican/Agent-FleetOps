@@ -43,9 +43,9 @@ hive_item(text: str) -> InboxItem | None
 
 telegram_item(d: dict) -> InboxItem | None
     Input = parsed JSON of TELEGRAM_TRIGGER. If d.get("pending") ->
-    InboxItem(source="telegram", title="Telegram msg awaiting Claude", priority="fyi", pending=True,
+    InboxItem(source="telegram", title="Telegram msg awaiting the orchestrator", priority="fyi", pending=True,
               detail=f"{d.get('count',0)} message(s), {d.get('directed',0)} directed",
-              body="Owner message(s) pending in .telegram_context.md — Claude answers on next turn or headless cron.")
+              body="Owner message(s) pending in .telegram_context.md — the orchestrator answers on next turn or headless cron.")
     else None.
 
 CHANGE build_inbox to this exact new signature and ordering (crit-class first):
@@ -63,9 +63,9 @@ EXTEND ack(source) with these cases (same gated-path semantics as the existing o
     "hive"       -> truncate HIVE_ALERT; return True
     "backup"     -> set pending=False in BACKUP_ALERT json (same pattern as dep/curation); return True
     "supply"     -> set pending=False in SUPPLY_ALERT json; return True
-    ("telegram" gets NO ack case — Claude owns clearing that trigger; ack("telegram") must return False.)
+    ("telegram" gets NO ack case — the orchestrator owns clearing that trigger; ack("telegram") must return False.)
 
-The Claude-authored gate is tui/tests/test_inbox_alerts.py — your file must pass it
+The orchestrator-authored gate is tui/tests/test_inbox_alerts.py — your file must pass it
 plus the existing tests/test_inbox.py unchanged.
 
 

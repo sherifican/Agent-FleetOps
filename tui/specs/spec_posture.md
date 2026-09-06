@@ -2,7 +2,7 @@
 
 Create tui/fleet_tui/sources/posture.py — a PURE HEADLESS reader (NO textual import,
 never raises: every file-read wrapped so a missing/corrupt file degrades to a safe default). It parses three
-fleet ledgers + two alert files and returns one composed snapshot dict. It must pass the Claude-authored gate
+fleet ledgers + two alert files and returns one composed snapshot dict. It must pass the orchestrator-authored gate
 tests/test_posture.py EXACTLY.
 
 MODULE-LEVEL path constants (tests monkeypatch these, so they MUST be module attributes with these names):

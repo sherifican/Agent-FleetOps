@@ -1,4 +1,4 @@
-"""Gate for sources/network.py (authored by Claude; the local lane implements the source to pass THIS).
+"""Gate for sources/network.py (authored by the orchestrator; the local lane implements the source to pass THIS).
 Bridge-status source: PC↔Fleet direct link + Telegram bridge. Pure build_network + safe readers."""
 from fleet_tui.sources import network
 

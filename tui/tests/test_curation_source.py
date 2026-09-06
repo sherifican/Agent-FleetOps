@@ -1,4 +1,4 @@
-"""Claude-authored gate for sources/curation.py — pass-log parsing + the trigger control. No textual."""
+"""orchestrator-authored gate for sources/curation.py — pass-log parsing + the trigger control. No textual."""
 import json
 from fleet_tui.sources import curation
 

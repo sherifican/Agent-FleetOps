@@ -1,6 +1,6 @@
 import os
 """Gate for the two Ops master-detail formatters in fleet_tui/widgets/format.py (spec + tests authored
-by Claude; the local lane implements format_ops_list/format_ops_detail to pass THIS — anti-cheatable-
+by the orchestrator; the local lane implements format_ops_list/format_ops_detail to pass THIS — anti-cheatable-
 test rule). Pure display functions: OpsItem records in, Rich-markup display strings out. No I/O, no
 Textual. Every color routes through anim.color(slot, default) — never a raw Rich-256 name.
 """

@@ -23,7 +23,7 @@
   `k10temp`, `nvme` and two NICs, and the `jc42` SPD driver is absent. The owner asked for one; the
   honest answer is the hardware cannot provide it, and a CPU-derived stand-in would be acted on as
   real. `test_no_fabricated_ram_temperature` asserts the field stays absent.
-- [infra] `tests/test_ram_monitor.py` — 15 Claude-authored tests, hermetic (fixture text, never the
+- [infra] `tests/test_ram_monitor.py` — 15 orchestrator-authored tests, hermetic (fixture text, never the
   live `/proc/meminfo`).
 - [fix] Local lane truncated `widgets/format.py` from 683 to 428 lines while adding the rows, silently
   dropping 11 functions (`format_models`, `format_cloud_legs`, the whole ops family). Caught by the
@@ -50,7 +50,7 @@
   and mislabelling the row. Mode comes from an exact `exec` token instead.
 - [fix] Invocation match mirrors the kimi rule — `basename(argv[0]) == "codex"` or a later token
   containing `/` whose basename is `codex` — so `grep -r codex .` is not counted as a codex process.
-- [infra] `tests/test_codex_model_variant.py` (20 tests, Claude-authored). Every cmdline fixture was
+- [infra] `tests/test_codex_model_variant.py` (20 tests, orchestrator-authored). Every cmdline fixture was
   read from /proc on 2026-08-08, not invented. Mutation-proven: inventing an effort, ignoring `-p`, and
   substring-matching the program name each turn the suite red on the specific test written for them.
 - [fix] Hermeticity: `test_app.py::test_gather_data` and `test_kimi_variant_wiring.py` now stub
@@ -95,7 +95,7 @@
 - **[feature]** New **RESEARCH PLAYLISTS** panel above HEALTH on the Fleet tab. One clickable row per
   research playlist (default: the owner's "AI Stuff" YouTube playlist). Clicking `▶ check <name>` writes a
   check-request intent to `~/.fleet_tui/research_requests/` + fires a Telegram confirmation — the TUI does
-  NOT run the check (not an orchestrator); the request surfaces to Claude, who runs the check→stage flow.
+  NOT run the check (not an orchestrator); the request surfaces to the orchestrator, who runs the check→stage flow.
   Files: config `~/.fleet_tui/research_playlists.json`; source `sources/research_playlists.py` (pure readers
   + thin request-writer, mirrors `dispatch.py`); formatter `format_research_playlists`; new `Playlist`
   model; last-checked stamped in a sidecar state file. 6 hermetic tests.
@@ -119,7 +119,7 @@
   get the ▶ watch button.
 - **[feat]** `InFlightTasksModal` renders a service row distinctly (⚙ glyph, no "→ dispatch" arrow, a
   "persistent service — always loaded; no task to watch" note) so it never implies a watch button.
-- Local-lane (`aider-edit`/qwen3-coder) wrote the `sources/inflight.py` logic; Claude authored the spec, the
+- Local-lane (`aider-edit`/qwen3-coder) wrote the `sources/inflight.py` logic; the orchestrator authored the spec, the
   non-gameable test gate, adjudicated, and did the `app.py` wiring. Full suite green (7 new inflight cases) +
   live-rendered demo confirming the sidecar-as-service label and a watch button on a real dispatch.
 
@@ -141,7 +141,7 @@
   kanban's 30-col cell, so `_pad_markup` dropped the family color + truncated the GB → `_clean_model_name`
   now **strips the redundant GGUF dash-quant when a `(:port)` suffix follows** (`gemma4-e4b (:8336)`), so it
   fits and stays **[green]** with `0.3GB` shown. ollama colon-quants (`:Q4_K_M`) untouched.
-  Local-lane first-pass VRAM reader, Claude-adjudicated/hardened + gated (multi-GPU-sum + fit/color tests).
+  Local-lane first-pass VRAM reader, orchestrator-adjudicated/hardened + gated (multi-GPU-sum + fit/color tests).
   Full suite 287 green + live-verified. (owner-reported)
 
 ## v3.22 — 2026-07-07 — fix ssd2 temp clipping
@@ -153,13 +153,13 @@
   and the GLM :8090 sidecar were invisible — the owner saw sustained GPU utilization with "no local models
   loaded". Added `read_sidecars()` (queries :8336/:8090 /v1/models, safe []-on-error) + a backward-compatible
   `sidecars` arg to `build_model_states`; sidecars now show as loaded (`<id> (:<port>)`, busy-flagged).
-  Local-lane built, Claude-gated (8 tests) + live-verified. Full suite 281 green. (owner-reported)
+  Local-lane built, orchestrator-gated (8 tests) + live-verified. Full suite 281 green. (owner-reported)
 
 ## v3.31 — 2026-07-08 — detect cloud legs by real process name (kimi = `kimi-code`)
 - **[fix]** A running kimi leg was invisible in the MODELS ☁ CLOUD section — the kimi CLI runs as process
   `kimi-code`, but `external_cloud_procs` did `pgrep -x kimi` (exact name). Added `SESSION_PROCS` mapping
   each leg to its real process names (kimi → `kimi`+`kimi-code`); now a live kimi leg shows. (owner-reported;
-  local-lane built, Claude-gated + live-verified against a running kimi. 26 cloud-legs tests, full suite green.)
+  local-lane built, orchestrator-gated + live-verified against a running kimi. 26 cloud-legs tests, full suite green.)
 
 ## v3.30 — 2026-07-08 — cloud legs: don't count the orchestrator + show "Claude (model)"
 - **[fix]** The interactive orchestrator (this session's bare `claude`) was being shown as a running
@@ -167,13 +167,13 @@
   Split out `SESSION_MARKERS` (codex/grok/kimi, no claude) so a bare `claude` is never counted as a leg.
 - **[feat]** Running Claude legs now display with the model tag: **`Claude (Opus 4.8)` / `Claude (Sonnet 5)`**
   (dispatch legs) and `Claude (<model>) · worker` (external `claude -p` workers) — so you see which model is
-  in use, only when a leg is actually running. (local-lane built, Claude-gated + adjudicated. 269 tests.)
+  in use, only when a leg is actually running. (local-lane built, orchestrator-gated + adjudicated. 269 tests.)
 
 ## v3.29 — 2026-07-07 — MODELS panel shows running Claude worker legs + model
 - **[feat]** The ☁ CLOUD sub-section now surfaces running **Claude worker legs** and *which model*:
   `claude-opus`/`claude-sonnet` dispatches show by leg name; external `claude -p` workers show as
   `claude <Opus 4.8|Sonnet 5|Haiku 4.5> (worker)` (model parsed from `--model`). Extends
-  `sources/cloud_legs.py` (local-lane built, Claude-gated).
+  `sources/cloud_legs.py` (local-lane built, orchestrator-gated).
 - **[fix]** Worker detection is **token-based** (`-p`/`--print` as a standalone token) — a substring check
   false-flagged the orchestrator (whose cmdline carries `--json-path`/`--spawned-by`). Adjudication catch;
   regression-tested. 266 tests green.
@@ -203,8 +203,8 @@
   **▶ Trigger curation pass** button that flips the gated `.trigger` to pending so the next orchestrator
   turn runs a full pass. New pure `sources/curation.py`. (codex research wave #8.)
 - **[feat]** **Alert hand-off** — every pending INBOX item gets a **▶ hand off** button that routes the
-  alert to Claude/whoever's responsible: it queues the alert to `~/.claude/curation/.action_requests`,
-  which the `curation_reminder` hook now drains into the next orchestrator turn so Claude actions/routes
+  alert to the orchestrator: it queues the alert to `~/.claude/curation/.action_requests`,
+  which the `curation_reminder` hook now drains into the next orchestrator turn so the orchestrator actions/routes
   it. New pure `sources/actions.py` (deduped queue). Ack now also covers automation/hive/backup/supply.
 - **[infra]** New gates `tests/test_curation_source.py`, `tests/test_actions.py`, + Ops-click regression;
   254 tests green; modals + hand-off pilot-verified.
@@ -298,8 +298,8 @@
 - **[qol]** **Header attention counter** — the Header sub-title now shows a single-glance
   `⚠N partialN fbN pbN` (alerts / degraded dispatches / feedback-due / new passback), or `✓clear` when
   nothing's pending, before the theme name. Updates every refresh. (Roadmap wave #4 / codex QoL #1.)
-- **[infra]** passback source local-lane-built + Claude-gated (`tests/test_passback.py`); wiring +
-  counter Claude-authored (`tests/test_passback_wiring.py`). Caught + fixed a `w`-key collision
+- **[infra]** passback source local-lane-built + orchestrator-gated (`tests/test_passback.py`); wiring +
+  counter orchestrator-authored (`tests/test_passback_wiring.py`). Caught + fixed a `w`-key collision
   (warm-model already owned it → passback moved to `p`). 238 tests green; live pilot verified.
 
 ## v3.14 — 2026-07-07 — POSTURE panel (backup / supply-chain / upstream)
@@ -307,8 +307,8 @@
   backup (repos + mirror), last-abort reason, latest supply-chain scan (alerts/hooks/new), and upstream
   drift (count behind + CRITICAL items with local→latest). Title shows a `● attn` chip when a backup/supply
   alert is pending or an upstream CRITICAL is behind; body click opens the INBOX to clear the alert.
-- **[infra]** Source built by the local lane (qwen3-coder), Claude-authored gates
-  (`tests/test_posture.py` + `tests/test_format_posture.py`), Claude adjudicated (hardened `_read_json`
+- **[infra]** Source built by the local lane (qwen3-coder), orchestrator-authored gates
+  (`tests/test_posture.py` + `tests/test_format_posture.py`), the orchestrator adjudicated (hardened `_read_json`
   against valid-but-non-dict JSON per the never-crash contract) and wired the panel. 231 tests green;
   live-render verified against the real ledgers. (Roadmap wave #3.)
 
@@ -319,7 +319,7 @@
   in the dispatch list and a full banner in the output modal — no longer silently shown as `✓ done`.
 - **[infra]** Marker convention confirmed against the live wrappers + dispatch dir before locking the
   parser (both `<base>.out.PARTIAL` and a bare `<base>.PARTIAL` are accepted; presence is the signal).
-  Claude-authored gate `tests/test_dispatch_partial.py`; 221 tests green. (codex research leg wave #2.)
+  orchestrator-authored gate `tests/test_dispatch_partial.py`; 221 tests green. (codex research leg wave #2.)
 
 ## v3.12 — 2026-07-07 — INBOX surfaces ALL fleet alert channels
 - **[feat]** `sources/inbox.py` now reads every fleet alert channel, not just 2 of them: the new
@@ -328,11 +328,11 @@
   week of new fail-loudly plumbing was invisible to the always-on monitor. (Both TUI research legs
   independently ranked this the #1 gap.)
 - **[feat]** Generic per-source `ack()` extended: alert files truncate, JSON triggers flip
-  `pending=false`; `telegram` is deliberately read-only (Claude owns clearing that trigger).
+  `pending=false`; `telegram` is deliberately read-only (the orchestrator owns clearing that trigger).
 - **[fix]** `HF_DIGEST` pointed at a non-existent path (`~/fleet_optests/HF_WATCH_DIGEST.md`);
   repointed to the live `~/.claude/curation/HF_WATCH_DIGEST.md`, so the HF-watch inbox item
   works again. (Found by the codex research leg.)
-- **[infra]** Built via the local-lane loop (Claude spec + Claude-authored pytest gate →
+- **[infra]** Built via the local-lane loop (orchestrator spec + orchestrator-authored pytest gate →
   qwen3-coder → adjudicate → wire); 216 tests green, live-smoke verified.
 
 ## v3.11 — 2026-07-06 — MODELS inventory modal

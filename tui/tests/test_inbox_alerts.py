@@ -1,4 +1,4 @@
-"""Claude-authored gate for the v3.12 inbox alert-channel extension (spec_inbox_alerts.md).
+"""orchestrator-authored gate for the v3.12 inbox alert-channel extension (spec_inbox_alerts.md).
 Pure-source tests — no textual, no I/O beyond tmp fixtures."""
 import json
 from fleet_tui.sources import inbox
@@ -76,7 +76,7 @@ def test_ack_new_channels(tmp_path, monkeypatch):
     assert inbox.ack("hive") and hive.read_text() == ""
     assert inbox.ack("backup") and json.loads(bk.read_text())["pending"] is False
     assert inbox.ack("supply") and json.loads(sp.read_text())["pending"] is False
-    assert inbox.ack("telegram") is False   # Claude owns that trigger
+    assert inbox.ack("telegram") is False   # the orchestrator owns that trigger
 
 
 def test_existing_readers_still_work():

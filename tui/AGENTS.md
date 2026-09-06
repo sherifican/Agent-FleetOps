@@ -45,7 +45,7 @@ See BUILD_PLAN §2. Summary:
 ## Verify-before-finish
 Each source ships with its `tests/test_*.py` GREEN (`.venv/bin/pytest tests/test_<x>.py`) before finish.
 Never finish on a red or un-run test. On a real block after ≤2 targeted fixes, STOP and report the
-blocker in one line (do not thrash) — Claude fixes that module only.
+blocker in one line (do not thrash) — the orchestrator fixes that module only.
 
 ## v4.0 box schema
 
@@ -110,3 +110,10 @@ aliases are labelled authors' instance constants. Unknown profiles keep their
 observed name, and absent model/profile data displays only the provider label.
 Restart after changing the cloud roster. Headless gates cover neutral bridge
 labels, configured services, classification overrides and unknown profiles.
+
+
+## Orchestrator copy
+
+Runtime handoff, pending-action and gate descriptions use the orchestrator role.
+Provider names in model IDs, CLI detection and worker labels remain product
+identifiers; never rewrite them as roles. Skills retain their adopting-team voice.

@@ -1,7 +1,7 @@
 """Source reader for the curation loop — recent pass log (CURATION_LEDGER.md) + the trigger flag.
 Pure/headless (no textual), never raises. `queue_pass()` is the one CONTROL action: it flips the
 existing gated `.trigger` to pending=true so the NEXT orchestrator turn runs a full curation pass —
-the TUI never runs the pass itself (that's Claude's job), it just queues it (monitor, not orchestrator).
+the TUI never runs the pass itself (that's the orchestrator's job), it just queues it (monitor, not orchestrator).
 """
 from fleet_tui.paths import resolve
 import json
@@ -114,7 +114,7 @@ def trigger_status() -> dict:
 def queue_pass() -> bool:
     """CONTROL action — flip the gated `.trigger` to pending=true so the next orchestrator turn runs a
     full curation pass. Preserves the rest of the trigger JSON; records a manual reason. Returns True on
-    success. (The TUI queues the pass; Claude runs it — never runs a pass itself.)"""
+    success. (The TUI queues the pass; the orchestrator runs it — never runs a pass itself.)"""
     if TRIGGER is None:
         return False
     try:

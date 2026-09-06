@@ -1,4 +1,4 @@
-"""Claude-authored gate: the models panel must also surface llama-server SIDECARS (gemma4 vision :8336,
+"""orchestrator-authored gate: the models panel must also surface llama-server SIDECARS (gemma4 vision :8336,
 GLM :8090) as loaded local models — not just ollama models. Root cause of the owner-reported bug: GPU is
 busy from a sidecar but ollama /api/ps is empty, so nothing showed. Pure/headless; readers monkeypatched."""
 from fleet_tui.sources import modelstate

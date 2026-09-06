@@ -1,8 +1,8 @@
 """Owner 'hand off' control — route a pending alert to whoever's responsible for it.
 
-The TUI can't ACTION an alert itself (monitor, not orchestrator), so hand-off writes the alert to a
-Claude action-queue (the configured action queue, JSON-lines). The curation_reminder hook
-surfaces that queue on the next orchestrator turn, so Claude picks it up and either actions it or routes
+The TUI can't ACTION an alert itself (monitor, not orchestrator), so hand-off writes the alert to
+the orchestrator action queue (the configured action queue, JSON-lines). The curation_reminder hook
+surfaces that queue on the next orchestrator turn, so the orchestrator picks it up and either actions it or routes
 it to the responsible agent/script. Owner-initiated only (a button press), never the refresh loop.
 """
 from fleet_tui.paths import resolve
@@ -14,7 +14,7 @@ ACTION_QUEUE = resolve("curation_dir", ".action_requests")
 
 
 def request_action(source: str, title: str, detail: str = "") -> bool:
-    """Queue a pending alert for Claude to action/route. Appends one JSON line; returns True on success.
+    """Queue a pending alert for the orchestrator to action/route. Appends one JSON line; returns True on success.
     Deduped by (source,title): re-handing-off the same alert won't pile up duplicates."""
     if ACTION_QUEUE is None:
         return False
@@ -45,7 +45,7 @@ def request_action(source: str, title: str, detail: str = "") -> bool:
 
 
 def pending_count() -> int:
-    """How many alerts are currently handed-off / awaiting Claude action. 0 on any error."""
+    """How many alerts are currently handed-off / awaiting the orchestrator action. 0 on any error."""
     if ACTION_QUEUE is None:
         return 0
     try:

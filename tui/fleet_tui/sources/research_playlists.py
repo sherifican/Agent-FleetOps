@@ -3,7 +3,7 @@
 Reads the configured playlists (default: the "AI Stuff" YouTube playlist) and lets the owner request a
 "check for new videos + stage them for the research team" with one click. The button does NOT run any
 orchestration in the TUI (the TUI is not an orchestrator): `request_check()` writes a REQUEST intent to a
-FILE under ~/.fleet_tui/research_requests/ (which surfaces to Claude, who runs the actual check→stage flow)
+FILE under ~/.fleet_tui/research_requests/ (which surfaces to the orchestrator, who runs the actual check→stage flow)
 and stamps last_checked. Owner-initiated only; no shell injection (intent goes in a JSON file). Pure readers
 + one thin request-writer, mirroring sources/dispatch.py.
 """
@@ -90,7 +90,7 @@ def _stamp_checked(name: str, ts: str) -> None:
 def request_check(name: str, url: str = "") -> str:
     """Owner-initiated (button): write a 'check this playlist for new videos + stage them' REQUEST intent to
     a JSON file under the request dir, and stamp last_checked. Returns the request-file path (or "" on error).
-    Does NOT run the check itself — the intent surfaces to Claude, who runs the check->stage flow.
+    Does NOT run the check itself — the intent surfaces to the orchestrator, who runs the check->stage flow.
     """
     try:
         rd = _request_dir()
@@ -113,7 +113,7 @@ def request_check(name: str, url: str = "") -> str:
 
 
 def pending_requests() -> list:
-    """List pending check-requests (for a surfacing hook / Claude to process). Safe default []; never raises."""
+    """List pending check-requests (for a surfacing hook / the orchestrator to process). Safe default []; never raises."""
     try:
         rd = _request_dir()
         out = []

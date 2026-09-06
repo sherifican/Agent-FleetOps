@@ -1,4 +1,4 @@
-"""Claude-authored gate for Wave 5 — the peer orchestrator passback inbox source.
+"""orchestrator-authored gate for Wave 5 — the peer orchestrator passback inbox source.
 Pure headless reader (glob + mtime + a small seen-state JSON); no textual. Never raises."""
 import os
 import json
