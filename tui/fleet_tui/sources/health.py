@@ -11,6 +11,8 @@ import subprocess
 import time
 import urllib.request
 
+# Authors' instance: compatibility defaults; override with FLEET_TUI_SERVICES
+# (a JSON list of unit names). An empty list disables service probes.
 DEFAULT_SERVICES = ["hermes-gateway", "openrgb-server"]
 BIG_MODEL_BYTES = 15_000_000_000
 RELIABILITY_PATH = resolve("reliability_file")
@@ -137,7 +139,13 @@ def read_services(names=None) -> dict:
     """Read systemctl status for given service names, return dict of name->active bool. Cached ~4s so the
     1s refresh doesn't spawn systemctl every tick."""
     if names is None:
-        names = DEFAULT_SERVICES
+        try:
+            configured = json.loads(os.environ.get("FLEET_TUI_SERVICES", "null"))
+        except (TypeError, ValueError):
+            configured = None
+        names = (configured if isinstance(configured, list)
+                 and all(isinstance(n, str) and n.strip() for n in configured)
+                 else DEFAULT_SERVICES)
 
     def _do():
         result = {}

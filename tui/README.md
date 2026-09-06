@@ -75,3 +75,16 @@ Unconfigured inputs return their source's safe default. Affected panels show mut
 Controls requiring an absent path refuse with that message. The application's own
 state under `~/.fleet_tui/` and `~/.config/fleet_tui` is unchanged; OS interfaces such
 as `/proc` and `/sys` still supply native system metrics.
+
+
+## Roster configuration
+
+The bridge `host_label` in `codex_link.json` defaults to `peer`; probing and the
+`enabled` switch are unchanged. `FLEET_TUI_SERVICES` is a JSON list of service
+unit names (`[]` disables probes); malformed values retain the labelled authors'
+instance defaults. `FLEET_TUI_CLOUD_MARKERS` is a comma-separated classification
+roster; an empty value disables those matches. Cloud process names and display
+aliases are labelled authors' instance constants. Unknown profiles keep their
+observed name, and absent model/profile data displays only the provider label.
+Restart after changing the cloud roster. Headless gates cover neutral bridge
+labels, configured services, classification overrides and unknown profiles.

@@ -5,12 +5,14 @@ The link is: an SSH tunnel forwards Fleet 127.0.0.1:<port> -> the Windows codex 
 /readyz (HTTP 200 when up). So: UP = the local port is listening AND /readyz returns 200; DOWN = the port
 is listening but the app-server isn't ready; OFF = the tunnel isn't up. Subprocess checks are CACHED
 (~12s) because the TUI refresh loop is ~1s and must never hammer ss/curl (crash-hardening rule).
-Config (optional): ~/.fleet_tui/codex_link.json  {"port": 4500, "host_label": "WinPC"}.
+Config (optional): ~/.fleet_tui/codex_link.json  {"port": 4500, "host_label": "peer"}.
 """
 import json
 import os
 import subprocess
 import time
+
+DEFAULT_HOST_LABEL = "peer"
 
 CONFIG = os.path.expanduser("~/.fleet_tui/codex_link.json")
 _cache = {"t": 0.0, "v": None}
@@ -21,17 +23,17 @@ def _config_path():
 
 
 def _read_config():
-    """(port, host_label, enabled) from the config; safe defaults (4500, 'WinPC', True) on any error.
+    """(port, host_label, enabled) from the config; safe defaults (4500, peer, True) on any error.
     enabled=False fully disables the bridge (no probing, omitted from the TUI). Never raises."""
     try:
         with open(_config_path()) as f:
             d = json.load(f)
         if isinstance(d, dict):
-            return (int(d.get("port", 4500)), str(d.get("host_label", "WinPC")),
+            return (int(d.get("port", 4500)), str(d.get("host_label") or DEFAULT_HOST_LABEL),
                     bool(d.get("enabled", True)))
     except (json.JSONDecodeError, OSError, TypeError, ValueError):
         pass
-    return 4500, "WinPC", True
+    return 4500, DEFAULT_HOST_LABEL, True
 
 
 def _port_listening(port) -> bool:
@@ -85,7 +87,7 @@ def read_status(force: bool = False) -> dict:
     try:
         v = _compute()
     except Exception:
-        v = {"state": "off", "port": 4500, "host_label": "WinPC", "http_code": None, "detail": "error"}
+        v = {"state": "off", "port": 4500, "host_label": DEFAULT_HOST_LABEL, "http_code": None, "detail": "error"}
     _cache["t"] = now
     _cache["v"] = v
     return v

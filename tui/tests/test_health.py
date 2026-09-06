@@ -123,16 +123,27 @@ def test_read_reliability_tail():
     assert isinstance(result, str)
 
 
-def test_read_services():
-    """Test reading services."""
-    # Test with default services
-    result = read_services()
-    assert isinstance(result, dict)
-    
-    # Test with custom services
-    result = read_services(["hermes-gateway"])
-    assert isinstance(result, dict)
-    assert "hermes-gateway" in result
+def test_read_services(monkeypatch):
+    """Configured units are probed verbatim; invalid config retains compatibility."""
+    from fleet_tui.sources import health
+    from types import SimpleNamespace
+    calls = []
+    def probe(cmd, **kwargs):
+        calls.append(cmd[-1])
+        return SimpleNamespace(stdout="active\n")
+    monkeypatch.setattr(health.subprocess, "run", probe)
+    health._cache.clear()
+    monkeypatch.setenv("FLEET_TUI_SERVICES", '["synthetic-worker"]')
+    assert read_services() == {"synthetic-worker": True}
+    assert calls == ["synthetic-worker"]
+    monkeypatch.setenv("FLEET_TUI_SERVICES", '[]')
+    assert read_services() == {}
+    assert calls == ["synthetic-worker"]
+    for invalid in ('{bad', 'null', '42', '[null]', '[""]'):
+        health._cache.clear()
+        monkeypatch.setenv("FLEET_TUI_SERVICES", invalid)
+        assert set(read_services()) == set(health.DEFAULT_SERVICES)
+    assert read_services(["explicit-worker"]) == {"explicit-worker": True}
 
 
 def test_snapshot():

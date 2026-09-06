@@ -97,3 +97,16 @@ the local venv when present, or `python3`. Dependencies must be installed first.
 The server has no authentication and defaults to all interfaces; deployment needs
 a deliberate bind policy and host firewall. Never describe host restrictions as
 provided or checked by this package.
+
+
+## Roster configuration
+
+The bridge `host_label` in `codex_link.json` defaults to `peer`; probing and the
+`enabled` switch are unchanged. `FLEET_TUI_SERVICES` is a JSON list of service
+unit names (`[]` disables probes); malformed values retain the labelled authors'
+instance defaults. `FLEET_TUI_CLOUD_MARKERS` is a comma-separated classification
+roster; an empty value disables those matches. Cloud process names and display
+aliases are labelled authors' instance constants. Unknown profiles keep their
+observed name, and absent model/profile data displays only the provider label.
+Restart after changing the cloud roster. Headless gates cover neutral bridge
+labels, configured services, classification overrides and unknown profiles.

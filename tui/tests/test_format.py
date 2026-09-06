@@ -190,6 +190,8 @@ def test_format_health_bridges():
     net3 = {"pc": {"reachable": True}, "telegram": {"gateway_up": True},
             "codex": {"state": "up", "host_label": "WinPC"}}
     assert "codex↔WinPC" in _strip(format_health(HealthSnapshot(), net=net3))
+    net3["codex"].pop("host_label")
+    assert "codex↔peer" in _strip(format_health(HealthSnapshot(), net=net3))
     # codex bridge DISABLED (owner-parked) → segment omitted, not shown as "off"
     net4 = {"pc": {"reachable": True}, "telegram": {"gateway_up": True},
             "codex": {"state": "disabled", "host_label": "WinPC"}}

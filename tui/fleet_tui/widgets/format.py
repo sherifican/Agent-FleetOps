@@ -308,7 +308,7 @@ def format_health(snap: HealthSnapshot, frame=None, hist=None, net=None) -> str:
         seg = [f"PC {pc_s}", f"telegram {tg_s}"]
         if _cxst and _cxst != "disabled":   # owner-disabled bridge is omitted entirely, not shown as "off"
             cx_s = f"[{okc}]up[/]" if _cxst == "up" else (f"[{failc}]down[/]" if _cxst == "down" else "[gray]off[/]")
-            cx_label = escape(str(cx.get("host_label", "WinPC")))
+            cx_label = escape(str(cx.get("host_label") or "peer"))
             seg.append(f"codex↔{cx_label} {cx_s}")
         lines.append("bridges: " + "  ·  ".join(seg))
     

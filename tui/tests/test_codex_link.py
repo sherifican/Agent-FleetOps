@@ -18,20 +18,20 @@ def _enabled_config(monkeypatch, tmp_path):
     ~/.fleet_tui/codex_link.json (now owner-disabled). Tests that need a different
     config just set FLEET_CODEX_LINK_CONFIG themselves — their setenv wins."""
     cfg = tmp_path / "default_codex_link.json"
-    cfg.write_text(json.dumps({"port": 4500, "host_label": "WinPC", "enabled": True}))
+    cfg.write_text(json.dumps({"port": 4500, "host_label": "test-peer", "enabled": True}))
     monkeypatch.setenv("FLEET_CODEX_LINK_CONFIG", str(cfg))
 
 
 def test_up(monkeypatch, tmp_path):
     _reset()
     cfg = tmp_path / "c.json"
-    cfg.write_text(json.dumps({"port": 4599, "host_label": "WinPC"}))
+    cfg.write_text(json.dumps({"port": 4599, "host_label": "test-peer"}))
     monkeypatch.setenv("FLEET_CODEX_LINK_CONFIG", str(cfg))
     monkeypatch.setattr(cl, "_port_listening", lambda p: True)
     monkeypatch.setattr(cl, "_readyz", lambda p: 200)
     s = cl.read_status(force=True)
     assert s["state"] == "up"
-    assert s["port"] == 4599 and s["host_label"] == "WinPC" and s["http_code"] == 200
+    assert s["port"] == 4599 and s["host_label"] == "test-peer" and s["http_code"] == 200
 
 
 def test_down_listening_but_not_ready(monkeypatch):
@@ -56,14 +56,18 @@ def test_never_raises_on_bad_config(monkeypatch, tmp_path):
     monkeypatch.setenv("FLEET_CODEX_LINK_CONFIG", str(bad))
     monkeypatch.setattr(cl, "_port_listening", lambda p: False)
     s = cl.read_status(force=True)
-    assert s["state"] == "off" and s["port"] == 4500 and s["host_label"] == "WinPC"
+    assert s["state"] == "off" and s["port"] == 4500 and s["host_label"] == "peer"
+    bad.unlink()
+    assert cl._read_config() == (4500, "peer", True)
+    bad.write_text('{"host_label": "", "enabled": false}')
+    assert cl._read_config() == (4500, "peer", False)
 
 
 def test_disabled_short_circuits(monkeypatch, tmp_path):
     # enabled:false → state "disabled", and NO ss/curl probing happens
     _reset()
     cfg = tmp_path / "c.json"
-    cfg.write_text(json.dumps({"port": 4500, "host_label": "WinPC", "enabled": False}))
+    cfg.write_text(json.dumps({"port": 4500, "host_label": "test-peer", "enabled": False}))
     monkeypatch.setenv("FLEET_CODEX_LINK_CONFIG", str(cfg))
     probed = {"n": 0}
     monkeypatch.setattr(cl, "_port_listening", lambda p: probed.__setitem__("n", probed["n"] + 1) or True)

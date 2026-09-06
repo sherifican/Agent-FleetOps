@@ -7,7 +7,11 @@ import os
 import subprocess
 import time
 
-CLOUD_MARKERS = ("codex", "grok", "kimi", "claude", "agy")
+# Authors' instance: default CLI roster and exact executable names. Override cloud
+# classification with comma-separated FLEET_TUI_CLOUD_MARKERS; empty disables it.
+AUTHORS_CLOUD_MARKERS = ("codex", "grok", "kimi", "claude", "agy")
+CLOUD_MARKERS = tuple(m.strip().lower() for m in os.environ.get(
+    "FLEET_TUI_CLOUD_MARKERS", ",".join(AUTHORS_CLOUD_MARKERS)).split(",") if m.strip())
 SESSION_MARKERS = ("codex", "grok", "kimi")
 # each cloud leg -> the exact process names (comm) its CLI may run as. `pgrep -x` needs the real exe
 # name; the kimi CLI runs as 'kimi-code', codex/grok as themselves. (owner-reported 2026-07-08)
@@ -226,6 +230,9 @@ def external_claude_workers() -> list:
 
 # ---------- Codex model variant detection ----------
 
+# Authors' instance: optional display aliases for observed command-line profiles.
+# Unknown profiles retain their observed name; absent profile/model data uses the
+# neutral provider label "codex". Never infer model or effort from a profile alias.
 CODEX_PROFILE_DISPLAY = {
     "sol": "Sol",
     "terra": "Terra",

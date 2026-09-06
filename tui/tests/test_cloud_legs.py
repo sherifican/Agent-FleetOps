@@ -8,11 +8,17 @@ from fleet_tui.widgets.format import format_cloud_legs
 
 # ---------- is_cloud_leg ----------
 
-def test_is_cloud_leg_matches_cloud():
+def test_is_cloud_leg_matches_cloud(monkeypatch):
     assert is_cloud_leg("codex-fleet")
     assert is_cloud_leg("grok-research")
     assert is_cloud_leg("kimi")
     assert is_cloud_leg("CODEX-driver")          # case-insensitive
+    from fleet_tui.sources import cloud_legs
+    monkeypatch.setattr(cloud_legs, "CLOUD_MARKERS", ("test-provider",))
+    assert is_cloud_leg("TEST-PROVIDER-worker")
+    assert not is_cloud_leg("codex-worker")
+    monkeypatch.setattr(cloud_legs, "CLOUD_MARKERS", ())
+    assert not is_cloud_leg("test-provider-worker")
 
 
 def test_is_cloud_leg_rejects_local_and_garbage():

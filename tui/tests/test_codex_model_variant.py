@@ -174,6 +174,9 @@ def test_unknown_profile_still_renders(monkeypatch):
     hardcoded list failing to recognise something new."""
     rows = _procs(monkeypatch, ["codex", "exec", "-p", "vega"])
     assert rows and rows[0]["name"] == "codex Vega", rows
+    monkeypatch.setattr(cloud_legs, "CODEX_PROFILE_DISPLAY", {"vega": "Configured profile"})
+    rows = _procs(monkeypatch, ["codex", "exec", "-p", "vega"])
+    assert rows[0]["name"] == "codex Configured profile"
 
 
 def test_no_variant_info_still_lists_codex(monkeypatch):
