@@ -10,6 +10,7 @@ import zlib
 from rich.markup import escape
 from fleet_tui.models import Job, InboxItem, HealthSnapshot, LoadedModel, FocusState, ModelState, Playlist
 from fleet_tui.widgets import anim
+from fleet_tui.sources import codex_link
 
 
 # log-line coloring for the job-output view — matched by priority (first hit wins), word-boundaried so
@@ -308,7 +309,7 @@ def format_health(snap: HealthSnapshot, frame=None, hist=None, net=None) -> str:
         seg = [f"PC {pc_s}", f"telegram {tg_s}"]
         if _cxst and _cxst != "disabled":   # owner-disabled bridge is omitted entirely, not shown as "off"
             cx_s = f"[{okc}]up[/]" if _cxst == "up" else (f"[{failc}]down[/]" if _cxst == "down" else "[gray]off[/]")
-            cx_label = escape(str(cx.get("host_label") or "peer"))
+            cx_label = escape(str(cx.get("host_label") or codex_link.DEFAULT_HOST_LABEL))
             seg.append(f"codex↔{cx_label} {cx_s}")
         lines.append("bridges: " + "  ·  ".join(seg))
     

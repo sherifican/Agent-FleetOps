@@ -1,4 +1,4 @@
-"""Claude-authored gate for guard/leg_canary.py. The implementer must NOT edit this file.
+"""the orchestrator's gate for guard/leg_canary.py. The implementer must NOT edit this file.
 
 Every test injects a fake runner: the module must be fully provable with zero cloud spend, or it will
 not be run often enough to matter. The headline case is the rc=0-but-dead leg.

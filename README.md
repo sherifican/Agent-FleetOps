@@ -100,11 +100,11 @@ unknown. A monitor that only ever showed green would be the one worth distrustin
 
 ### The same fleet from a phone
 
-The monitor also serves over the home LAN, so the whole fleet is readable from a phone browser on the
-same network. The shipped `tui/serve.sh` wrapper has no token authentication and binds all interfaces
-by default. Before running it, install the TUI dependencies and set `FLEET_TUI_SERVE_HOST` to a
-loopback-only bind, or configure a host firewall to admit only trusted clients. Add authenticated
-access before allowing untrusted clients; this package does not install or verify those controls.
+The shipped `tui/serve.sh` wrapper has no authentication and binds `127.0.0.1`
+(loopback only) by default. Install the TUI dependencies before running it. Set
+`FLEET_TUI_SERVE_HOST=0.0.0.0` explicitly to bind all interfaces, and configure a
+host firewall to admit only trusted clients. Add authenticated access before
+allowing untrusted clients; this package does not install or verify those controls.
 The phone captures below show my separate layout. It is the same data the
 terminal shows, re-laid-out for a narrow screen: cards stack, the model kanban becomes sections, and
 the wide tables scroll rather than truncate.

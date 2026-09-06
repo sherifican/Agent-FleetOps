@@ -1,4 +1,4 @@
-"""Claude-authored gate for guard/artifact_txn.py. The implementer must NOT edit this file."""
+"""the orchestrator's gate for guard/artifact_txn.py. The implementer must NOT edit this file."""
 import os
 import sys
 

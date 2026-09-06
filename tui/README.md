@@ -81,10 +81,20 @@ as `/proc` and `/sys` still supply native system metrics.
 
 The bridge `host_label` in `codex_link.json` defaults to `peer`; probing and the
 `enabled` switch are unchanged. `FLEET_TUI_SERVICES` is a JSON list of service
-unit names (`[]` disables probes); malformed values retain the labelled authors'
-instance defaults. `FLEET_TUI_CLOUD_MARKERS` is a comma-separated classification
-roster; an empty value disables those matches. Cloud process names and display
+unit names (`[]` disables probes); malformed nonempty values retain the labelled
+authors' instance defaults. `FLEET_TUI_CLOUD_MARKERS` is a comma-separated
+classification roster. For both knobs, an unset variable selects the authors'
+defaults and an empty string disables the respective probes or classifications. Cloud process names and display
 aliases are labelled authors' instance constants. Unknown profiles keep their
 observed name, and absent model/profile data displays only the provider label.
 Restart after changing the cloud roster. Headless gates cover neutral bridge
 labels, configured services, classification overrides and unknown profiles.
+
+
+## Browser serving contract
+
+The shipped `tui/serve.sh` wrapper has no authentication and binds `127.0.0.1`
+(loopback only) by default. Install the TUI dependencies before running it. Set
+`FLEET_TUI_SERVE_HOST=0.0.0.0` explicitly to bind all interfaces, and configure a
+host firewall to admit only trusted clients. Add authenticated access before
+allowing untrusted clients; this package does not install or verify those controls.

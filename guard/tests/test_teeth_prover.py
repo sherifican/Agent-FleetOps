@@ -1,4 +1,4 @@
-"""Claude-authored gate for guard/teeth_prover.py. The implementer must NOT edit this file.
+"""the orchestrator's gate for guard/teeth_prover.py. The implementer must NOT edit this file.
 
 This is the harness that proves other harnesses can fail, so the gate plants a positive for each of its
 own outcomes — including a deliberately lying guard and a deliberately non-binding mutation. A prover

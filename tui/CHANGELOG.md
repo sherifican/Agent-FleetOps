@@ -236,11 +236,11 @@
 
 ## v3.21 — 2026-07-07 — phone/browser view (wave 8)
 - **[feat]** `./serve.sh` (`fleet_tui/serve.py`, `textual-serve`) serves the TUI over HTTP so it opens in
-  a **browser — including the phone on home wifi** at `http://<fleet-LAN-ip>:8011`. Each browser session
-  spawns its own `python -m fleet_tui`, so it's the same monitor, just reachable.
-- **[infra/security]** The server binds all interfaces by default and has no authentication.
-  Host/port are environment-overridable. Adopters must choose a loopback-only bind or configure
-  a host firewall for trusted clients, and add authentication before admitting untrusted clients.
+  a **local browser** at `http://127.0.0.1:8011` by default. Each browser session
+  spawns its own `python -m fleet_tui`; remote access requires explicit configuration.
+- **[infra/security]** The server binds `127.0.0.1` (loopback only) by default and has no authentication.
+  Host/port are environment-overridable. Set `FLEET_TUI_SERVE_HOST=0.0.0.0` explicitly for all
+  interfaces; configure a host firewall for trusted clients and add authentication before admitting untrusted clients.
   The package does not provision or verify network restrictions. Historical test count: 242.
 
 

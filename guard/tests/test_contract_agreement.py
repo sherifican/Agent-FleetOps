@@ -1,4 +1,4 @@
-"""Claude-authored gate for guard/contract_agreement.py. The implementer must NOT edit this file.
+"""the orchestrator's gate for guard/contract_agreement.py. The implementer must NOT edit this file.
 
 The module under test is itself a guard, so every check here plants a positive: a disagreement it must
 catch, and a legitimate variation it must NOT flag. A gate that cannot go red is a green light wired to

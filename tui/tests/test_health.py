@@ -146,6 +146,29 @@ def test_read_services(monkeypatch):
     assert read_services(["explicit-worker"]) == {"explicit-worker": True}
 
 
+def test_empty_services_environment_disables_probes(monkeypatch):
+    from fleet_tui.sources import health
+    from types import SimpleNamespace
+    calls = []
+
+    def probe(cmd, **kwargs):
+        calls.append(cmd[-1])
+        return SimpleNamespace(stdout="active\n")
+
+    monkeypatch.setattr(health.subprocess, "run", probe)
+    health._cache.clear()
+    monkeypatch.delenv("FLEET_TUI_SERVICES", raising=False)
+    assert set(read_services()) == set(health.DEFAULT_SERVICES)
+    assert calls == list(health.DEFAULT_SERVICES)
+    calls.clear()
+    monkeypatch.setenv("FLEET_TUI_SERVICES", "")
+    assert read_services() == {}
+    assert calls == []
+    assert read_services(["explicit-worker"]) == {"explicit-worker": True}
+    assert calls == ["explicit-worker"]
+    health._cache.clear()
+
+
 def test_snapshot():
     """Test the snapshot convenience function."""
     # This should not raise any exceptions

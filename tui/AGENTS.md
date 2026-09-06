@@ -77,9 +77,9 @@ Configured-reader controls use both environment and XDG JSON discovery, reload t
 source, and call its no-argument reader. Playlist config/state/request paths remain
 TUI-owned; only its optional notification uses external `curation_dir`.
 
-Headless collection currently reaches 345 tests; the 383-test declared inventory
-includes UI modules requiring Textual/textual-serve. Do not report the full suite
-as executed when those modules cannot import.
+Headless collection currently reaches 351 tests, including the serving configuration
+gates. Ten UI test modules require Textual; do not report the full suite as executed
+when those modules cannot import. Full-suite counts require those dependencies.
 
 
 ## Gathered notice contract
@@ -94,22 +94,27 @@ panel dependencies; the notice mapping remains present when its strings are empt
 
 `./serve.sh` launches `fleet_tui.serve` from this directory using `FLEET_TUI_PYTHON`,
 the local venv when present, or `python3`. Dependencies must be installed first.
-The server has no authentication and defaults to all interfaces; deployment needs
-a deliberate bind policy and host firewall. Never describe host restrictions as
-provided or checked by this package.
+The server has no authentication and defaults to `127.0.0.1` (loopback only).
+All-interface binding requires explicit `FLEET_TUI_SERVE_HOST=0.0.0.0`; restrict
+ingress to trusted clients and add authentication before admitting untrusted ones.
+Never describe host restrictions as provided or checked by this package.
+`tests/test_serve.py` checks resolved defaults and explicit overrides headlessly;
+its server stand-in never opens a socket.
 
 
 ## Roster configuration
 
 The bridge `host_label` in `codex_link.json` defaults to `peer`; probing and the
 `enabled` switch are unchanged. `FLEET_TUI_SERVICES` is a JSON list of service
-unit names (`[]` disables probes); malformed values retain the labelled authors'
-instance defaults. `FLEET_TUI_CLOUD_MARKERS` is a comma-separated classification
-roster; an empty value disables those matches. Cloud process names and display
+unit names (`[]` disables probes); malformed nonempty values retain the labelled
+authors' instance defaults. `FLEET_TUI_CLOUD_MARKERS` is a comma-separated
+classification roster. The shared unset/empty-value contract is documented in
+`README.md` under Roster configuration; keep both readers aligned with it. Cloud process names and display
 aliases are labelled authors' instance constants. Unknown profiles keep their
 observed name, and absent model/profile data displays only the provider label.
 Restart after changing the cloud roster. Headless gates cover neutral bridge
-labels, configured services, classification overrides and unknown profiles.
+labels, configured services (including empty-string disabling), environment-reload
+classification overrides and unknown profiles.
 
 
 ## Orchestrator copy

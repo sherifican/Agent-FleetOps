@@ -1,4 +1,4 @@
-"""Claude-authored gate for guard/stage_ledger.py. The implementer must NOT edit this file.
+"""the orchestrator's gate for guard/stage_ledger.py. The implementer must NOT edit this file.
 
 The headline case is reproduced literally: a queue that processed 13 of 25 items and reported success.
 """

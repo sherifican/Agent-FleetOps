@@ -140,7 +140,7 @@ def read_services(names=None) -> dict:
     1s refresh doesn't spawn systemctl every tick."""
     if names is None:
         try:
-            configured = json.loads(os.environ.get("FLEET_TUI_SERVICES", "null"))
+            configured = json.loads(os.environ.get("FLEET_TUI_SERVICES", "null") or "[]")
         except (TypeError, ValueError):
             configured = None
         names = (configured if isinstance(configured, list)

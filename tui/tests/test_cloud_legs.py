@@ -1,9 +1,42 @@
 """Gate for the cloud-leg activity source + its MODELS-panel formatter. Pure: dispatch dicts in,
 cloud-leg records / display string out. No I/O, no Textual. Colors route through anim/valid CSS names."""
 import time
+import importlib
+
+import pytest
+
+from fleet_tui.sources import cloud_legs
 
 from fleet_tui.sources.cloud_legs import is_cloud_leg, active_cloud_legs
 from fleet_tui.widgets.format import format_cloud_legs
+
+
+@pytest.fixture(autouse=True)
+def _default_cloud_environment(monkeypatch):
+    """Pin import-time configuration and restore the caller's environment afterward."""
+    with monkeypatch.context() as patch:
+        patch.delenv("FLEET_TUI_CLOUD_MARKERS", raising=False)
+        importlib.reload(cloud_legs)
+        yield
+    importlib.reload(cloud_legs)
+
+
+def test_cloud_markers_environment_reload(monkeypatch):
+    assert cloud_legs.is_cloud_leg("codex-worker")
+    assert not cloud_legs.is_cloud_leg("test-provider-worker")
+    monkeypatch.setenv("FLEET_TUI_CLOUD_MARKERS", " TEST-PROVIDER, another-provider ")
+    importlib.reload(cloud_legs)
+    assert cloud_legs.is_cloud_leg("TEST-PROVIDER-worker")
+    assert cloud_legs.is_cloud_leg("another-provider-worker")
+    assert not cloud_legs.is_cloud_leg("codex-worker")
+
+
+def test_cloud_markers_empty_environment_disables(monkeypatch):
+    assert cloud_legs.is_cloud_leg("codex-worker")
+    monkeypatch.setenv("FLEET_TUI_CLOUD_MARKERS", "")
+    importlib.reload(cloud_legs)
+    assert cloud_legs.CLOUD_MARKERS == ()
+    assert not cloud_legs.is_cloud_leg("codex-worker")
 
 
 # ---------- is_cloud_leg ----------

@@ -1,4 +1,4 @@
-"""Claude-authored gate for guard/leg_failure_class.py. The implementer must NOT edit this file.
+"""the orchestrator's gate for guard/leg_failure_class.py. The implementer must NOT edit this file.
 
 Each rule is pinned to the real incident that motivated it, so a future edit that breaks one breaks a
 test that names the cost.

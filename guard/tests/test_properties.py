@@ -1,4 +1,4 @@
-"""Claude-authored gate for guard/research_properties.py. The implementer must NOT edit this file.
+"""the orchestrator's gate for guard/research_properties.py. The implementer must NOT edit this file.
 
 Every property gets BOTH a clean case (ok=True) and a planted-positive case (ok=False). A detector that
 has never gone red on a known positive is unproven — that rule is the whole reason this subsystem exists,
