@@ -1,6 +1,6 @@
 # SPEC — modelstate.py: surface llama-server SIDECARS as loaded local models
 
-Edit `~/fleet_tui/fleet_tui/sources/modelstate.py` IN PLACE. Keep the module PURE/headless
+Edit `tui/fleet_tui/sources/modelstate.py` IN PLACE. Keep the module PURE/headless
 (readers do I/O + safe-default to `[]`; the composer does NO I/O). NEVER import textual. Gate =
 `tests/test_modelstate_sidecars.py` + the existing `tests/` (nothing else may regress).
 

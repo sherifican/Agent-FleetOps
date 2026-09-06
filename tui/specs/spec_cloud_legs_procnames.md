@@ -1,6 +1,6 @@
 # SPEC — cloud_legs.py: detect cloud legs by their REAL process names (kimi runs as `kimi-code`)
 
-Edit ~/fleet_tui/fleet_tui/sources/cloud_legs.py IN PLACE. Preserve ALL existing behavior.
+Edit tui/fleet_tui/sources/cloud_legs.py IN PLACE. Preserve ALL existing behavior.
 Pure/headless, never raises. Must pass the FULL tests/test_cloud_legs_claude.py + tests/test_cloud_legs.py
 unchanged, plus the new tests/test_cloud_legs_procnames.py.
 

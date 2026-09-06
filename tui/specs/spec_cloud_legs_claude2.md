@@ -1,6 +1,6 @@
 # SPEC — cloud_legs.py: stop counting the orchestrator + show "Claude (model)" tag
 
-Edit ~/fleet_tui/fleet_tui/sources/cloud_legs.py IN PLACE. Preserve ALL existing behavior and
+Edit tui/fleet_tui/sources/cloud_legs.py IN PLACE. Preserve ALL existing behavior and
 every function; make ONLY the changes below. Pure/headless, never raises. Must pass the FULL
 tests/test_cloud_legs_claude.py + tests/test_cloud_legs.py unchanged.
 

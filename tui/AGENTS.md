@@ -36,10 +36,10 @@ Full plan: kept in the origin fleet's private notes; this file is self-contained
 ## State contracts (frozen 2026-07-02 — build against these, do NOT re-guess paths)
 See BUILD_PLAN §2. Summary:
 - **jobs**: `~/.hermes/cron/jobs.json` + `crontab -l` + `~/.hermes/cron/output/<name>/` + logs
-- **inbox**: `~/.claude/curation/.dep_update_trigger` · `.trigger` · `.github_action_alert` ·
-  `~/fleet_optests/HF_WATCH_DIGEST.md` · `~/.claude/curation/CURATION_REJECTS_REVIEW.md`
+- **inbox**: `curation_dir/.dep_update_trigger` · `.trigger` · `.github_action_alert` ·
+  `curation_dir/HF_WATCH_DIGEST.md` · `curation_dir/CURATION_REJECTS_REVIEW.md`
 - **health**: `fleet-doctor --json` + `GET http://localhost:11434/api/ps` + `systemctl --user is-active …`
-- **focus**: `~/.claude/curation/watchers.lock` — presence = ON. **Scope = `noisy`**
+- **focus**: `curation_dir/watchers.lock` — presence = ON. **Scope = `noisy`**
   (github-watch + harvester + curation-watcher). **Default = OFF** (no file).
 
 ## Verify-before-finish
@@ -66,3 +66,17 @@ absent paths before I/O; controls refuse absent configuration. `panel_notices()`
 sampled during data gathering, not the fast paint loop. Source constants resolve at
 startup, so configuration changes require restart. Headless verification includes
 `tests/test_paths.py`; shared fixtures must not import Textual when it is absent.
+
+
+## Review regression boundaries
+
+Passback composition emits one notice only when passback keys are missing and no
+empty Static when configured. `tests/test_passback_compose.py` executes that body
+with headless widget stand-ins; Textual layout still requires UI verification.
+Configured-reader controls use both environment and XDG JSON discovery, reload the
+source, and call its no-argument reader. Playlist config/state/request paths remain
+TUI-owned; only its optional notification uses external `curation_dir`.
+
+Headless collection currently reaches 345 tests; the 383-test declared inventory
+includes UI modules requiring Textual/textual-serve. Do not report the full suite
+as executed when those modules cannot import.

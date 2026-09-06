@@ -97,11 +97,40 @@ def test_unconfigured_sources_do_not_touch_filesystem(monkeypatch):
         spy.assert_not_called()  # caught exceptions alone cannot make this test pass
 
 
-def test_configured_reader_positive_control(monkeypatch, tmp_path):
+@pytest.mark.parametrize('route', ['env', 'json'])
+def test_configured_reader_positive_control(monkeypatch, tmp_path, route):
     from fleet_tui.sources import jobs
-    p = tmp_path / 'jobs.json'
+    cron = tmp_path / 'cron'
+    cron.mkdir()
+    p = cron / 'jobs.json'
     p.write_text('{"jobs": [{"id": "fixture-job"}]}')
-    assert jobs.read_hermes_jobs(str(p)) == [{'id': 'fixture-job'}]
+    with monkeypatch.context() as config_env:
+        config_env.setenv('XDG_CONFIG_HOME', str(tmp_path))
+        if route == 'env':
+            config_env.setenv('FLEET_TUI_HERMES_CRON_DIR', str(cron))
+        else:
+            config = tmp_path / 'fleet_tui' / 'paths.json'
+            config.parent.mkdir()
+            config.write_text(json.dumps({'hermes_cron_dir': str(cron)}))
+        try:
+            importlib.reload(jobs)
+            assert jobs.HERMES_JOBS_PATH == paths.resolve('hermes_cron_dir', 'jobs.json') == str(p)
+            assert jobs.read_hermes_jobs() == [{'id': 'fixture-job'}]
+        finally:
+            if route == 'json':
+                config.unlink()
+    # Restore the import-time default so later tests cannot inherit this fixture.
+    importlib.reload(jobs)
+
+
+def test_playlist_panel_tracks_only_external_notification_dependency(monkeypatch):
+    # Playlist config/state/requests are TUI-owned. Only the notification button
+    # needs the external curation script; research_dir is not a panel dependency.
+    assert paths.PANEL_KEYS['research_playlists'] == ('curation_dir',)
+    assert paths.panel_notices()['research_playlists'] == paths.notice(['curation_dir'])
+    monkeypatch.setenv('FLEET_TUI_CURATION_DIR', 'fixture/curation')
+    assert paths.resolve('research_dir') is None
+    assert paths.panel_notices()['research_playlists'] == ''
 
 
 def test_muted_panel_notice():

@@ -53,9 +53,9 @@
       <text x="48" y="130" text-anchor="end" font-size="15" font-weight="bold" fill="#39d36f">30</text>
       <text x="62" y="130" font-size="11" fill="#e2e8f0">skills</text>
       <text x="386" y="130" text-anchor="end" font-size="11" fill="#9aa4ba">generalized agent procedures</text>
-      <text x="48" y="160" text-anchor="end" font-size="15" font-weight="bold" fill="#22d3ee">968</text>
+      <text x="48" y="160" text-anchor="end" font-size="15" font-weight="bold" fill="#22d3ee">976</text>
       <text x="62" y="160" font-size="11" fill="#e2e8f0">tests</text>
-      <text x="386" y="160" text-anchor="end" font-size="11" fill="#9aa4ba">590 guard + 378 TUI · no live fleet</text>
+      <text x="386" y="160" text-anchor="end" font-size="11" fill="#9aa4ba">593 guard + 383 TUI · no live fleet</text>
       <text x="48" y="190" text-anchor="end" font-size="15" font-weight="bold" fill="#b388ff">67</text>
       <text x="62" y="190" font-size="11" fill="#e2e8f0">measured rows</text>
       <text x="386" y="190" text-anchor="end" font-size="11" fill="#9aa4ba">throughput, limits stated</text>

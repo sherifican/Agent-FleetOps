@@ -940,3 +940,31 @@ def test_no_argument_preflight_with_errexit_disabled(tmp_path):
         cwd=fx.repo, capture_output=True, text=True, env=fx.env())
     assert_refused(result, TOKEN_SELFTEST)
     assert fx.snapshot() == before, "failed preflight must leave every hook unchanged"
+
+
+@pytest.mark.parametrize("args", [(), ("--pre-push-config",), ("--check-pre-push-config",)],
+                         ids=["legacy-no-args", "install-config", "check-config"])
+def test_preflight_with_errexit_disabled(tmp_path, args):
+    """A returning preflight failure must stop every caller with errexit suppressed.
+
+    Sourcing in an AND-list suppresses errexit inside the installer too; just
+    invoking bash +e would let the installer's own set -e turn it back on.
+    """
+    fx = make_fixture(tmp_path)
+    plant_preexisting_sentinel(fx)
+    # The real refusal exits the shell; it cannot isolate the caller's || exit.
+    # Inject only the preflight boundary, leaving the actual route dispatch intact.
+    fx.install_by_hand()  # valid parity lets the check mutant fall through to success
+    script = fx.repo / "guard" / "hooks" / "install.sh"
+    body = script.read_text()
+    start = body.index('preflight() {')
+    end = body.index('\n}', start) + 2
+    body = body[:start] + 'preflight() { tracked_digest=$(digest "$tracked"); echo "refused: self-test fixture" >&2; return 1; }' + body[end:]
+    script.write_text(body)
+    before = fx.snapshot()
+    result = subprocess.run(
+        ["bash", "+e", "-c", 'set +e; source "$0" "$@" && exit 0',
+         str(fx.repo / "guard" / "hooks" / "install.sh"), *args],
+        cwd=fx.repo, capture_output=True, text=True, env=fx.env())
+    assert_refused(result, TOKEN_SELFTEST)
+    assert fx.snapshot() == before, "failed preflight must leave every hook unchanged"

@@ -883,12 +883,15 @@ class PassbackModal(FleetModal):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="modalbox"):
-            yield Static(notice(missing(("passback_docs_glob", "comms_inbound_glob"))))
+            config_notice = notice(missing(("passback_docs_glob", "comms_inbound_glob")))
+            if config_notice:
+                yield Static(config_notice)
             n_new = sum(1 for it in self._items if it.get("new"))
             yield Static(f"{PEER_BOX_LABEL.upper()} PASSBACK — {len(self._items)} file(s), {n_new} new", id="modaltitle")
             with VerticalScroll(id="modalbody"):
                 if not self._items:
-                    yield Static(notice(missing(("passback_docs_glob", "comms_inbound_glob"))) or "No passback files yet. ✓")
+                    if not config_notice:
+                        yield Static("No passback files yet. ✓")
                 else:
                     for it in self._items:
                         dot = "[cyan]●[/] " if it.get("new") else "[gray]○[/] "

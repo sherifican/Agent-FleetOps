@@ -136,6 +136,6 @@ Follow the kimi precedent already in that function, which is the pattern to copy
 tests/test_codex_model_variant.py is Claude-authored and is the real gate. It patches
 _iter_proc_cmdlines with raising=True so it never touches the live process table. Run:
 
-    cd ~/fleet_tui && .venv/bin/python -m pytest -q
+    cd tui && .venv/bin/python -m pytest -q
 
 The whole suite must stay green, not just the new file.

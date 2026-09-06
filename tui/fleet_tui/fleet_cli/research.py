@@ -9,7 +9,7 @@ from typing import Dict, Any
 
 from fleet_tui.sources import dispatch
 
-RESEARCH_DIR = resolve("research_dir")  # EDIT ME
+RESEARCH_DIR = resolve("research_dir")
 
 def launch_research(slug: str, question: str) -> Dict[str, Any]:
     """

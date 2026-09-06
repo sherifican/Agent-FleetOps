@@ -1,16 +1,16 @@
 # SPEC — new source: fleet_tui/sources/posture.py (Wave 3: backup + supply-chain + upstream posture)
 
-Create ~/fleet_tui/fleet_tui/sources/posture.py — a PURE HEADLESS reader (NO textual import,
+Create tui/fleet_tui/sources/posture.py — a PURE HEADLESS reader (NO textual import,
 never raises: every file-read wrapped so a missing/corrupt file degrades to a safe default). It parses three
 fleet ledgers + two alert files and returns one composed snapshot dict. It must pass the Claude-authored gate
 tests/test_posture.py EXACTLY.
 
 MODULE-LEVEL path constants (tests monkeypatch these, so they MUST be module attributes with these names):
-    BACKUP_LOG   = "~/.claude/curation/BACKUP_LOG.md"
-    SUPPLY_LOG   = "~/.claude/curation/SUPPLY_CHAIN_LOG.md"
-    UPSTREAM     = "~/.claude/curation/UPSTREAM_UPDATES.md"
-    BACKUP_ALERT = "~/.claude/curation/.backup_alert"
-    SUPPLY_ALERT = "~/.claude/curation/.supply_chain_alert"
+    BACKUP_LOG   = resolve("curation_dir", "BACKUP_LOG.md")
+    SUPPLY_LOG   = resolve("curation_dir", "SUPPLY_CHAIN_LOG.md")
+    UPSTREAM     = resolve("curation_dir", "UPSTREAM_UPDATES.md")
+    BACKUP_ALERT = resolve("curation_dir", ".backup_alert")
+    SUPPLY_ALERT = resolve("curation_dir", ".supply_chain_alert")
 
 Provide a helper `_read(path)` returning the file text or "" on any error, and `_read_json(path)` returning a
 dict or {} on any error. Use these everywhere so nothing raises.
@@ -71,3 +71,7 @@ Regex hints (indented, not fenced):
 
 Do NOT import textual. Do NOT edit models.py (return plain dicts, like sources/dispatch.py does). The gate is
 tests/test_posture.py — match it exactly.
+
+
+Layout configuration: import `resolve` from `fleet_tui.paths` for the constants
+above, and return the reader's safe default before I/O when resolution is `None`.

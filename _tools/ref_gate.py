@@ -77,7 +77,9 @@ def publishable_refs(repo):
     ref = result.stdout.strip()
     if not ref:
         return {DEFAULT_PUBLISH_REF}
-    if not ref.startswith("refs/") or ref.startswith("refs/original/"):
+    if not ref.startswith("refs/"):
+        raise RuntimeError("fleetops.publishRef must name a full ref beginning with refs/")
+    if ref.startswith("refs/original/"):
         raise RuntimeError("fleetops.publishRef must name a full publishing ref outside refs/original/")
     if subprocess.run(["git", "check-ref-format", ref], cwd=repo,
                       capture_output=True).returncode != 0:

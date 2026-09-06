@@ -25,10 +25,10 @@ Optional `~/.fleet_tui/boxes.json` is a list (or `{ "boxes": [...] }`) of box ob
 - **Light + cached** — refresh ≥ 1s; every subprocess reader cached (`fleet-doctor` ≥ 30s, `/api/ps` 5s, network ~20s).
 
 ## Build loop + testing
-Features are built cheaply via the local lane: Claude writes a tight spec + the pytest gate (Claude-authored, un-gameable), a local coder writes the pure `sources/`/`format.py` (via `aider-edit`), the deterministic pytest is the real gate, Claude does the Textual wiring. See the **`fleet-tui-dev`** skill for the full recipe + Textual gotchas. Run tests: `cd ~/fleet_tui && .venv/bin/python -m pytest -q`. Launch: `./run.sh`.
+Features are built cheaply via the local lane: Claude writes a tight spec + the pytest gate (Claude-authored, un-gameable), a local coder writes the pure `sources/`/`format.py` (via `aider-edit`), the deterministic pytest is the real gate, Claude does the Textual wiring. See the **`fleet-tui-dev`** skill for the full recipe + Textual gotchas. Run tests: `cd tui && .venv/bin/python -m pytest -q`. Launch: `./run.sh`.
 
 ## Backup & restore
-Mirrored by the authors' backup job. **Restore:** clone this branch back to `~/fleet_tui/`.
+Mirrored by the authors' backup job. **Restore:** clone this branch to your chosen checkout directory, then run the TUI from its `tui/` subdirectory.
 
 
 ## Point the TUI at your fleet

@@ -8,7 +8,7 @@ import os
 import time
 
 DOCS_GLOB = resolve("passback_docs_glob")
-PC_GLOB   = resolve("comms_inbound_glob")  # EDIT ME
+PC_GLOB   = resolve("comms_inbound_glob")
 SEEN_FILE = os.path.expanduser("~/.fleet_tui/passback_seen.json")
 
 

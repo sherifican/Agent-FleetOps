@@ -8,7 +8,7 @@ from textual.widgets import Static
 
 
 async def test_app_mounts_and_toggles_focus(tmp_path, monkeypatch):
-    # never touch the real ~/.claude/curation/watchers.lock
+    # never touch the configured curation directory’s live watchers.lock
     monkeypatch.setenv("FLEET_TUI_CURATION_DIR", str(tmp_path))
     from fleet_tui.app import FleetTUI
     from fleet_tui.sources import focus

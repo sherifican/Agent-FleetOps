@@ -55,3 +55,7 @@ def test_publish_ref_edge_cases(tmp_path, configured, branch, expected):
     if expected:
         assert len((result.stdout + result.stderr).splitlines()) == 1
         assert "fleetops.publishRef" in result.stdout + result.stderr
+
+    if configured == "main":
+        assert "must name a full ref beginning with refs/" in result.stdout + result.stderr
+        assert "refs/original/" not in result.stdout + result.stderr

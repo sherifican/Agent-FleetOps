@@ -13,7 +13,7 @@ import urllib.request
 
 DEFAULT_SERVICES = ["hermes-gateway", "openrgb-server"]
 BIG_MODEL_BYTES = 15_000_000_000
-RELIABILITY_PATH = resolve("reliability_file")  # EDIT ME
+RELIABILITY_PATH = resolve("reliability_file")
 DISK_PATH = resolve("disk_path")   # the configured model/log partition
 
 # The UI refreshes ~every 3s, but `fleet-doctor --json` spawns nvidia-smi + systemctl + subprocess probes;

@@ -24,7 +24,7 @@ PANEL_KEYS = {
                'gpu_forensics_log', 'disk_path', 'curation_dir'),
     'posture': ('curation_dir',),
     'inbox': ('curation_dir', 'hive_alert', 'comms_inbound_glob', 'passback_docs_glob'),
-    'research_playlists': ('research_dir', 'curation_dir'),
+    'research_playlists': ('curation_dir',),  # external notification script only
 }
 
 
@@ -56,7 +56,7 @@ def missing(keys=KEYS) -> list[str]:
 
 
 def notice(keys) -> str:
-    """Pure renderer: pass already-computed missing keys, never paths or markup."""
+    """Accept missing key names (not paths or markup); return Textual markup."""
     return '\n'.join(f'[dim]not configured: {key}[/]' for key in keys if key in KEYS)
 
 

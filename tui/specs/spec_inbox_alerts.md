@@ -1,15 +1,15 @@
 # SPEC — extend sources/inbox.py: surface ALL fleet alert channels (v3.12 wave)
 
-Rewrite ~/fleet_tui/fleet_tui/sources/inbox.py COMPLETELY, preserving every existing function,
+Rewrite tui/fleet_tui/sources/inbox.py COMPLETELY, preserving every existing function,
 constant, behavior and docstring EXACTLY as-is, and ADDING the following. Do not change models.py.
 Do not import textual. Every reader must never raise (missing/corrupt file -> None / skip).
 
 NEW path constants (add below the existing ones):
-    AUTOMATION_ALERT = "~/.claude/curation/.automation_alert"
-    BACKUP_ALERT     = "~/.claude/curation/.backup_alert"
-    SUPPLY_ALERT     = "~/.claude/curation/.supply_chain_alert"
+    AUTOMATION_ALERT = resolve("curation_dir", ".automation_alert")
+    BACKUP_ALERT     = resolve("curation_dir", ".backup_alert")
+    SUPPLY_ALERT     = resolve("curation_dir", ".supply_chain_alert")
     HIVE_ALERT       = "~/.claude/hive/.hive_drift_alert"
-    TELEGRAM_TRIGGER = "~/.claude/curation/.telegram_trigger"
+    TELEGRAM_TRIGGER = resolve("curation_dir", ".telegram_trigger")
 
 NEW builder functions (same style as the existing ones — take parsed input, return InboxItem|None):
 
@@ -65,5 +65,9 @@ EXTEND ack(source) with these cases (same gated-path semantics as the existing o
     "supply"     -> set pending=False in SUPPLY_ALERT json; return True
     ("telegram" gets NO ack case — Claude owns clearing that trigger; ack("telegram") must return False.)
 
-The Claude-authored gate is ~/fleet_tui/tests/test_inbox_alerts.py — your file must pass it
+The Claude-authored gate is tui/tests/test_inbox_alerts.py — your file must pass it
 plus the existing tests/test_inbox.py unchanged.
+
+
+Layout configuration: import `resolve` from `fleet_tui.paths` for the constants
+above, and return the reader's safe default before I/O when resolution is `None`.
