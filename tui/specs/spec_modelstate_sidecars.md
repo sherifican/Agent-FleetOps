@@ -4,7 +4,7 @@ Edit `tui/fleet_tui/sources/modelstate.py` IN PLACE. Keep the module PURE/headle
 (readers do I/O + safe-default to `[]`; the composer does NO I/O). NEVER import textual. Gate =
 `tests/test_modelstate_sidecars.py` + the existing `tests/` (nothing else may regress).
 
-## Bug (owner-reported 2026-07-11)
+## Bug
 The models panel reads ONLY ollama (`/api/ps`). But local `llama-server` SIDECARS — the gemma4 vision snap
 (`:8336`, model `gemma4-e4b-q4-k-m`) and the GLM `--jinja` sidecar (`:8090`) — are local models that use the
 GPU and are NOT ollama models. So the owner saw sustained GPU utilization with "no local models loaded".

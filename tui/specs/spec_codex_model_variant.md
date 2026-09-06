@@ -9,12 +9,12 @@ several distinct variants, and the panel cannot tell them apart. The owner's ask
 > of them. that way i can get a good idea of what type of task is being done at a glance by seeing what
 > type of model / profile is loaded."
 
-The variant IS the task type. Sol-at-xhigh is the fleet's most expensive configuration and means hard
-reasoning; Luna-at-medium means a cheap lookup. Collapsing them into one label throws away the signal.
+Model, profile and explicit effort distinguish invocations. Collapsing them into one
+label hides that signal; a profile alone does not prove either task type or effort.
 
 ## The signal is already on the command line
 
-Observed live cmdlines (verified 2026-08-08 by reading /proc, not assumed):
+Example command-line shapes captured from process arguments:
 
     codex exec --sandbox workspace-write -m gpt-5.6-sol -c model_reasoning_effort=xhigh -o /path -
     codex exec --sandbox workspace-write -p terra

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-vision_ingest.py — the fleet VIDEO-VISION research pipeline (v1, pinned idea 2026-07-15).
+vision_ingest.py — the fleet VIDEO-VISION research pipeline (v1).
 
 Budget-conscious visual leg for the deep-research team: gemma (LOCAL, free) does the per-frame
 BULK (summarize / keep-or-discard / verbatim-OCR of on-screen code·links·text); Gemini/Flash
@@ -19,7 +19,7 @@ Stages (run in order; each is idempotent-ish and can be re-run):
   <root>/vision/_temp/              scratch frames (GC deletes from here)
   <root>/vision/keeps/              kept frames (irreducible visuals only)
 
-Design rules baked in (owner-approved 2026-07-15):
+Design rules:
   - gemma-bulk / Flash-one-pass (NOT Gemini per-frame — that would blow the budget).
   - STRICT keep: keep the IMAGE only when the visual is irreducible (diagram/architecture/UI/chart);
     if the value is text/code/link -> capture VERBATIM and DISCARD the pixels.

@@ -7,14 +7,14 @@ unchanged, plus the new tests/test_cloud_legs_procnames.py.
 ## Bug
 `external_cloud_procs()` does `pgrep -x <marker>` for each SESSION_MARKER (codex/grok/kimi). But a CLI's
 actual OS process name can differ from the marker — **kimi's headless CLI runs as `kimi-code`**, so
-`pgrep -x kimi` never matches and a running kimi leg is INVISIBLE in the TUI (owner-reported 2026-07-08).
+`pgrep -x kimi` never matches and a running kimi leg is INVISIBLE in the TUI.
 
 ## Fix
 Add a mapping of each leg to the set of REAL process names (comm) to check, and iterate it in
 external_cloud_procs():
 
     # each cloud leg -> the exact process names (comm) its CLI may run as. `pgrep -x` needs the real exe
-    # name; the kimi CLI runs as 'kimi-code', codex/grok as themselves. (owner-reported 2026-07-08)
+    # name; the kimi CLI runs as 'kimi-code', codex/grok as themselves.
     SESSION_PROCS = {
         "codex": ("codex",),
         "grok":  ("grok",),

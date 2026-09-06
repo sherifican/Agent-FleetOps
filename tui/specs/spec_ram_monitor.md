@@ -2,11 +2,10 @@
 
 ## Why
 
-The owner's box hit "Device memory is nearly full. An application was forced to stop" on 2026-08-08.
-The TUI shows CPU, GPU and SSD but has **no memory readout at all**, so the pressure was invisible
-until the OS killed something.
+Memory pressure can force an application to stop. A monitor showing CPU, GPU and SSD
+without a memory readout leaves that pressure invisible until the OS kills a process.
 
-Measured at the time of the incident:
+Captured memory-pressure example:
 
     MemTotal      31733532 kB     (~30.3 GiB)
     MemAvailable  23884604 kB     (~22.8 GiB free -> RAM was HEALTHY)

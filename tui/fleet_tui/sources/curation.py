@@ -9,7 +9,7 @@ import os
 import re
 import time
 
-# F2 (Sol audit 2026-07-11): the one CONTROL write (queue_pass -> .trigger) goes through the integrity layer
+# The one CONTROL write (queue_pass -> .trigger) goes through the integrity layer
 # (atomic + flock) so it can't clobber a concurrent watcher/session write. Defensive: fall back to raw if
 # fleet_lib isn't on the venv path.
 try:

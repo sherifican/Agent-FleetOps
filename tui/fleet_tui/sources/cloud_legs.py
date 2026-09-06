@@ -14,7 +14,7 @@ CLOUD_MARKERS = tuple(m.strip().lower() for m in os.environ.get(
     "FLEET_TUI_CLOUD_MARKERS", ",".join(AUTHORS_CLOUD_MARKERS)).split(",") if m.strip())
 SESSION_MARKERS = ("codex", "grok", "kimi")
 # each cloud leg -> the exact process names (comm) its CLI may run as. `pgrep -x` needs the real exe
-# name; the kimi CLI runs as 'kimi-code', codex/grok as themselves. (owner-reported 2026-07-08)
+# name; the kimi CLI runs as 'kimi-code', codex/grok as themselves.
 SESSION_PROCS = {
     "codex": ("codex",),
     "grok":  ("grok",),

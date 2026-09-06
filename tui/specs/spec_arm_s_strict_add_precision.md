@@ -15,7 +15,7 @@ seed has genuine gaps. Measured inflation: 13.6% vs 6.8% at p=0 (2x) but 79.4% v
 (2.6 points). So the loose measure FLATTENS the very curve the sweep exists to measure.
 
 The strict measure also cross-validates: strict p=0 = 0.0677 reproduces the independently-derived
-6.7% in `REPORT_merge_validation_2026-07-24`. The loose measure reproduces nothing.
+6.7% reference measurement. The loose measure does not reproduce that reference.
 
 ## What to change
 

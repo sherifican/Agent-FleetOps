@@ -117,3 +117,10 @@ labels, configured services, classification overrides and unknown profiles.
 Runtime handoff, pending-action and gate descriptions use the orchestrator role.
 Provider names in model IDs, CLI detection and worker labels remain product
 identifiers; never rewrite them as roles. Skills retain their adopting-team voice.
+
+
+## Technical provenance
+
+Comments and specs state detection and verification contracts without private
+report filenames or dated approval stories. Preserve timestamps that are parser
+fixtures or release versions; those are data, not operating instructions.

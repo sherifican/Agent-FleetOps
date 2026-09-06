@@ -34,8 +34,8 @@ Add to `fleet_tui/sources/cloud_legs.py` (do not create a new module):
 
 ## ⚠ MEASURED PROCESS SHAPE — read this before writing any detection
 
-This was measured live on 2026-07-28 while a real dispatch was running. It is NOT what you would
-guess, and the obvious implementation silently detects nothing:
+A wrapper and its child can expose different command-line information. Detection must
+inspect the wrapper arguments as well as the child executable name:
 
       pid 1739966  comm=timeout    argv: timeout 600 ~/.kimi-code/bin/kimi -m k3 -p "<prompt>" --output-format stream-json
       pid 1739968  comm=kimi-code  argv: kimi-code
