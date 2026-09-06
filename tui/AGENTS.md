@@ -80,3 +80,11 @@ TUI-owned; only its optional notification uses external `curation_dir`.
 Headless collection currently reaches 345 tests; the 383-test declared inventory
 includes UI modules requiring Textual/textual-serve. Do not report the full suite
 as executed when those modules cannot import.
+
+
+## Gathered notice contract
+
+`tests/test_app.py::test_gather_data` pins `path_notices` in the gathered key set,
+its dictionary shape, the five panel IDs with external path dependencies, and
+string notice values. Keep this contract aligned when adding or removing such
+panel dependencies; the notice mapping remains present when its strings are empty.
