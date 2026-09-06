@@ -54,7 +54,8 @@ def test_main_builds_server_with_our_python_and_module(monkeypatch, serve, capsy
 
 def test_env_overrides(monkeypatch, serve):
     # Bind-all is an explicit opt-in; neither setting relies on an ambient environment.
-    monkeypatch.setenv("FLEET_TUI_SERVE_HOST", "0.0.0.0")
-    monkeypatch.setenv("FLEET_TUI_SERVE_PORT", "9099")
-    importlib.reload(serve)
-    assert serve.HOST == "0.0.0.0" and serve.PORT == 9099
+    with monkeypatch.context() as patch:
+        patch.setenv("FLEET_TUI_SERVE_HOST", "0.0.0.0")
+        patch.setenv("FLEET_TUI_SERVE_PORT", "9099")
+        importlib.reload(serve)
+        assert serve.HOST == "0.0.0.0" and serve.PORT == 9099

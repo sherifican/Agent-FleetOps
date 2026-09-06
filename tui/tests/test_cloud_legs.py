@@ -24,19 +24,21 @@ def _default_cloud_environment(monkeypatch):
 def test_cloud_markers_environment_reload(monkeypatch):
     assert cloud_legs.is_cloud_leg("codex-worker")
     assert not cloud_legs.is_cloud_leg("test-provider-worker")
-    monkeypatch.setenv("FLEET_TUI_CLOUD_MARKERS", " TEST-PROVIDER, another-provider ")
-    importlib.reload(cloud_legs)
-    assert cloud_legs.is_cloud_leg("TEST-PROVIDER-worker")
-    assert cloud_legs.is_cloud_leg("another-provider-worker")
-    assert not cloud_legs.is_cloud_leg("codex-worker")
+    with monkeypatch.context() as patch:
+        patch.setenv("FLEET_TUI_CLOUD_MARKERS", " TEST-PROVIDER, another-provider ")
+        importlib.reload(cloud_legs)
+        assert cloud_legs.is_cloud_leg("TEST-PROVIDER-worker")
+        assert cloud_legs.is_cloud_leg("another-provider-worker")
+        assert not cloud_legs.is_cloud_leg("codex-worker")
 
 
 def test_cloud_markers_empty_environment_disables(monkeypatch):
     assert cloud_legs.is_cloud_leg("codex-worker")
-    monkeypatch.setenv("FLEET_TUI_CLOUD_MARKERS", "")
-    importlib.reload(cloud_legs)
-    assert cloud_legs.CLOUD_MARKERS == ()
-    assert not cloud_legs.is_cloud_leg("codex-worker")
+    with monkeypatch.context() as patch:
+        patch.setenv("FLEET_TUI_CLOUD_MARKERS", "")
+        importlib.reload(cloud_legs)
+        assert cloud_legs.CLOUD_MARKERS == ()
+        assert not cloud_legs.is_cloud_leg("codex-worker")
 
 
 # ---------- is_cloud_leg ----------
@@ -47,11 +49,12 @@ def test_is_cloud_leg_matches_cloud(monkeypatch):
     assert is_cloud_leg("kimi")
     assert is_cloud_leg("CODEX-driver")          # case-insensitive
     from fleet_tui.sources import cloud_legs
-    monkeypatch.setattr(cloud_legs, "CLOUD_MARKERS", ("test-provider",))
-    assert is_cloud_leg("TEST-PROVIDER-worker")
-    assert not is_cloud_leg("codex-worker")
-    monkeypatch.setattr(cloud_legs, "CLOUD_MARKERS", ())
-    assert not is_cloud_leg("test-provider-worker")
+    with monkeypatch.context() as patch:
+        patch.setattr(cloud_legs, "CLOUD_MARKERS", ("test-provider",))
+        assert is_cloud_leg("TEST-PROVIDER-worker")
+        assert not is_cloud_leg("codex-worker")
+        patch.setattr(cloud_legs, "CLOUD_MARKERS", ())
+        assert not is_cloud_leg("test-provider-worker")
 
 
 def test_is_cloud_leg_rejects_local_and_garbage():

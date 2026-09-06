@@ -114,7 +114,8 @@ aliases are labelled authors' instance constants. Unknown profiles keep their
 observed name, and absent model/profile data displays only the provider label.
 Restart after changing the cloud roster. Headless gates cover neutral bridge
 labels, configured services (including empty-string disabling), environment-reload
-classification overrides and unknown profiles.
+classification overrides and unknown profiles. Configuration tests restore their
+incoming environment and module roster after teardown.
 
 
 ## Orchestrator copy
