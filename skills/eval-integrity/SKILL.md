@@ -20,7 +20,7 @@ ALPHABETICALLY**; a template fills defaults; a quantization changes behavior; an
 running, **render + EYEBALL every test input** (every image), **print every ground-truth label**, and
 **read every generated prompt** — then confirm they are what you think. Never trust the spec over the
 produced artifact.
-> Real miss: I eyeballed 4 defect charts but SKIPPED the "clean control." Vega reordered its
+> **Authors' origin note:** Real miss: I eyeballed 4 defect charts but SKIPPED the "clean control." Vega reordered its
 > months Jan→Feb/Jan/Mar, so the control had a real defect; 4 models correctly flagged it and I called them
 > wrong. Eyeballing the control would have caught it in 5 seconds, before wasting the run + misleading the
 > operator.
@@ -45,7 +45,7 @@ reference setup):
 - A sparsity-sweep harness was gated on reproducing a prior 232-song run. 19/20 songs matched **exactly**; the
   20th exposed a **corpus defect** (duplicate packs carrying independently-separated stems → different detector
   output), not a harness bug.
-**When the anchor fails, DIAGNOSE — never loosen the gate.** My first hypothesis for that 20th song (run-to-run
+**When the anchor fails, DIAGNOSE — never loosen the gate.** **Authors' origin note:** My first hypothesis for that 20th song (run-to-run
 non-determinism) was wrong, and testing it directly (same input separated twice → **0.000 ms** difference)
 refuted it and pointed at the real cause. Loosening the gate to "19/20 is close enough" would have buried a real
 finding. A gate you relax on failure is not a gate.
@@ -138,7 +138,7 @@ skip the work and still score; (3) when every subject aces the mechanism, that i
 is no longer the bottleneck — go find what is, do not declare a tie.
 
 ## A changelog fix does not mean YOUR path used the broken component — verify the SERVING PATH first
-A serving-stack release fixed "tool calls silently dropped at end of generation" for one model family. I
+**Authors' origin note:** A serving-stack release fixed "tool calls silently dropped at end of generation" for one model family. I
 treated every prior tool-call number for that family as depressed by that bug and designed a whole bake-off
 phase on it. Both halves were wrong: the production path for that family was a **separate serving sidecar
 that never used the patched component** (the setup had engineered around the bug months earlier), and the
@@ -150,7 +150,7 @@ is not evidence of which server answers on it.
 **Consensus disagreement = a test bug until proven otherwise.** If N independent subjects (models / runs /
 people) all "fail" a case, or all flag your "clean" control, that is a loud signal that **YOUR ground truth
 is wrong**, not that they all failed simultaneously. STOP and re-verify the test before concluding anything
-about the subjects. (4/4 models flagging the control was the alarm; I ignored it. Don't.)
+about the subjects. (**Authors' origin note:** 4/4 models flagging the control was the alarm; I ignored it. Don't.)
 
 ## Be EQUALLY skeptical of a result you WANT
 Motivated reasoning cuts both ways: you scrutinize a disappointing result but wave a flattering one through. A
@@ -302,7 +302,7 @@ Measured on the reference setup (a cascade-replay eval). The denominator picks t
 1. **A bar admits multiple readings — enumerate and score ALL of them, and the reading implied by your own
    stated target is BINDING.** One gate read net **0.0% PASS** / strict **1.1% PASS** / symmetric (lost+gained)
    **2.2% FAIL**. The stated target was *"agreement with the incumbent — identical output for fewer calls"*,
-   under which **any** changed artifact is a disagreement, so symmetric binds and the gate fails. I had defended
+   under which **any** changed artifact is a disagreement, so symmetric binds and the gate fails. **Authors' origin note:** I had defended
    my reading only against the more LENIENT alternative and was silent on the stricter one my own framing
    implied. **Motivated selection among readings is the same defect as motivated selection among results**, and
    it is harder to see because every reading is individually defensible. A verdict that flips with the reading

@@ -12,7 +12,7 @@ somebody else's fleet, where it becomes that team's own operating instructions â
 there reads as the adopting team and is self-explanatory in place. Enforcing singular on
 it would be correcting prose that is not addressed to a reader at all. So this checks
 what a visitor READS to understand the project: README files, any document at the
-repository ROOT, `docs/`, `adopt/`, and `specs/`.
+repository ROOT, `docs/`, `adopt/`, `specs/`, `guard/specs/`, and `tui/specs/`.
 
 The hazard is that some of these words are DATA, not voice. `guard/brief_scan.py`
 exists to detect leaked hypotheses and appeals to consensus in dispatch briefs, so it
@@ -63,7 +63,7 @@ TEXT_EXT = {".md", ".py", ".sh", ".tsv", ".txt", ".yml", ".yaml", ".toml",
 # Front-facing = what a visitor reads to understand the project. Everything else in the
 # tree is code, or is material meant to be adopted into another fleet and spoken in that
 # fleet's voice.
-FRONT_DIRS = ("docs/", "adopt/", "specs/")
+FRONT_DIRS = ("docs/", "adopt/", "specs/", "guard/specs/", "tui/specs/")
 
 
 def in_scope(rel):

@@ -124,3 +124,11 @@ identifiers; never rewrite them as roles. Skills retain their adopting-team voic
 Comments and specs state detection and verification contracts without private
 report filenames or dated approval stories. Preserve timestamps that are parser
 fixtures or release versions; those are data, not operating instructions.
+
+
+## Specification voice
+
+`guard/voice_check.py` covers both nested specification directories. Specs use
+impersonal prose or the adopting team; the skills remain outside that scope.
+The scope tests plant plural prose in each nested directory before checking its
+neutral counterpart, so an unread directory cannot produce an unearned pass.

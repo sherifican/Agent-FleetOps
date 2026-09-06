@@ -47,17 +47,27 @@ def test_the_widening_stops_at_the_root_and_at_markdown():
     """
     assert not voice_check.in_scope("skills/example/SKILL.md"), (
         "adopted material keeps the adopting team's voice; it must stay out of scope")
-    assert not voice_check.in_scope("guard/specs/SPEC_contract_agreement.md")
+    assert not voice_check.in_scope("guard/implementation.py")
     assert not voice_check.in_scope("LICENSE")
     assert not voice_check.in_scope("actionable_rollup.py"), (
         "root-level widening is for documents, not for source")
 
 
-def test_the_previously_covered_surfaces_are_still_covered():
+def test_the_previously_covered_surfaces_are_still_covered(tmp_path):
     """A widening must not drop what it replaced — the pinning-defect check, run forwards."""
     for rel in ("README.md", "guard/README.md", "docs/anything.md",
-                "adopt/anything.md", "specs/anything.md"):
+                "adopt/anything.md", "specs/anything.md",
+                "guard/specs/anything.md", "tui/specs/anything.md"):
         assert voice_check.in_scope(rel), rel
+    for directory in ("guard/specs", "tui/specs"):
+        doc = tmp_path / directory / "sample.md"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text("We should inspect our output.\n")
+        code, report = voice_check.check(str(tmp_path))
+        assert code == 1 and any(directory in ln for ln in report), report
+        doc.write_text("Inspect the output.\n")
+        assert voice_check.check(str(tmp_path))[0] == 0
+
 
 
 def test_the_shipping_entry_point_reads_the_newly_scoped_files():
@@ -68,9 +78,9 @@ def test_the_shipping_entry_point_reads_the_newly_scoped_files():
     run = subprocess.run([sys.executable, os.path.join("guard", "voice_check.py")],
                          cwd=REPO, capture_output=True, text=True, timeout=120)
     assert run.returncode == 0, run.stdout + run.stderr
-    # The archive paths example adds one front-facing JSON document.
-    assert "scanned 24 text file(s)" in run.stdout, (
-        "the two root-level documents did not join the scanned set: " + run.stdout)
+    # Nested guard and TUI specifications are front-facing too.
+    assert "scanned 45 text file(s)" in run.stdout, (
+        "the front-facing files did not join the scanned set: " + run.stdout)
     assert "1 declared exemption(s)" in run.stdout, (
         "the addendum's exemption is not being counted: " + run.stdout)
 
