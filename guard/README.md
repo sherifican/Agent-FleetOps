@@ -18,7 +18,7 @@ staleness check could never fire. That defect is why the dry run now returns `2`
 |---|---|---|
 | Teeth-prover | `python3 guard/teeth_prover.py` | 10 planted mutations; every guard proves it can fail |
 | Contract agreement | `python3 guard/contract_agreement.py` | all four vocabulary surfaces agree (validator · addendum · rollup · preamble) |
-| Guard unit gates | `pytest guard/tests/ -q` | 578 tests, hermetic (one is environment-gated: it skips without `PASSBACK_OUTBOX`; one is a strict xfail that records a known gap) |
+| Guard unit gates | `pytest guard/tests/ -q` | 579 tests, hermetic (one is environment-gated: it skips without `PASSBACK_OUTBOX`; one is a strict xfail that records a known gap) |
 | Documented counts | `python3 guard/doc_count_drift.py` | every count written into prose or the banner matches what it describes |
 | Rendered banner | `python3 guard/banner_render.py` | the PNG keeps its transparent corners and was rendered from the SVG in the tree |
 | Full runner | `guard/run_guards.sh` | the above in order; leg-liveness dry-run returns `2 = UNMEASURED` by design |
@@ -267,3 +267,5 @@ its baseline in the corpus-less tree. Guards that police their own maintainers a
 The ref gate defaults to `refs/heads/main`; adopters publishing another branch can set `git config fleetops.publishRef refs/heads/release` before running `python3 _tools/ref_gate.py .`. Other local publishing refs still fail the gate.
 
 For the honesty stop hook on a host with `ps` and `pgrep`, copy `guard/honesty_gate.config.minimal.example.json` to `guard/honesty_gate.config.json`, then run `python3 guard/honesty_stop_gate.py --check-config`; this process-only example inherits the claim and subject defaults and avoids optional service/container binaries. Adapt the config to the subjects and probes actually used on your host.
+
+Both activation routes explicitly stop after a failed identity-config or scanner self-test preflight, even when shell errexit is disabled. The read-only check uses the same explicit refusal.

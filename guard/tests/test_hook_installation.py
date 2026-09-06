@@ -922,3 +922,21 @@ def test_no_argument_preflight_refuses_before_any_write(tmp_path, case, token):
     result = fx.installer()
     assert_refused(result, token)
     assert fx.snapshot() == before, "failed preflight must not install or overwrite any hook"
+
+
+def test_no_argument_preflight_with_errexit_disabled(tmp_path):
+    """A failing real scanner preflight must refuse even with errexit suppressed.
+
+    Sourcing in an AND-list suppresses errexit inside the installer too; just
+    invoking bash +e would let the installer's own set -e turn it back on.
+    """
+    fx = make_fixture(tmp_path)
+    plant_preexisting_sentinel(fx)
+    (fx.repo / "_tools" / "scan_gate.py").write_text(FAILING_SCANNER)
+    before = fx.snapshot()
+    result = subprocess.run(
+        ["bash", "+e", "-c", 'set +e; source "$0" && exit 0',
+         str(fx.repo / "guard" / "hooks" / "install.sh")],
+        cwd=fx.repo, capture_output=True, text=True, env=fx.env())
+    assert_refused(result, TOKEN_SELFTEST)
+    assert fx.snapshot() == before, "failed preflight must leave every hook unchanged"

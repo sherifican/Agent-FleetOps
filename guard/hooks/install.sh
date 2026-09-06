@@ -5,7 +5,7 @@
 # its own copy.
 #
 #   install.sh                                  legacy: install every guard/hooks/* (except this
-#                                               script) after the git-config preflight
+#                                               script) after the identity-config and scanner self-test preflight
 #   install.sh --pre-push-config [--replace]    install ONLY guard/hooks/pre-push at Git's
 #                                               effective hook path via the git-config identity
 #                                               route; --replace backs up and replaces a
@@ -176,7 +176,7 @@ report_selection() {
 
 do_check() {
   resolve_dest
-  preflight
+  preflight || exit 1
   report_selection
   refuse_symlink_dest
   if ! verify_parity "$dest_abs"; then
@@ -224,7 +224,7 @@ do_install() {
   local hooks_dir old_present=0 old_digest="" identical=0 staged_digest
 
   resolve_dest
-  preflight
+  preflight || exit 1
   report_selection
   refuse_symlink_dest
   hooks_dir=${dest_abs%/*}
@@ -323,5 +323,5 @@ fi
 case "$mode" in
   install) do_install ;;
   check)   do_check ;;
-  legacy)  preflight; do_legacy ;;
+  legacy)  preflight || exit 1; do_legacy ;;
 esac
