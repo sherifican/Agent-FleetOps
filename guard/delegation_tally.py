@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# purpose: report delegation trailers from commit history when an operator requests a delegation audit.
 """delegation_tally.py — read out the D20 measurement. Answers "is HARD DELEGATE wrong, or is the practice?"
 
 Backlog D20. The rule under measurement says the orchestrating agent does ONLY orchestration and

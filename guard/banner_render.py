@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# purpose: check banner geometry, transparency, and source stamp during guard runs and after rendering.
 """Hold the rendered banner to the shape its source promises.
 
 The banner SVG has rounded corners. That only survives into the PNG if the render

@@ -1,4 +1,5 @@
 # OSS export staging — one-way curated export target
+Purpose: explain how curated exports are checked before publication and which checks an adopter can run.
 Pipeline: copy-in → sanitize.py (audit report per file) → wall_check.py (never-publish refusal, mutation-proven) → readme_guard.sh (refuses a tree that DELETED critical README content — the inverse question; deletion passes every other gate)
 → scan gate (secrets + personal data, zero-hit) → Claude review vs PUBLISH_CLASSIFICATION_2026-08-09 →
 OWNER GATE per batch → push to the NEW public repo → fresh-clone verify + public CI green.

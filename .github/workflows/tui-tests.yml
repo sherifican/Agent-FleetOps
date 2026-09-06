@@ -1,3 +1,4 @@
+# purpose: run TUI tests and publication guards on main pushes and pull requests.
 name: fleet-ops checks
 on:
   push: { branches: [main] }

@@ -47,7 +47,7 @@ wasted or wrong work — the cases are in *Worked examples* below.
 
 ## The five questions — in this order
 
-Order matters. The first two kill more bad work than the last three combined.
+Order matters. In the authors' experience, the first two prevent more bad work than the last three combined; this is an observation from their practice, not a measured comparison.
 
 1. **Is the PREMISE true?** Does the problem actually exist? Check the mechanism or the source — the
    script, the log, the config — not our recollection of it, and not our own earlier summary of it.

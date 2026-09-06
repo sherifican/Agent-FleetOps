@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# purpose: scan and envelope fetched web content when an importing caller is about to pass it to a research leg.
 """fetch_gate.py — the single gate for UNTRUSTED FETCHED WEB CONTENT.
 
 THE GAP THIS CLOSES (named 2026-07-31, patched 2026-08-06). Our poison gates guarded TRANSCRIPTS ONLY.

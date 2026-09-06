@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# purpose: record request and response envelopes while an operator runs the optional local measurement proxy.
 """envelope_tap.py — a logging reverse-proxy that captures the EXACT request a harness sends.
 
 WHY THIS EXISTS. The harness review concluded that arm B is attributable only on lanes we instrument,
