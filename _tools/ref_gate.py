@@ -22,6 +22,11 @@ Rules enforced:
      `--all`, not just the checked-out tree.
   3. NO AI-ATTRIBUTION TRAILERS on any reachable commit.
 
+fleetops.publishRef is trimmed; an absent, empty, or whitespace-only value defaults
+to refs/heads/main. A configured value must start with refs/ and pass
+git check-ref-format. Invalid values refuse with one message and status 1.
+refs/original/ is reserved for rewrite leftovers and cannot be configured for publication.
+
 Note rule 2 and 3 deliberately query the OBJECT layer (`rev-list --objects`,
 `log --format=%B`) rather than grepping rendered `git log` output: a text search over a
 log matches the log's own prose about a thing (a commit *subject* saying "untrack root
@@ -44,6 +49,7 @@ import tempfile
 DEFAULT_PUBLISH_REF = "refs/heads/main"
 
 # Namespaces a push can actually reach. refs/remotes/* is local bookkeeping, never pushed.
+# refs/original/ remains a refusal target for rewrite leftovers, never an allowance.
 PUSHABLE_PREFIXES = ("refs/heads/", "refs/tags/", "refs/original/")
 
 BANNED_PATH = re.compile(r"(^|/)__pycache__(/|$)|\.pyc$|\.pyo$")
@@ -69,6 +75,10 @@ def publishable_refs(repo):
     if result.returncode != 0:
         raise RuntimeError("cannot read fleetops.publishRef")
     ref = result.stdout.strip()
+    if not ref:
+        return {DEFAULT_PUBLISH_REF}
+    if not ref.startswith("refs/") or ref.startswith("refs/original/"):
+        raise RuntimeError("fleetops.publishRef must name a full publishing ref outside refs/original/")
     if subprocess.run(["git", "check-ref-format", ref], cwd=repo,
                       capture_output=True).returncode != 0:
         raise RuntimeError("fleetops.publishRef must name a valid full ref")
@@ -126,12 +136,18 @@ def check(repo, quiet=False):
         sys.stderr.write(f"ref_gate: {repo} is not a git repo — refusing to emit a verdict\n")
         return 2
 
+    try:
+        allowed = publishable_refs(repo)
+    except RuntimeError as error:
+        say(f"ref_gate: REFUSED {error}")
+        return 1
+
     strays = stray_refs(repo)
     objs = banned_objects(repo)
     trailers = banned_trailers(repo)
 
     say(f"ref_gate: {repo}")
-    say(f"  publishable allow-list: {sorted(publishable_refs(repo))}")
+    say(f"  publishable allow-list: {sorted(allowed)}")
 
     if strays:
         say(f"  [FAIL] {len(strays)} ref(s) outside the allow-list — a push --all/--mirror would publish these:")
