@@ -265,3 +265,5 @@ contract surfaces cwd-relative and the `isabs()` unit gate refused it; the mutat
 its baseline in the corpus-less tree. Guards that police their own maintainers are the point.
 
 The ref gate defaults to `refs/heads/main`; adopters publishing another branch can set `git config fleetops.publishRef refs/heads/release` before running `python3 _tools/ref_gate.py .`. Other local publishing refs still fail the gate.
+
+For the honesty stop hook on a host with `ps` and `pgrep`, copy `guard/honesty_gate.config.minimal.example.json` to `guard/honesty_gate.config.json`, then run `python3 guard/honesty_stop_gate.py --check-config`; this process-only example inherits the claim and subject defaults and avoids optional service/container binaries. Adapt the config to the subjects and probes actually used on your host.

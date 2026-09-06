@@ -1,0 +1,9 @@
+{
+  "//": "Copy to guard/honesty_gate.config.json for a process-only baseline on a host with ps and pgrep. Run --check-config before use; adapt subjects and commands to your actual stack. Unspecified fields retain the documented defaults.",
+  "verification_commands": [
+    "pgrep\\b",
+    "ps\\s+aux\\b",
+    "ps\\s+-ef\\b"
+  ],
+  "verify_hint": "run a process probe naming the claimed subject, such as pgrep -af <name> or ps -ef, then inspect its output"
+}
