@@ -38,7 +38,7 @@ SECRET_PATTERNS = [
     ("aws-key",            re.compile(r"AKIA[0-9A-Z]{16}")),
     ("private-key-block",  re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
 ]
-def _identity_terms():
+def _load_identity_terms():
     """Identity terms live in a GITIGNORED file — the public scan tool must not itself
     reveal what it redacts. Refuses to run if the file is absent, because a personal-data scan
     with no identity list is a check that cannot fail.
@@ -59,7 +59,11 @@ def _identity_terms():
             "   personal email local-parts.\n")
         sys.exit(2)
     terms = [t.strip() for t in open(p, encoding="utf8") if t.strip() and not t.startswith("#")]
-    return re.compile("(?i)" + "|".join(re.escape(t) for t in terms))
+    return terms
+
+
+def _identity_terms():
+    return re.compile("(?i)" + "|".join(re.escape(t) for t in _load_identity_terms()))
 
 
 # The identity-INDEPENDENT shapes. These need no private file, so a test may import them on any
@@ -253,7 +257,8 @@ def self_test():
         # MUTATION 2: planted identity — drawn FROM the loaded terms file, never hardcoded,
         # so the self-test stays red-capable for any user's terms (a fresh-clone run with a
         # different terms file exposed the hardcoded version as unable to fail)
-        first_term = personal_patterns()[0][1].pattern.split(")", 1)[1].split("|")[0].lstrip("(")
+        # Plant the literal term, not its escaped regex representation.
+        first_term = _load_identity_terms()[0]
         open(os.path.join(tmp, "skills", "m2.md"), "w").write(
             f"ask {first_term} about it\n")
         # MUTATION 3: the NAME arm. A clean-bodied file whose NAME carries the same identity

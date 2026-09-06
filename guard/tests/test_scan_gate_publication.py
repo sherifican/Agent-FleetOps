@@ -1136,3 +1136,43 @@ def test_self_test_fixture_is_still_live(tmp_path: Path, arm: str) -> None:
     assert proc.returncode == 1, "REPAIRED: an unsplit fixture literal in the scanner source is rejected"
     assert hit("SECRET", "generic-key-assign", "content", "_tools/scan_gate.py", node.lineno) in \
         hits_for(staging, "_tools/scan_gate.py"), "REPAIRED: rejected at exactly the re-joined line"
+
+
+# The regex-special separators a LEGITIMATE first identity term can carry: a hyphenated or dotted
+# short hostname, a plus-addressed local-part, a parenthesised alias. Assembled at run time so no
+# contiguous term-shaped literal sits in this tracked source.
+FIRST_TERM_SEPARATORS = {"hyphen": "-", "dot": ".", "plus": "+", "paren": "("}
+
+
+@pytest.mark.parametrize("sep", sorted(FIRST_TERM_SEPARATORS))
+def test_self_test_accepts_regex_special_first_term(tmp_path: Path, sep: str) -> None:
+    """Broken behaviour: ``--self-test`` recovered its planted identity term by re-parsing the
+    compiled owner-identity pattern (``re.escape``'d, ``|``-joined), so whenever the FIRST term
+    in ``identity_terms.txt`` carried a regex-special character the plant was written WITH its
+    escape backslash: the identity and NAME-arm mutations could not go red, the self-test
+    printed FAIL with rc 1, and every caller that gates on this self-test — the pre-push hook
+    (``guard/hooks/pre-push``) and the installer's activation preflight — refused a legitimate
+    terms file; a hyphenated hostname as first term was enough.
+
+    REPAIRED (old fails: rc 1, ``self-test: FAIL`` with ``content_mutations=False``): with the
+    special-character term FIRST (``zqx`` + separator + ``term``) and a plain term second, the
+    driver's ``--self-test`` exits 0 and prints the scanner's own PASS line naming its live arms.
+    CONTROL (old passes): the terms file really leads with the special term; the term is not
+    echoed to stdout or stderr.
+
+    Kills: M-ESCAPED-TERM-REPLANT (derive the plant from the compiled pattern again).
+    """
+    driver = make_tool(tmp_path)
+    first = "zqx" + FIRST_TERM_SEPARATORS[sep] + "term"
+    terms = driver.parent / "identity_terms.txt"
+    terms.write_text(first + "\n" + IDENTITY_TERM + "\n", encoding="utf8")
+    assert terms.read_text(encoding="utf8").split("\n")[0] == first, \
+        "CONTROL: the special-character term is the FIRST entry the scanner will load"
+
+    proc = run_scan(tmp_path, driver, "--self-test")
+    assert first not in proc.stdout + proc.stderr, "CONTROL: the identity term is not echoed"
+    assert proc.returncode == 0, \
+        f"REPAIRED[{sep}]: --self-test must pass with a regex-special first identity term"
+    assert "self-test: PASS" in proc.stdout and "mutations red" in proc.stdout, \
+        f"REPAIRED[{sep}]: the self-test prints its PASS line naming the live arms"
+    assert "self-test: FAIL" not in proc.stdout, f"REPAIRED[{sep}]: no FAIL verdict"
