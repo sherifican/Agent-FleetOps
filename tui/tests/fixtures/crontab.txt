@@ -1,6 +1,7 @@
-0 */6 * * * /usr/bin/python3 ~/fleet_monitor.py 1 > ~/pc-passback/FLEET_HEALTH_latest.txt 2>&1
-*/5 * * * * /usr/bin/python3 ~/ollama_watchdog.py
-15 4 * * * PATH=~/.local/bin:~/.bun/bin:/usr/bin:/bin ~/.local/bin/o2b brain dream >> ~/.hermes/o2b-dream.log 2>&1
-30 4 * * 0 PATH=~/.local/bin:~/.bun/bin:/usr/bin:/bin ~/.local/bin/o2b brain hygiene scan --vault ~/SecondBrain >> ~/.hermes/o2b-hygiene.log 2>&1
-41 9 3 * * ~/.local/bin/localllm-monthly-sweep.sh
-0 */4 * * * PATH=~/.local/bin:~/.kimi-code/bin:/usr/bin:/bin ~/fleet_optests/hf_watch_pass.sh >> ${FLEET_TUI_CURATION_DIR}/hf_watch_cron.log 2>&1
+# Synthetic parser fixture; no entry describes a deployed job.
+0 */6 * * * python3 ./synthetic-tasks/synthetic-status.py 1 > ./synthetic-output/status.txt 2>&1
+*/5 * * * * python3 ./synthetic-tasks/synthetic-watch.py
+15 4 * * * PATH=./synthetic-bin:/usr/bin:/bin ./synthetic-bin/synthetic-index build >> ./synthetic-output/build.log 2>&1
+30 4 * * 0 PATH=./synthetic-bin:/usr/bin:/bin ./synthetic-bin/synthetic-index check --vault ./synthetic-vault >> ./synthetic-output/check.log 2>&1
+41 9 3 * * ./synthetic-bin/synthetic-monthly.sh
+0 */4 * * * PATH=./synthetic-bin:/usr/bin:/bin ./synthetic-tasks/synthetic-fetch.sh >> ./synthetic-output/fetch.log 2>&1

@@ -29,7 +29,7 @@ Full plan: kept in the origin fleet's private notes; this file is self-contained
 - `fleet_tui/fleet_cli/`  — the `fleet` control-plane CLI (reuses `sources/*`; run via `~/.local/bin/fleet`).
   Verbs: status/targets/tail/route/feedback/preflight/summarize/digest. Spec: `../FLEET_CONTROL_BUILD_PLAN.md`.
   Same HARD contract: never crash on bad state; every verb degrades to stderr + exit(2).
-- `tests/fixtures/`       — real captured state files (deterministic test inputs)
+- `tests/fixtures/`       — deterministic state inputs; the crontab and job roster are synthetic
 - `tests/test_*.py`       — one per source, headless (`pytest`)
 - `TUI_OPERATOR_NOTES.md` — how to operate + troubleshoot; each builder writes its module's section
 
@@ -132,3 +132,10 @@ fixtures or release versions; those are data, not operating instructions.
 impersonal prose or the adopting team; the skills remain outside that scope.
 The scope tests plant plural prose in each nested directory before checking its
 neutral counterpart, so an unread directory cannot produce an unearned pass.
+
+
+## Job fixtures
+
+`tests/fixtures/crontab.txt` and `jobs.json` contain obviously synthetic names,
+IDs and paths. Preserve cron command forms and JSON field/type coverage when
+changing them; never replace them with live roster dumps.
