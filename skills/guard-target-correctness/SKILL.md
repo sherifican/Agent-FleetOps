@@ -1,6 +1,6 @@
 ---
 name: guard-target-correctness
-description: Check that a guard watches the RIGHT predicate, not merely that it can fail. Invoke when writing or reviewing any guard, check, gate, metric, or assertion — especially one written in response to an incident. teeth_prover proves a guard is REACHABLE and mutation_harness kills DECLARED mutations; both are bounded by the input shapes you already thought of. This procedure enumerates the equivalence class the predicate claims to cover and finds the members it silently excludes, which is where the next incident lives. Covers BOTH directions: a predicate too NARROW, and a guard so WIDE it is switched off socially — never-fires and always-fires are the same defect.
+description: 'Check that a guard watches the RIGHT predicate, not merely that it can fail. Invoke when writing or reviewing any guard, check, gate, metric, or assertion — especially one written in response to an incident. teeth_prover proves a guard is REACHABLE and mutation_harness kills DECLARED mutations; both are bounded by the input shapes you already thought of. This procedure enumerates the equivalence class the predicate claims to cover and finds the members it silently excludes, which is where the next incident lives. Covers BOTH directions: a predicate too NARROW, and a guard so WIDE it is switched off socially — never-fires and always-fires are the same defect.'
 license: MIT
 ---
 

@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Fleet throughput composite via Vega-Lite + vl-convert. MEASURED DATA ONLY."""
 import json, math, vl_convert as vlc
+import csv, os, re, sys, time
+
+# Check every required source before the module-level silicon lookup or rendering.
+SOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
+for source_name in ('local_model_throughput.csv', 'power_undervolt.csv'):
+    if not os.path.isfile(os.path.join(SOURCE_DIR, source_name)):
+        sys.stderr.write(f'make_charts: {source_name} missing; images not refreshed\n')
+        sys.exit(2)
+
 
 BG, FG, MUTED, GRID = "#12141a", "#e8eaf0", "#98a0b3", "#2a2f3a"
 FAM = {"qwen": "#4cc9f0", "gemma": "#b5179e", "ornith": "#f7b801", "lfm": "#43e97b",
@@ -186,9 +195,17 @@ p1_bars = {
                       "text": {"field": "tps", "type": "quantitative", "format": ".1f"}}},
     ],
 }
+with open(os.path.join(SOURCE_DIR, 'local_model_throughput.csv')) as _source:
+    _inventory = list(csv.DictReader(_source))
+_inventory_count = len({r['model'] for r in _inventory})
+_eligible_count = len({r['model'] for r in _inventory if r['metric'] in ('generation', 'decode')})
+_peak_census = (f"Best recorded generation/decode rows: {len(peak)} plotted of {_inventory_count} tags "
+                f"({_eligible_count} eligible; {_inventory_count - _eligible_count} prefill-only). "
+                "Mixed serving stacks and boxes are directional operating data, not a controlled cross-vendor benchmark.")
+
 panel1 = {
     "title": {"text": "Local model throughput — two-box operating log",
-              "subtitle": ["Best recorded generation/decode row per model that has one (19 of 20 tags; one is prefill-only). Mixed serving stacks and boxes are directional operating data, not a controlled cross-vendor benchmark.",
+              "subtitle": [_peak_census,
                            "Each row names the GPU that measurement ran on. Placement is a property of the run, not the model:",
                            "ollama packs by free VRAM at load time, so a model that fits one card may still span two."],
               "anchor": "start", "color": FG, "fontSize": 19, "subtitleColor": MUTED,
@@ -387,6 +404,497 @@ def _verify_against_csv():
 _verify_against_csv()
 
 
+# ---------------------------------------------------------------- power-study CSV and panel
+POWER_COLUMNS = set('date box device model arch metric condition voltage_offset_mv power_cap_w n tok_per_sec tok_source watts_med watts_max temp_max_c temp_kind sclk_med_mhz sclk_min_mhz gen_tokens prompt_tok_per_sec gen_tok_per_sec hashes serving_stack notes source_kind power_scope'.split())
+POWER_KEY = ('date', 'box', 'device', 'model', 'metric', 'condition')
+NO_UNDERVOLT = 'undervolt: not yet measured'
+
+
+def _power_error(message):
+    sys.stderr.write(f'make_charts: power CSV invalid: {message}; images not refreshed\n')
+    sys.exit(1)
+
+
+def _read_power_csv():
+    """Validate configuration summaries; plotting never reads the raw JSONL.
+
+    The initial study has a fixed protocol (five measured short requests, 107
+    sustained requests, three parity requests). Hash denominators also check n.
+    Future accepted settings need explicit acceptance/evidence columns; a
+    negative offset by itself cannot establish output stability.
+    """
+    try:
+        with open(os.path.join(SOURCE_DIR, 'power_undervolt.csv'), newline='') as f:
+            reader = csv.DictReader(f)
+            if not POWER_COLUMNS.issubset(reader.fieldnames or []):
+                raise ValueError('required columns missing')
+            rows = list(reader)
+        seen = set()
+        for r in rows:
+            if None in r or any(r.get(k) is None for k in POWER_COLUMNS):
+                raise ValueError('ragged CSV row')
+            key = tuple(r[k] for k in POWER_KEY)
+            if key in seen:
+                raise ValueError(f'duplicate configuration {key}')
+            seen.add(key)
+            if r['box'] not in ('box-a', 'box-b'):
+                raise ValueError(f'unknown box in {key}')
+            a = r['box'] == 'box-a'
+            if r['device'] != ('both-dgpu' if a else 'dgpu-b'):
+                raise ValueError(f'device does not identify measured placement: {key}')
+            if r['power_scope'] != ('sum_two_cards' if a else 'single_board'):
+                raise ValueError(f'wrong power scope: {key}')
+            if r['temp_kind'] != ('nvidia-smi' if a else 'junction'):
+                raise ValueError(f'wrong temperature sensor: {key}')
+            if r['arch'] not in ('moe', 'dense') or r['metric'] not in ('decode', 'prefill'):
+                raise ValueError(f'unknown architecture/metric: {key}')
+            for field in ('tok_per_sec', 'prompt_tok_per_sec', 'gen_tok_per_sec',
+                          'watts_med', 'watts_max', 'sclk_med_mhz', 'sclk_min_mhz',
+                          'temp_max_c', 'power_cap_w'):
+                r[field] = float(r[field])
+                if not math.isfinite(r[field]) or r[field] <= 0:
+                    raise ValueError(f'{field} must be finite and positive: {key}')
+            for field in ('n', 'gen_tokens'):
+                r[field] = int(r[field])
+                if r[field] <= 0:
+                    raise ValueError(f'{field} must be a positive integer: {key}')
+            if r['watts_med'] > r['watts_max'] or r['sclk_min_mhz'] > r['sclk_med_mhz']:
+                raise ValueError(f'median outside min/max: {key}')
+            if not r['serving_stack'] or not r['source_kind'] or not r['notes']:
+                raise ValueError(f'missing provenance: {key}')
+            offset = None if r['voltage_offset_mv'] == '' else float(r['voltage_offset_mv'])
+            if offset is not None and not math.isfinite(offset):
+                raise ValueError(f'non-finite voltage offset: {key}')
+            r['voltage_offset_mv'] = offset
+            cond = r['condition']
+            if cond.startswith('uv-'):
+                if offset is None or offset >= 0 or cond != f'uv{offset:g}' or a:
+                    raise ValueError(f'undervolt must name a negative Box B offset: {key}')
+                if r.get('verdict') != 'accepted' or not all(r.get(k) for k in ('correctness_ref', 'hot_run_ref')):
+                    raise ValueError(f'undervolt lacks setting-specific acceptance evidence: {key}')
+            elif cond in ('stock', 'stock_sustain', 'overdrive_exposed'):
+                if offset != (None if a else 0):
+                    raise ValueError(f'wrong stock voltage metadata: {key}')
+                expected_n = {'stock': 5, 'stock_sustain': 107, 'overdrive_exposed': 3}[cond]
+                if r['n'] != expected_n:
+                    raise ValueError(f'n differs from the recorded study protocol: {key}')
+                if cond != 'stock' and (a or r['metric'] != 'decode' or r['arch'] != 'dense'):
+                    raise ValueError(f'wrong sustain/parity identity: {key}')
+            else:
+                raise ValueError(f'unknown condition: {key}')
+            if r['power_cap_w'] != (180 if a else 300):
+                raise ValueError(f'wrong applied cap: {key}')
+            prefill = r['metric'] == 'prefill'
+            source = 'prompt' if prefill else 'gen'
+            if r['tok_source'] != source or abs(r['tok_per_sec'] - r[source + '_tok_per_sec']) > 0.005:
+                raise ValueError(f'metric/source/value disagreement: {key}')
+            expected_gen = 32 if prefill else 512 if cond == 'stock_sustain' else 256
+            if r['gen_tokens'] != expected_gen:
+                raise ValueError(f'wrong requested generation length: {key}')
+            if prefill:
+                if r['hashes'] != 'n/a (nonce)':
+                    raise ValueError(f'nonced prefill cannot claim a hash pass: {key}')
+            else:
+                if re.search(r'\bpp\d+\b|prompt[- ]processing|\bprefill\b', r['notes'], re.I):
+                    raise ValueError(f'decode row describes prompt processing: {key}')
+                hashes = re.fullmatch(r'(\d+)/(\d+)', r['hashes'])
+                if not hashes or not (0 <= int(hashes[1]) <= int(hashes[2]) == r['n']):
+                    raise ValueError(f'hash count disagrees with n: {key}')
+        stock_cells = {(r['box'], r['arch'], r['metric']) for r in rows if r['condition'] == 'stock'}
+        expected = {(b, a, m) for b in ('box-a', 'box-b') for a in ('moe', 'dense') for m in ('decode', 'prefill')}
+        if stock_cells != expected or sum(r['condition'] == 'stock' for r in rows) != len(expected):
+            raise ValueError('stock baseline must contain exactly the eight measured cells')
+        return rows
+    except FileNotFoundError:
+        sys.stderr.write('make_charts: power_undervolt.csv missing; images not refreshed\n')
+        sys.exit(2)
+    except (ValueError, KeyError, TypeError, csv.Error) as e:
+        _power_error(str(e))
+
+
+power_rows = _read_power_csv()
+p6 = [dict(r, label=f"{r['tok_per_sec']:g}  n={r['n']}") for r in power_rows
+      if r['condition'] == 'stock' or r['condition'].startswith('uv-')]
+sub6 = NO_UNDERVOLT if not any(r['voltage_offset_mv'] is not None and r['voltage_offset_mv'] < 0 for r in power_rows) else 'Measured settings with recorded acceptance evidence; absent cells remain unmeasured'
+
+
+def _power_facet(box, metric):
+    rows = [r for r in p6 if r['box'] == box and r['metric'] == metric]
+    # Same metric shares its zero-based domain across boxes; decode and prefill do not.
+    scale, ticks = tps_axis([r['tok_per_sec'] * 1.15 for r in p6 if r['metric'] == metric],
+                            step=25 if metric == 'decode' else 1000)
+    title = 'Decode (generated tok/s)' if metric == 'decode' else 'Prefill 8k (prompt tok/s)'
+    return {
+        'title': {'text': title, 'color': FG, 'fontSize': 14, 'anchor': 'start'},
+        'width': 460, 'height': 245, 'data': {'values': rows},
+        'encoding': {
+            'x': {'field': 'model', 'type': 'nominal', 'title': None,
+                  'sort': sorted({r['model'] for r in rows}),
+                  'axis': {'labelAngle': 0, 'labelLimit': 225, 'labelFontSize': 10}},
+            'xOffset': {'field': 'condition', 'sort': sorted({r['condition'] for r in rows})}},
+        'layer': [
+            {'mark': {'type': 'bar', 'cornerRadiusEnd': 3},
+             'encoding': {'y': {'field': 'tok_per_sec', 'type': 'quantitative',
+                                'title': title, 'scale': scale, 'axis': ticks},
+                          'color': {'field': 'condition', 'type': 'nominal',
+                                    'scale': {'domain': sorted({r['condition'] for r in p6}),
+                                              'range': [MUTED, '#f7b801', '#4cc9f0', '#b5179e', '#43e97b']},
+                                    'legend': {'title': 'condition', 'orient': 'bottom'}}}},
+            {'mark': {'type': 'text', 'dy': -9, 'fontSize': 12, 'fontWeight': 'bold', 'color': FG},
+             'encoding': {'y': {'field': 'tok_per_sec', 'type': 'quantitative'}, 'text': {'field': 'label'}}},
+        ]}
+
+
+panel6 = {
+    'title': {'text': 'Power study — stock baseline', 'subtitle': [sub6,
+              'Short-prompt decode and nonced prefill are separate measurements. Sustain and parity remain in the CSV.'],
+              'anchor': 'start', 'fontSize': 19, 'color': FG, 'subtitleColor': MUTED, 'subtitleFontSize': 12},
+    'vconcat': [
+        {'title': {'text': 'Box A · 2 × RTX 5060 Ti · both-dgpu',
+                   'subtitle': ['stock only; no tuning planned', '180 W cap per card; reported watts sum both cards'],
+                   'anchor': 'start', 'fontSize': 16, 'color': FG, 'subtitleColor': MUTED},
+         'hconcat': [_power_facet('box-a', 'decode'), _power_facet('box-a', 'prefill')], 'spacing': 35},
+        {'title': {'text': 'Box B · Radeon AI PRO R9700 · dgpu-b',
+                   'subtitle': ['300 W board cap · Vulkan (RADV GFX1201)', 'Different silicon and serving stack; an operating comparison'],
+                   'anchor': 'start', 'fontSize': 16, 'color': FG, 'subtitleColor': MUTED},
+         'hconcat': [_power_facet('box-b', 'decode'), _power_facet('box-b', 'prefill')], 'spacing': 35}],
+    'spacing': 45, 'resolve': {'scale': {'y': 'independent'}}}
+
+
+def _published_tolerance(text):
+    """Half a unit in the last published digit.
+
+    A cell written as `2114` cannot be compared to a raw median of 2113.615 with a fixed
+    tolerance without either rejecting honest rounding or swallowing a wrong digit. The
+    precision of the published string is the tolerance: `2114` admits +/-0.5, `106.4`
+    admits +/-0.05, so 106.9 against a raw 106.43 still fails.
+    """
+    text = (text or '').strip()
+    if '.' in text:
+        return 0.5 * (10 ** -len(text.split('.')[1]))
+    return 0.5
+
+
+def _verify_power_against_raw():
+    """Re-derive every published cell from the retained per-run records and telemetry.
+
+    Written after two wrong cells shipped past checks that only compared the CSV with the
+    chart: the sustain temperature published the memory sensor as junction, and box-a
+    wattage published a one-card median for a two-card box. Internal consistency cannot see
+    either, because the CSV agreed with the chart and the chart agreed with the CSV.
+
+    SCOPE: this detects transcription and aggregation errors against the retained records —
+    the class that actually shipped here twice. It is not a forgery detector: an author who
+    edits a record and its summary consistently defeats any check that lives in the same
+    tree. What it does buy is that every published number has to survive being recomputed
+    from the tokens, nanoseconds and telemetry samples the server and driver returned.
+
+    Adversarial review then showed the first version of this check FAILED OPEN in several
+    ways at once: it skipped wattage entirely when telemetry was missing, ignored the rate
+    column it does not plot, accepted a scalar temperature against a named-sensor claim, and
+    used tolerances loose enough to swallow a wrong digit. Absence of evidence is now an
+    error, both rates are checked, and every tolerance is tight enough that only rounding
+    fits inside it.
+    """
+    import statistics
+    with open(os.path.join(SOURCE_DIR, 'power_undervolt.csv'), encoding='utf-8') as _fh:
+        raw_text = {(row['condition'], row['box'], row['model'], row['metric']): row
+                    for row in csv.DictReader(_fh)}
+    checked = 0
+    for r in _read_power_csv():
+        text = raw_text[(r['condition'], r['box'], r['model'], r['metric'])]
+        note = r['notes'] or ''
+        if 'label=' not in note or '.jsonl' not in note:
+            _power_error(f"row does not name its raw record: {r['condition']} {r['model']}")
+        fname = note.split(';')[0].strip()
+        label = note.split('label=')[1].split(';')[0].strip()
+        path = os.path.join(SOURCE_DIR, fname)
+        if not os.path.isfile(path):
+            _power_error(f'named raw record is missing: {fname}')
+        runs = []
+        with open(path, encoding='utf-8') as fh:
+            for line in fh:
+                if line.strip():
+                    rec = json.loads(line)
+                    if rec.get('label') == label and not rec.get('warmup'):
+                        runs.append(rec)
+        if not runs:
+            _power_error(f'no non-warmup runs for {label} in {fname}')
+        if len(runs) != r['n']:
+            _power_error(f"n disagrees with the raw record for {label}: csv {r['n']}, file {len(runs)}")
+
+        # Identity: the row must describe the runs it points at.
+        tags = {x.get('model') for x in runs}
+        if len(tags) != 1:
+            _power_error(f'{label}: the raw runs do not share one model tag: {sorted(tags)}')
+        tag = tags.pop() or ''
+        # A prefix test is the right direction (the box-b runs used a locally aliased tag,
+        # `qwen3.8:27b-r9700`) and the wrong bound: it also accepts a truncated CSV name like
+        # `gemma`. Require the raw tag to be the published name exactly, or that name followed
+        # by a suffix that begins with a hyphen.
+        ALIAS_SUFFIXES = ('-r9700',)  # the box-b tags that pin a model to the discrete card
+        if not (tag == r['model'] or any(tag == r['model'] + suf for suf in ALIAS_SUFFIXES)):
+            _power_error(f"{label}: csv model {r['model']!r} does not match the raw tag {tag!r}")
+        t0 = min(x['t_start'] for x in runs)
+        days = {time.strftime('%Y-%m-%d', time.localtime(t0)), time.strftime('%Y-%m-%d', time.gmtime(t0))}
+        if r['date'] not in days:
+            _power_error(f"{label}: csv date {r['date']} but the runs started on {sorted(days)} "
+                         f"(local or UTC)")
+
+        # A retained run that aborted is not evidence of a completed measurement.
+        if any(x.get('aborted') for x in runs):
+            _power_error(f'{label}: a retained request is marked aborted; it cannot back a published cell')
+        # Two requests cannot occupy the same window: that is one measurement counted twice.
+        windows = [(x['t_start'], x['t_end']) for x in runs]
+        if len(set(windows)) != len(windows):
+            _power_error(f'{label}: retained requests share a window, so one measurement is counted twice')
+        # Rates are recomputed from the counts and durations the server returned, not read from
+        # the rate fields. A rate field can be edited to match a wrong published cell; the tokens
+        # and nanoseconds it was derived from would have to be edited consistently too.
+        for count_k, dur_k, col in (('eval_count', 'eval_duration', 'gen_tok_per_sec'),
+                                    ('prompt_eval_count', 'prompt_eval_duration', 'prompt_tok_per_sec')):
+            if all(x.get(count_k) and x.get(dur_k) for x in runs):
+                derived = statistics.median(x[count_k] / (x[dur_k] / 1e9) for x in runs)
+                if abs(derived - r[col]) > max(_published_tolerance(text[col]), derived * 0.005):
+                    _power_error(f'{label}: published {col}={r[col]} but {count_k}/{dur_k} give '
+                                 f'{derived:.3f}')
+
+        # BOTH rates, not only the one this row plots. A wrong number in the column the
+        # chart ignores is still a published wrong number.
+        for field, col in (('gen_toks_per_s', 'gen_tok_per_sec'),
+                           ('prompt_toks_per_s', 'prompt_tok_per_sec')):
+            raw = statistics.median(x[field] for x in runs)
+            if abs(raw - r[col]) > _published_tolerance(text[col]):
+                _power_error(f'{label}: published {col}={r[col]} but the raw median is {raw:.3f}')
+        plotted = r['gen_tok_per_sec'] if r['tok_source'] == 'gen' else r['prompt_tok_per_sec']
+        if abs(plotted - r['tok_per_sec']) > _published_tolerance(text['tok_per_sec']):
+            _power_error(f'{label}: tok_per_sec does not equal the {r["tok_source"]} column')
+
+        # Temperature: a maximum across CARDS is the hotter card and is legitimate; a maximum
+        # across SENSORS is a different quantity and is not. A scalar cannot support a
+        # named-sensor claim at all, so it is an error rather than a pass.
+        # Temperature comes from the telemetry samples inside each window, not from the run
+        # record's own temp_max summary: that field is the harness's aggregate, and an edited
+        # summary would otherwise certify itself. The record's field is still checked for
+        # shape, because a bare number cannot support a named-sensor claim at all.
+        temps = []
+        for x in runs:
+            t = x['temp_max']
+            if not isinstance(t, dict):
+                _power_error(f'{label}: temperature is a bare number, so a {r["temp_kind"]} claim cannot be checked')
+            if r['temp_kind'] == 'junction':
+                if 'junction' not in t:
+                    _power_error(f'{label}: raw record has no junction sensor')
+                temps.append(t['junction'])
+            elif r['temp_kind'] == 'nvidia-smi':
+                if not t or not all(k.startswith('gpu') for k in t):
+                    _power_error(f'{label}: nvidia record is not keyed by card: {sorted(t)}')
+                temps.append(max(t.values()))
+            else:
+                _power_error(f'{label}: unknown temp_kind {r["temp_kind"]}')
+        tel_path_early = os.path.join(SOURCE_DIR, fname + '.telemetry.jsonl')
+        if os.path.isfile(tel_path_early):
+            tsamp = []
+            with open(tel_path_early, encoding='utf-8') as th:
+                for line in th:
+                    if not line.strip():
+                        continue
+                    smp = json.loads(line)
+                    if not any(x['t_start'] <= smp['ts'] <= x['t_end'] for x in runs):
+                        continue
+                    if r['temp_kind'] == 'junction':
+                        v = (smp.get('temps') or {}).get('junction')
+                    else:
+                        v = smp.get('temp')
+                    if v is not None:
+                        tsamp.append(v)
+            if tsamp and max(tsamp) != r['temp_max_c']:
+                _power_error(f'{label}: published {r["temp_max_c"]} C but the telemetry samples in '
+                             f'these windows peak at {max(tsamp):g} C on {r["temp_kind"]}')
+        if max(temps) != r['temp_max_c']:
+            _power_error(f'{label}: published {r["temp_max_c"]} C as {r["temp_kind"]} but that '
+                         f'sensor peaked at {max(temps):g} C')
+
+        # Hashes: the CSV claims k/n agreement, so re-derive it. A nonced row claims none.
+        shas = [x.get('response_sha') for x in runs]
+        claim = (r.get('hashes') or '').strip()
+        nonce_claim = claim.lower().startswith('n/a')
+        if claim and '/' in claim and not nonce_claim:
+            k_txt, n_txt = claim.split('/', 1)
+            if not all(shas):
+                _power_error(f'{label}: hashes claimed {claim} but a retained run has no response hash')
+            agree = max(sum(1 for h in shas if h == cand) for cand in set(shas))
+            if (int(k_txt), int(n_txt)) != (agree, len(shas)):
+                _power_error(f'{label}: hashes claimed {claim} but the retained runs agree {agree}/{len(shas)}')
+        elif claim and not nonce_claim:
+            _power_error(f'{label}: unreadable hashes field {claim!r}')
+        elif nonce_claim:
+            # 'n/a (nonce)' is a claim about the METHOD: every retained request carried a nonce,
+            # so its output legitimately differs and no agreement can be asserted. One flagged
+            # run does not establish it for five, and differing hashes are a consequence, not
+            # evidence. Require the flag on every run.
+            flagged = sum(1 for x in runs if x.get('nonce'))
+            if flagged != len(runs):
+                _power_error(f'{label}: claims {claim!r} but only {flagged} of {len(runs)} retained '
+                             f'requests carry the nonce flag')
+
+        # Clocks: re-derive median and minimum over the active samples, same as the harness.
+        # Watts: required, never skipped. Keep a timestamp when any device is active, sum the
+        # whole device set at it. Missing telemetry is an error: the earlier version treated
+        # it as nothing to check, which is how a wrong wattage could pass with the evidence
+        # simply deleted.
+        tel_path = os.path.join(SOURCE_DIR, fname + '.telemetry.jsonl')
+        if not os.path.isfile(tel_path):
+            _power_error(f'{label}: telemetry {os.path.basename(tel_path)} is missing, so the '
+                         f'published wattage cannot be checked')
+        by_ts = {}
+        with open(tel_path, encoding='utf-8') as th:
+            for line in th:
+                if line.strip():
+                    smp = json.loads(line)
+                    by_ts.setdefault(smp['ts'], []).append(smp)
+        if r['power_scope'] == 'sum_two_cards' if 'power_scope' in r else (r['box'] == 'box-a'):
+            idx = {q.get('index') for rows_at in by_ts.values() for q in rows_at
+                   if any(x['t_start'] <= rows_at[0]['ts'] <= x['t_end'] for x in runs)}
+            if len({i for i in idx if i is not None}) < 2:
+                _power_error(f'{label}: a two-card sum is published but the telemetry in these '
+                             f'windows carries {sorted(i for i in idx if i is not None)}')
+        per_run, peak = [], 0.0
+        for x in runs:
+            ps = []
+            for ts, rows_at in by_ts.items():
+                if not (x['t_start'] <= ts <= x['t_end']):
+                    continue
+                busy = [q for q in rows_at
+                        if (q.get('util') if q.get('util') is not None else q.get('gpu_busy')) is not None
+                        and (q.get('util') if q.get('util') is not None else q.get('gpu_busy')) >= 10]
+                total = sum(q['power'] for q in rows_at if q.get('power') is not None)
+                # The MEDIAN is over active timestamps; the MAXIMUM is over the whole window,
+                # which is what the harness publishes. Taking the maximum over active
+                # timestamps only lets a high sample at an idle timestamp hide inside the
+                # window, so an understated peak would pass.
+                peak = max(peak, total)
+                if busy:
+                    ps.append(total)
+            if not ps:
+                _power_error(f'{label}: no telemetry covers one of the retained requests, so its '
+                             f'wattage is unverified')
+            per_run.append(statistics.median(ps))
+        # Clocks: per-run median first, then the median across runs — the same shape the
+        # harness uses for every other statistic. Pooling every sample instead gives a
+        # different number (2794 vs the published 2790 on box-a MoE decode), which would be
+        # a false alarm, not a finding.
+        per_run_sclk, per_run_min = [], []
+        for x in runs:
+            vals = []
+            for ts, rows_at in by_ts.items():
+                if not (x['t_start'] <= ts <= x['t_end']):
+                    continue
+                for q in rows_at:
+                    u = q.get('util') if q.get('util') is not None else q.get('gpu_busy')
+                    if u is not None and u >= 10 and q.get('sclk') is not None:
+                        vals.append(q['sclk'])
+            if vals:
+                per_run_sclk.append(statistics.median(vals))
+                per_run_min.append(min(vals))
+        if not per_run_sclk:
+            _power_error(f'{label}: no active telemetry sample carries a clock, so the published '
+                         f'clocks cannot be checked')
+        if abs(statistics.median(per_run_sclk) - r['sclk_med_mhz']) > _published_tolerance(text['sclk_med_mhz']):
+            _power_error(f'{label}: published sclk median {r["sclk_med_mhz"]} but the retained samples '
+                         f'give {statistics.median(per_run_sclk):.0f}')
+        if abs(min(per_run_min) - r['sclk_min_mhz']) > _published_tolerance(text['sclk_min_mhz']):
+            _power_error(f'{label}: published sclk minimum {r["sclk_min_mhz"]} but the retained samples '
+                         f'give {min(per_run_min):.0f}')
+        raw_w = statistics.median(per_run)
+        if abs(raw_w - r['watts_med']) > _published_tolerance(text['watts_med']):
+            _power_error(f'{label}: published {r["watts_med"]} W but the telemetry gives {raw_w:.1f} W '
+                         f'when every device is summed at each active timestamp')
+        if abs(peak - r['watts_max']) > _published_tolerance(text['watts_max']):
+            _power_error(f'{label}: published max {r["watts_max"]} W but the telemetry peaks at {peak:.1f} W')
+        # The parity row's published claim is that the output was IDENTICAL to stock after the
+        # overdrive bit was exposed. That is a cross-file claim, so check it across files rather
+        # than trusting the prose.
+        if r['condition'] == 'overdrive_exposed':
+            stock_sha = set()
+            with open(os.path.join(SOURCE_DIR, 'boxb_v2.jsonl'), encoding='utf-8') as sh:
+                for line in sh:
+                    if line.strip():
+                        rec = json.loads(line)
+                        if rec.get('label') == 'B-W2-dense-decode' and not rec.get('warmup'):
+                            stock_sha.add(rec.get('response_sha'))
+            post = {x.get('response_sha') for x in runs}
+            if not stock_sha or post != stock_sha:
+                _power_error('the parity row claims the post-overdrive output is identical to stock, '
+                             'but the retained hashes differ from the stock dense-decode run')
+        checked += 1
+    # Evidence substitution: two summaries must not rest on the same measured window. A
+    # record that borrows another request's t_start/t_end would let one real measurement
+    # certify two published rows.
+    spans = []
+    for row in _read_power_csv():
+        note = row['notes'] or ''
+        fname = note.split(';')[0].strip()
+        label = note.split('label=')[1].split(';')[0].strip()
+        with open(os.path.join(SOURCE_DIR, fname), encoding='utf-8') as fh:
+            for line in fh:
+                if line.strip():
+                    rec = json.loads(line)
+                    if rec.get('label') == label and not rec.get('warmup'):
+                        spans.append((fname, label, rec['t_start'], rec['t_end']))
+    for i, (f1, l1, a1, b1) in enumerate(spans):
+        for f2, l2, a2, b2 in spans[i + 1:]:
+            if f1 == f2 and l1 != l2 and a1 < b2 and a2 < b1:
+                _power_error(f'{l1} and {l2} claim overlapping measurement windows in {f1}; one '
+                             f'run cannot be evidence for two published summaries')
+    conditions = {row['condition'] for row in _read_power_csv()}
+    for required in ('stock_sustain', 'overdrive_exposed'):
+        if required not in conditions:
+            _power_error(f'the {required} row is missing; the documents describe ten rows and the '
+                         f'sustain and parity records are part of the published evidence')
+    if checked != 10:
+        _power_error(f'expected ten published summaries, found {checked}')
+    print(f'raw cross-check: OK — {checked} summaries re-derived from the retained records '
+          f'(both rates, the named sensor, and both power statistics)')
+
+
+def _verify_power_csv():
+    source = {tuple(r[k] for k in POWER_KEY): r for r in _read_power_csv()}
+    expected = {k for k, r in source.items() if r['condition'] == 'stock' or r['condition'].startswith('uv-')}
+    plotted = []
+    for box in panel6['vconcat']:
+        for facet in box['hconcat']:
+            for r in facet['data']['values']:
+                key = tuple(r[k] for k in POWER_KEY)
+                if key not in expected or any(r[k] != source[key][k] for k in POWER_COLUMNS):
+                    _power_error(f'plotted row differs from source: {key}')
+                if r['label'] != f"{source[key]['tok_per_sec']:g}  n={source[key]['n']}":
+                    _power_error(f'bar label differs from source: {key}')
+                if ('prefill' in facet['title']['text'].lower()) != (r['metric'] == 'prefill'):
+                    _power_error(f'facet names the wrong metric: {key}')
+                plotted.append(key)
+    if len(plotted) != len(expected) or set(plotted) != expected:
+        _power_error('plot dropped or duplicated eligible rows')
+    absent = not any(r['voltage_offset_mv'] is not None and r['voltage_offset_mv'] < 0 for r in source.values())
+    if (NO_UNDERVOLT in ' '.join(panel6['title']['subtitle'])) != absent:
+        _power_error('subtitle disagrees with measured voltage offsets')
+    print(f'power consistency gate: OK — {len(source)} summaries; {len(plotted)} plotted bars; sustain/parity excluded; subtitle checked')
+
+
+_verify_power_csv()
+_verify_power_against_raw()
+
+
+def _png_description(png, description):
+    """Retain the human-readable subtitle as standard PNG Description metadata."""
+    import struct, zlib
+    data = b'Description\x00' + description.encode('latin-1', errors='replace')
+    chunk = b'tEXt' + data
+    # Insert after IHDR, before image data; pixel bytes are untouched.
+    end = 8 + 12 + struct.unpack('>I', png[8:12])[0]
+    return png[:end] + struct.pack('>I', len(data)) + chunk + struct.pack('>I', zlib.crc32(chunk)) + png[end:]
+
+
 COMMON = {
     "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
     "background": BG,
@@ -400,8 +908,11 @@ for name, panel in [("01_peak_throughput", panel1),
                     ("02_before_after", panel2),
                     ("03_weights_vs_vram", panel3),
                     ("04_cross_box", panel4),
-                    ("05_device_split", panel5)]:
+                    ("05_device_split", panel5),
+                    ("06_undervolt_vs_stock", panel6)]:
     spec = dict(COMMON); spec.update(panel)
     png = vlc.vegalite_to_png(json.dumps(spec), scale=2)
+    if name == "06_undervolt_vs_stock":
+        png = _png_description(png, sub6)
     open(OUT + name + ".png", "wb").write(png)
     print(f"  {name}.png  {len(png):,} bytes")

@@ -1,0 +1,1 @@
+You are a careful technical writer. Explain, in about 300 words, how a steam engine converts heat into rotary motion, covering the boiler, the piston, the valve gear and the flywheel, and end with one sentence on why governors were needed.

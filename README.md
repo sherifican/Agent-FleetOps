@@ -64,7 +64,7 @@ another machine). The commit history tells that story.
 | `skills/` | **Generalized agent-discipline procedures** — evaluation integrity, model routing (the living-table method), the local-lane build loop, multi-agent code workflow, research dispatch/verification, memory ops, brain bookkeeping, protected-function guards, blocked-page retrieval, the [should-we](skills/should-we/SKILL.md) directive check (interrogate the premise before executing an imperative), and more. Each encodes failure stories from real operation. The portable start-list is in [`adopt/20_skills.md`](adopt/20_skills.md); you are not expected to install them all. |
 | `templates/` | Copyable dispatch, honesty, pinned-environment, and research-artifact patterns. Templates are adoption patterns, not automatic enforcement. |
 | `_tools/` | The export pipeline's own gates — provenance wall-checker, secrets/personal-data scanner, and a **ref gate**, all mutation-proven (`--self-test`). The first two ask "is this tree safe to publish?"; the third asks the question they structurally cannot: **"what would a push actually publish?"** A history rewrite is only true of the branch you rewrote — this repo's own rewrite left a clean `main` beside two leftover refs still carrying the trailers and build artifacts the rewrite removed, one `push --all` away from being republished. Content gates scan a worktree; pushes carry refs. |
-| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 593 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
+| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 626 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
 | `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, the verified-system-map pattern, and the [research-team](specs/research-team-protocol.md), [rigor-spectrum](specs/rigor-spectrum.md), and [honesty-stop-gate](specs/honesty-stop-gate.md) guides. |
 | `bench/` | **The two-box throughput operating log** — 67 measurements over 22 model tags, with sample sizes and device labels attached. See below. |
 
@@ -259,12 +259,15 @@ rather than a slope — a model either fits or it doesn't:
   and 2.1 GiB on top of files of 7.6, 9.0 and 23 GB respectively — the largest model there carries
   nearly the smallest overhead. Budget it per model from the log; it is not a percentage.
 - **CPU is not the bottleneck** for GPU-resident inference; it matters for loading and for the
-  orchestration around the models. System RAM matters more than core count — 32 GB is adequate but
-  not generous once several services and a browser are running alongside.
+  orchestration around the models. System RAM matters more than core count. The throughput charts were
+  measured with 32 GB, which was adequate but not generous once several services and a browser were
+  running alongside; this box now has 64 GB, and the power-study numbers were taken on that.
 - Model weights are large. Hundreds of GB of models and working state on the internal NVMe here (not inventoried in this export).
 - **Box A is an AM4 board (MSI B550 Tomahawk Max)** feeding one card at **PCIe 4.0 x8** and the
-  other at **PCIe 3.0 x4**, with the deliberately mismatched DRAM above settling at 2933 MT/s. Every
-  **box-a** number in the charts was measured through exactly those links; the cross-box and
+  other at **PCIe 3.0 x4**. Every **box-a** number in the charts was measured through exactly those
+  links. The memory behind them is not one configuration: charts 01–05 ran on the mismatched 32 GB kit
+  at 2933 MT/s, and the power study and chart 06 ran on the matched 64 GB kit at 3200 MT/s (the
+  hardware table gives both, with the 2026-09-06 boundary); the cross-box and
   device-split panels also carry box-b values, which run on that machine's own unified-memory path.
   This log has no x16 or different-platform control, so it cannot say what the links do or do not
   slow, and it cannot call the VRAM cliff the only gate. VRAM is the hard fit/no-fit cliff on this
@@ -348,8 +351,61 @@ discards a warm-up so model-load time is not counted as decode rate, and **unloa
 without that, the second request quietly reuses the copy already resident on the first device and the
 run reports that device twice, which is the exact failure the benchmark exists to detect.
 
-`bench/make_charts.py` regenerates all five images from the CSV, and **fails closed** if the two disagree:
-exit 1 on divergence, exit 2 when the CSV is absent — unverifiable is not the same as clean.
+`bench/make_charts.py` regenerates all six images from the two CSVs, and **fails closed** before rendering:
+exit 1 on chart/data disagreement or invalid power-study data, exit 2 when either source CSV is absent — unverifiable is not the same as clean.
+
+### Power before tuning: stock measurements, undervolt pending
+
+I wanted to know whether undervolting could make inference faster, cooler and quieter than stock or overclocking, and whether MoE and dense models would respond differently. I measured stock first. **I have not applied an undervolt, and I have neither tried nor planned an overclock.**
+
+I used [`gpu_bench.py`](bench/gpu_bench.py), stdlib Python against ollama's generate API, with `think:false`, temperature 0 and seed 0. Each short test has **n=5 after one discarded warm-up**; throughput is the median. The retained runs report 65 prompt tokens for decode and 8796–8799 for the nominal 8k prefill. A per-run nonce was added after a repeated prompt was served from cache at 109k tok/s. That run was discarded before the retained set, so it is not among the published records; the fix it forced is. I sampled telemetry at 1 Hz; median power and clock statistics use active samples only (GPU utilization ≥10%), while maximum power and temperature use the entire request window. Hashes cover thinking plus response. Nonced prefill has no hash comparison, not a passing correctness check.
+
+I ran `gemma4:26b-a4b-it-qat` (MoE, 25.2B total / 4B active, QAT) and `qwen3.8:27b` (dense, Q4-class) on both boxes using ollama 0.33.2. Both Box A cards carried each model over CUDA. Box B used discrete-card-pinned aliases over Vulkan (RADV GFX1201), not ROCm, not CUDA: discrete R9700 on PCIe x16 Gen5, not the iGPU unified-memory path. Its integrated GPU was excluded. These are operating measurements from different devices and stacks, not a controlled vendor comparison.
+
+Box A's memory changed before this study: it now carries 4 × 16 GB at 3200 MT/s (64 GB) where the
+throughput charts above were measured on a mismatched 4 × 8 GB kit running at 2933 MT/s (32 GB). Every Box A
+measurement dated 2026-09-06 or later, this study included, is on the 64 GB configuration. I have not
+re-measured the older charts on the new memory, so do not read a difference between this section and
+chart 01 as an effect of anything I changed on the GPUs.
+
+**Box A: 2 × RTX 5060 Ti 16 GB, stock, 2026-09-06.** Watts below are the **sum of both cards**, each capped at 180 W. Rates are tok/s; clock is MHz; temperature is the maximum reported GPU temperature.
+
+| Configuration / requested generation cap | n | Prompt median | Generation median | W median / max | Max °C | Clock median / min | Hashes |
+|---|---:|---:|---:|---:|---:|---:|---|
+| MoE decode / 256 | 5 | 2114 | 106.4 | 146 / 149 | 53 | 2790 / 2752 | 5/5 identical |
+| Dense decode / 256 | 5 | 350 | 23.0 | 190 / 196 | 69 | 2782 / 2745 | 5/5 identical |
+| Dense prefill 8k / 32 | 5 | 1294 | 22.2 | 307 / 328 | 84 | 2745 / 2677 | n/a: nonce |
+| MoE prefill 8k / 32 | 5 | 4214 | 87.2 | 187 / 250 | 76 | 2767 / 2700 | n/a: nonce |
+
+I recorded `clocks_event_reasons=0x0` in every Box A sample across these configurations. Dense 8k prefill was the nearest to its limits: maximum per-card draw 165 W against 180 W, maximum temperature 84 °C and fans reaching 100% (n=5). I saw no reported throttle reason in this sweep; that is not a claim about every possible workload. **I will leave Box A unchanged.**
+
+**Box B: Radeon AI PRO R9700 32 GB, stock, 2026-09-06, Vulkan (RADV GFX1201), not ROCm.** Watts are discrete-board power against a 300 W cap. Temperatures are **junction** readings, not directly comparable to Box A's GPU temperature. Rates are tok/s; clock is MHz.
+
+| Configuration / requested generation cap | n | Prompt median | Generation median | W median / max | Max junction °C | Clock median / min | Hashes |
+|---|---:|---:|---:|---:|---:|---:|---|
+| MoE decode / 256 | 5 | 1921 | 110.0 | 227 / 231 | 52 | 3394 / 3259 | 5/5 identical |
+| Dense decode / 256 | 5 | 466 | 53.5 | 300 / 304 | 73 | 2751 / 2541 | 5/5 identical |
+| Dense prefill 8k / 32 | 5 | 880 | 70.7 | 299 / 303 | 87 | 2655 / 2154 | n/a: nonce |
+| MoE prefill 8k / 32 | 5 | 3385 | 101.1 | 287 / 300 | 82 | 2850 / 1603 | n/a: nonce |
+| Dense decode, 15-minute sustain / 512 | 107 | 426 | 48.5 | 299 / 316 | 87 | 2656 / 519 | 107/107 identical |
+
+In that Box B sustain run (n=107 requests), first-minute decode was 48.61 tok/s at 2684 MHz and last-minute decode 48.49 tok/s at 2656 MHz. Junction temperature peaked at 87 °C; memory temperature reached 88 °C, and the recorded maximum fan speed was 3273 rpm. The original summary took the maximum over all sensors and called it 88 °C; I keep the junction and memory readings separate here. I saw essentially flat first-to-last-minute throughput over those 15 minutes. The sustain requested up to 512 generated tokens and returned 398 in each retained request, versus 256 in each short decode request. It used longer generations than the short decode test, so I do not call their different medians thermal droop. Repeated hashes establish output repeatability for this prompt, not general model accuracy.
+
+On the evening of 2026-09-06 I rebooted Box B with `amdgpu.ppfeaturemask=0xfff7ffff`, adding only the overdrive bit `0x4000` to the previous `0xfff7bfff`. This exposed `pp_od_clk_voltage`: `OD_VDDGFX_OFFSET` stayed at **0 mV** (available range −200..0), and `OD_SCLK_OFFSET` stayed at **0 MHz** (−500..+1000). The reported maximum cap rose from 300 to 330 W; the applied cap stayed **300 W**. The kernel logged “Overdrive is enabled.” I changed access to the controls, not voltage, clocks or the applied power cap.
+
+My Box B dense-decode parity check after that reboot (n=3, 256 generated tokens per run) recorded **54.1 tok/s (53.9–54.1)**, prompt median 444 tok/s, 299 W median / 308 W maximum and clock 2790 MHz median / 2496 minimum, with maximum junction temperature **63 °C**. All 3/3 golden hashes were identical to stock. That is consistent with retained stock behavior in this check; it is not an undervolt gain or a statistical equivalence test.
+
+**My reading, not a tuning result:** batch-1 decode is expected to be memory-bandwidth-bound, while long-prompt prefill is more compute-bound. MoE decode touches fewer active bytes per token, so I expect less sensitivity to core voltage and clock than dense. The stock data makes dense work on Box B the useful candidate: dense decode sat at 300 W median versus MoE decode at 227 W (n=5 each), and its long prefills approached the cap. MoE prefill's 287 W median / 300 W maximum (n=5) does not establish that it was continuously cap-bound. The sustained dense run reached 87 °C junction and 88 °C memory, with essentially flat first-to-last-minute throughput.
+
+**My expectation, without undervolt samples:** I expect little or no speed change on Box A. On Box B, a voltage offset at the same 300 W cap might retain speed with less heat and fan demand, or help a workload constrained by that cap. No acoustic measurements were taken. A speed benefit needs a binding limit; even an efficiency benefit needs power draw to reduce. This is not evidence for a fleet speed upgrade.
+
+My planned Box B ladder is −60/−80/−100/−120 mV at 300 W, with greedy golden-output checks, kernel-log monitoring, a junction-temperature abort rule and a long hot run before accepting a setting. Silent output corruption matters even when nothing crashes. A lower power-cap arm is only a possibility; neither arm has run. Box A stays stock.
+
+![Stock baseline; undervolt not yet measured](bench/06_undervolt_vs_stock.png)
+
+Chart 06 reads `bench/power_undervolt.csv`: one panel per box, with separate decode and prefill facets and sample sizes on every bar. Today it shows eight stock bars and “undervolt: not yet measured”; Box A is marked “stock only; no tuning planned.” I keep the sustain and post-reboot parity rows in the CSV, outside the plot. Actual comparison bars require measured ladder rows with setting-specific correctness and hot-run acceptance evidence.
+
+I list the six instrument defects exposed by running the harness in [bench/README.md](bench/README.md#power-and-undervolt).
 
 ### The boxes
 
@@ -360,12 +416,14 @@ mismatched, mainstream, lane-starved hardware** — that is the point, not an ap
 
 | | |
 |---|---|
-| **GPU** | 2 × NVIDIA RTX 5060 Ti, **16 GB GDDR7 each (32 GB total)** · Blackwell, compute capability **12.0 (sm_120)** · driver 595.71.05, CUDA 13.2 toolkit (one llama.cpp binary in the log was built against 13.3) |
+| **GPU** | 2 × NVIDIA RTX 5060 Ti, **16 GB GDDR7 each (32 GB total)** · Blackwell, compute capability **12.0 (sm_120)** · driver 595.84 (stock power study, 2026-09-06; earlier charts recorded 595.71.05), CUDA 13.2 toolkit (one llama.cpp binary in the log was built against 13.3) |
 | **CPU** | AMD Ryzen 7 5800XT — 8 cores / 16 threads, rated boost 4.8 GHz (≈4.97 GHz observed under PBO) |
 | **Motherboard** | MSI MAG B550 TOMAHAWK MAX WIFI — **AM4**, a mainstream 2020-era board. One GPU runs at **PCIe 4.0 x8**, the other at **PCIe 3.0 x4** (chipset slot). Neither gets a full x16 link. |
-| **RAM** | 32 GB DDR4 (30 GB usable) + 8 GB swap — 4 × 8 GB at **2933 MT/s**. Deliberately mismatched: 3 × DDR4-3200 CL16 single-rank + 1 × DDR4-3000 CL15 dual-rank, so the controller settles below both kits' ratings. |
+| **RAM** | **64 GB DDR4 (60.7 GiB usable) + 8 GB swap — 4 × 16 GB, all four DIMMs running at 3200 MT/s** (`MemTotal 63665876 kB`; `dmidecode` reports Speed and Configured Memory Speed 3200 for every slot, measured 2026-09-07). **This is the configuration for every measurement dated 2026-09-06 or later, which is the power study and chart 06.** Before that it was 32 GB (30 GB usable) as 4 × 8 GB settling at **2933 MT/s**, deliberately mismatched: 3 × DDR4-3200 CL16 single-rank + 1 × DDR4-3000 CL15 dual-rank, so the controller ran below both kits' ratings. **Every Box A row in `bench/local_model_throughput.csv`, and the Box A share of charts 01–05, was measured on that older mismatched kit**; the Box A source rows that carry a date fall between 2026-08-21 and 2026-08-23, all before the memory change; the rest of that log is undated in the CSV itself. Box B rows are a different machine and are unaffected by this box's memory. Both configurations are stated because the memory changed between the two sets of numbers. |
 | **Storage** | 2 TB internal NVMe for models and working state; 1 TB USB-attached NVMe for backups |
-| **OS** | Ubuntu 26.04 LTS, kernel 7.0 |
+| **OS** | Ubuntu 26.04 LTS, kernel 7.0.0-31-generic |
+| **GPU power** | Applied stock limit 180 W per RTX 5060 Ti; both cards remain stock |
+| **Serving stack** | ollama 0.33.2 over CUDA (stock power study, 2026-09-06) |
 
 #### Box B — the second box (added 2026-08-22)
 
@@ -376,8 +434,11 @@ mismatched, mainstream, lane-starved hardware** — that is the point, not an ap
 | **iGPU** | Radeon 8060S on **unified memory** — the same pool as system RAM, so "VRAM" is an allocation, not a fixed partition |
 | **Memory** | **122 GiB LPDDR5-8000**, shared between CPU and iGPU |
 | **Chassis** | GMKtec EVO-X3 mini-PC |
-| **Serving stack** | ollama 0.32.15 over **Vulkan (RADV)** — *not* CUDA, a different kernel path from Box A entirely |
-| **OS** | Ubuntu 26.04 LTS, kernel 7.0 (Server Edition) |
+| **Serving stack** | ollama 0.33.2 over **Vulkan (RADV GFX1201)** (previously documented 0.32.15) — *not* ROCm, *not* CUDA; a different kernel path from Box A entirely |
+| **dGPU link** | PCIe x16 Gen5 |
+| **dGPU power** | Applied board cap **300 W** (default 300 W; minimum 210 W); exposed maximum 330 W after enabling overdrive, previously 300 W |
+| **Kernel arg** | `amdgpu.ppfeaturemask=0xfff7ffff`; only overdrive bit `0x4000` added to the previous `0xfff7bfff`; voltage offset 0 mV (range −200..0), clock offset 0 MHz, cap 300 W |
+| **OS** | Ubuntu 26.04 LTS, kernel 7.0.0-31-generic (Server Edition) |
 
 Server Edition headless setup allows for the maximum amount of resources can be allocated to compute instead of a desktop. Box A controls Box B over ssh.
 
