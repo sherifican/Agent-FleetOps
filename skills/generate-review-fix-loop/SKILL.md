@@ -23,6 +23,10 @@ For non-trivial implementation work, use three distinct stages: a coding model d
 - Shipping the draft rather than the repaired output.
 - Treating review as proof of runtime behavior.
 - Spending the multi-stage process on a trivial one-line edit when direct verification is cheaper.
+- Reviewing only the diff when the change alters a fact the same file asserts elsewhere. The
+  reviewer's unit is then the file, and the search covers the old value and the subject's
+  constraint language, not the old value alone. See
+  [`specs/rigor-spectrum.md`](../../specs/rigor-spectrum.md) lesson F.
 
 ## Verification checklist
 - [ ] Generator and reviewer were separate roles.

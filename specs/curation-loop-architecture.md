@@ -24,7 +24,7 @@ below is the mechanism, generalized; numbers are from the reference deployment.
    REVIEW GATE — verifier/dry-run runs FIRST, then a PANEL of independent models votes;
         │        disagreement goes to the operator with dissent preserved;
         │        agreement follows the adopter's policy — ACCEPT: apply · FILTER: forward
-        │        to the operator (rule 11; both are valid, the adopter picks one);
+        │        to the operator (rule 12; both are valid, the adopter picks one);
         │        rejects are LOGGED for calibration, not discarded
         ▼
    DETERMINISTIC APPLY — approved edits become exact search/replace specs;
@@ -64,26 +64,37 @@ below is the mechanism, generalized; numbers are from the reference deployment.
    the edit never free-hands the *application* of it. Zero-corruption by construction, at the cost of occasional
    refusals that fall back to manual application.
 
-6. **A second model audits the diff.** Intent vs. applied change, MATCH/MISMATCH, from a model that
+6. **Approval for application binds to the exact input the applier consumes.** Approving a
+   proposal document does not authorize different instruction bytes. Where the reviewed document and
+   the applier's input are two artifacts, acceptance of one is not acceptance of the other — a batch
+   can pass every review round and still be refused at apply, because the apply step resolves against
+   its own input and refuses what it cannot match. Two consequences follow. An instruction entry
+   embeds the audited text **verbatim**: "apply the section as written in the approved batch" is not
+   something a model that cannot see that batch can execute, and the underspecified form of it has
+   produced fabricated text that a downstream audit rated as matching. And a rebuilt instruction file
+   is checked against the approved bytes before it is applied; where it differs, or where the match
+   cannot be shown, it is re-audited rather than inheriting the proposal's approval.
+
+7. **A second model audits the diff.** Intent vs. applied change, MATCH/MISMATCH, from a model that
    didn't write either. Cheap, and it catches the apply layer's mistakes rather than trusting them.
 
-7. **Rejects are a calibration dataset.** Rejected proposals go to a review file, not the void. If
+8. **Rejects are a calibration dataset.** Rejected proposals go to a review file, not the void. If
    the proposer keeps proposing the same rejected thing, that's signal about the proposer; if a
    reject later turns out right, that's signal about the gate.
 
-8. **Rebaseline after every pass.** The loop's own edits must not count as "activity" for the next
+9. **Rebaseline after every pass.** The loop's own edits must not count as "activity" for the next
    trigger, or the loop feeds itself. (Found the hard way: the first deployment echo-triggered off
    its own commits.)
 
-9. **Inferred preferences are defaults, not laws.** Rules learned from observed behavior (rather
-   than stated instruction) are recorded with their evidence strength and marked overridable. A
-   single observation is a weak prior; the loop strengthens or retires it as the pattern recurs —
-   and says so in the rule text itself.
+10. **Inferred preferences are defaults, not laws.** Rules learned from observed behavior (rather
+    than stated instruction) are recorded with their evidence strength and marked overridable. A
+    single observation is a weak prior; the loop strengthens or retires it as the pattern recurs —
+    and says so in the rule text itself.
 
-10. **Hygiene is a separate, mechanical lane.** Broken links, stale paths, index gaps — safe to
+11. **Hygiene is a separate, mechanical lane.** Broken links, stale paths, index gaps — safe to
     auto-apply and clearly labeled as such. Substantive content changes never ride the hygiene lane.
 
-11. **Rule-base changes are panel-reviewed, and the vote comes AFTER the verifier.** A change to
+12. **Rule-base changes are panel-reviewed, and the vote comes AFTER the verifier.** A change to
     skills, operating rules, or accepted drift passes a panel of INDEPENDENT models — one model's
     approval is not acceptance. Whatever verifier or dry-run exists runs BEFORE the vote (a vote on
     unverified material is refused), and panel disagreement goes to the operator with the dissent
@@ -104,18 +115,19 @@ below is the mechanism, generalized; numbers are from the reference deployment.
 | The gate rubber-stamps | rejects log = a measurable gate record |
 | One instance's view overwrites another's | git as ground truth; parallel sessions label non-canonical output and never bulk-write shared memory |
 | The applier "improves" the edit | apply is search/replace, not generation; second-model diff audit |
+| The audit reviewed a document the applier never reads | approval bound to the applier's exact input; instruction entries embed the audited text verbatim; a rebuilt file is checked against the approved bytes or re-audited |
 | One approver's blind spot becomes policy | panel of independent models + `guard/curation_gate.py` — rejects one-model approval, vote-before-verification, and unresolved disagreement |
 
 ## Minimal adoption
 
 The true minimum is **two independent reviewers plus one accountable operator** — not one agent
-and a human. Rule 11 makes the panel part of the mechanism, so a deployment with a single reviewer
+and a human. Rule 12 makes the panel part of the mechanism, so a deployment with a single reviewer
 cannot pass its own gate; `guard/curation_gate.py` rejects that record. Independent means distinct
 reviewer identities: the gate counts identities, because one model voting twice is an echo, not a
 second opinion.
 
 Everything else can be one agent: a git repo for the rule base, a line-count watcher, one audit
 prompt that outputs structured proposals, a review step (verifier first, then the panel/operator
-gate of rule 11), and a script that applies exact matches or refuses. The two components most
+gate of rule 12), and a script that applies exact matches or refuses. The two components most
 tempting to skip — the rejects log and the rebaseline — are the two that prevent the quiet failure
 modes.

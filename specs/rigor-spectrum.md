@@ -145,6 +145,14 @@ A proven mechanism sitting unwired produces the same green as a missing mechanis
 
 A new guard that reads a file the mutation sandbox does not carry will correctly refuse to vouch for what it cannot see — and the baseline goes red blaming the product. Stage the guard’s subject in the same commit as the guard. Second half, equally critical: the harness’s own auto-diagnosis of “you forgot to stage it” can be wrong. It has confidently reported a staging gap when the file was staged and the real cause was environment-dependence. Stage the subject, *and* reproduce inside the sandbox before believing the harness’s hint.
 
+### F. A diff review does not expose assertions outside the diff
+
+This **qualifies** the diff-based review in [`skills/generate-review-fix-loop`](../skills/generate-review-fix-loop/SKILL.md) step 2 rather than replacing it; the two answer different questions. A diff review checks what changed. It cannot check what should have changed and did not, because an assertion outside the supplied context is never in front of the reviewer.
+
+The case: a file stated one hardware figure in three places. An approved edit replaced one of them. Five review rounds, by an author and an adversarial auditor, left the other two standing — and one of the survivors told the reader to treat the old figure as fixed, which the edit had just made false. The review input exposed the changed assertion and omitted the contradictory statements elsewhere in the same file.
+
+So when a change alters a factual assertion, supplement the diff review with a consistency read of the affected file. Search the old value, and also the subject’s constraint language: “the capacity is fixed and cannot grow” contradicts a new capacity claim without repeating the old number, which is why searching the old value alone is not sufficient. Read each hit in context, and separate an assertion that is now wrong from one that is deliberately historical — do not mechanically replace every match. For supported count assertions, `guard/doc_count_drift.py` supplies a measurement-backed check; its configured patterns do not cover other wording, so the read is still yours.
+
 ## Case study: a prose edit that halted every update
 
 A maintainer hand-edited one prose clause in a public README. That README was one file in a sha256-pinned update manifest covering the whole shipped tree (on the order of a thousand entries on that project — re-measure on yours; do not trust the number in this sentence). The main application had already downloaded and validated; then the updater reached the changed README, treated **any** entry mismatch as fatal, and aborted the whole staging transaction — discarding the validated download:

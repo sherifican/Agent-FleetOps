@@ -34,6 +34,14 @@ be their job. This skill internalizes the prefix so the operator can stop typing
 It was not hypothetical. The check fired three times on the day it was written, each time stopping
 wasted or wrong work — the cases are in *Worked examples* below.
 
+The operator also described a personal reason for putting the pause on the machine's side:
+
+> I built this partly to counter the tab trap. I did not want the fix to depend on me being
+> careful every single time.
+
+This is a motivation for the pause; [the verdict table](#the-verdict-must-be-able-to-come-back-no)
+defines when the agent asks before acting.
+
 ## When to run it
 
 - **Every imperative.** "Do X", "fix Y", "send Z", "update W", "ship it". Questions already get the
