@@ -259,6 +259,17 @@ def test_real_legs_are_declared():
         assert l.argv and isinstance(l.argv, list)
 
 
+def test_accepted_token_is_absent_from_the_prompt():
+    """The 2026-08-03 fix: the prompt used to contain the token it accepted, so a leg that
+    echoed its prompt — or a wrapper that printed it on an error path — passed as ALIVE.
+    Without this assertion nothing stops that design coming back."""
+    from guard.leg_canary import CANARY_PROMPT
+    norm = lambda s: "".join(s.lower().split())
+    assert norm(CANARY_TOKEN) not in norm(CANARY_PROMPT), (
+        "the accepted token appears in the prompt: an echo of the prompt would pass as ALIVE"
+    )
+
+
 def test_module_has_no_network_calls_outside_the_default_runner():
     import guard.leg_canary as lc
     src = open(lc.__file__, encoding="utf-8").read()

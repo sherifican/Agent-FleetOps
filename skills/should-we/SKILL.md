@@ -34,13 +34,21 @@ be their job. This skill internalizes the prefix so the operator can stop typing
 It was not hypothetical. The check fired three times on the day it was written, each time stopping
 wasted or wrong work — the cases are in *Worked examples* below.
 
-The operator also described a personal reason for putting the pause on the machine's side:
+The other half of the origin is the autocomplete loop. The operator's account:
 
-> I built this partly to counter the tab trap. I did not want the fix to depend on me being
-> careful every single time.
+> Autocomplete is built for momentum, not accuracy. A suggestion arrives already looking correct and
+> on topic, so when you are not fully focused it is easy to accept it on that impression alone. Often
+> it turns out to be the wrong move, or a shallow version of what was actually needed, and the
+> accepted steps compound.
 
-This is a motivation for the pause; [the verdict table](#the-verdict-must-be-able-to-come-back-no)
-defines when the agent asks before acting.
+So the five questions are deliberately cheap. They plug that gap without giving up much speed, and
+without adding thinking churn beyond what the decision needs — which is why the depth scales with
+cost and reversibility, and why trivial mechanical work is exempt.
+[The verdict table](#the-verdict-must-be-able-to-come-back-no) defines when the agent asks before
+acting rather than proceeding.
+
+The prefix is an observation, not a measured mechanism. The five questions are the rule. Do not
+optimise the phrasing instead of doing the interrogation.
 
 ## When to run it
 

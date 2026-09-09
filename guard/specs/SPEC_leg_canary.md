@@ -40,10 +40,17 @@ verdict.
         evidence: str       # trimmed response excerpt or the failure reason
         rc: object          # the exit code, recorded but NOT the verdict (None if never ran)
 
-    CANARY_TOKEN = "CANARY-OK"
+    CANARY_TOKEN = "CANARY-42"
     CANARY_PROMPT = (
-        "Reply with exactly this one word and nothing else: CANARY-OK"
+        "Reply with exactly one token and nothing else: the word CANARY, then a hyphen, "
+        "then the result of multiplying six by seven."
     )
+
+    # The accepted token must not appear in the prompt. An earlier version both
+    # requested and accepted CANARY-OK, so echoing the prompt, including from a
+    # wrapper's error path, could pass as ALIVE. The prompt now requests a trivial
+    # computation whose answer is absent from the prompt, preventing that echo-only
+    # false positive.
 
     LEGS = [ Leg("kimi", ["kimi-cli"]), Leg("grok", [...]), Leg("codex", [...]),
              Leg("gemini36", [...]) ]
@@ -126,7 +133,8 @@ exactly as it freezes a value.
 
 - No network in any function except the default real runner.
 - `probe()` must never raise; every failure becomes UNMEASURED.
-- The canary prompt must stay trivially cheap — one word, no tools, no context.
+- The canary prompt must stay trivially cheap — no tools, no extra context — and the accepted
+  token must not appear in it.
 
 ## Verification
 
