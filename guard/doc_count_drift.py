@@ -43,9 +43,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ---------------------------------------------------------------- instruments
 
 # A collector that could not import part of a suite still prints a total, and that total
-# is a floor, not a count. Measuring `tui/tests` without `textual` installed reports 326
-# where the suite holds 364 — so comparing prose against it would flag a CORRECT number
-# as drift. A partial read is not a smaller reading; it is a different question answered.
+# is a floor, not a count. Measuring a suite whose dependencies are absent silently omits
+# every test in the modules that failed to import, so comparing prose against that partial
+# collection would flag a CORRECT number as drift. A partial read is not a smaller reading;
+# it is a different question answered. Deliberately no integers here: an illustrative count
+# in a comment goes stale exactly like the prose this file exists to catch.
 SKIP_DEPS = "the suite's own test dependencies are not installed here"
 
 

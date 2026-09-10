@@ -279,7 +279,7 @@ The existing `HONESTY_GATE_CONFIG` environment variable selects an alternative s
 
 - `_tools/wall_check.py`: this file encodes the authors' policy; adopters replace the table at lines 22–36.
 - `_tools/readme_guard.sh`: this file encodes the authors' policy; adopters replace the table at lines 8–12.
-- `guard/leg_canary.py`: this file encodes the authors' policy; adopters replace the table at lines 44–49. Its `_default_runner` wrapper conventions and `main` cron PATH must be adapted to the same roster; the literal tilde PATH is retained as instance policy, not a portable setup.
+- `guard/leg_canary.py`: this file encodes the authors' policy; adopters replace the table at lines 44–49. Its `_default_runner` wrapper conventions and `main` cron PATH must be adapted to the same roster; `prepend_local_bin` expands the home directory, because a literal `~` in PATH is never expanded by exec and silently contributes nothing.
 
 `vision_ingest.py` takes external paths only from `VI_BACKUP_ROOT`, `VI_BACKUP_MOUNT`
 and optional `VI_ALERT_SCRIPT`. Export edited values from the authors' instance in

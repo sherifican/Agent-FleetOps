@@ -4,7 +4,7 @@
 
 # Agent-FleetOps
 
-Custom multi-agent orchestration built from scratch (no CrewAI, LangGraph, or any framework). Counters off-the-shelf failure modes — error cascades, argument loops, unverified agent trust — with mutation-proven drift guards, deterministic apply, driver-lock serialization, and verifier-first review panels. Routing decisions are made against real measured throughput per hardware tier, via a multi-box telemetry pipeline whose data is in the repo — not vendor benchmarks. A ~380-test hermetic monitor proves every guard can fail. Validated in production via [ParaKit](https://github.com/sherifican/ParaKit-Open_Source)
+Custom multi-agent orchestration built from scratch (no CrewAI, LangGraph, or any framework). Counters off-the-shelf failure modes — error cascades, argument loops, unverified agent trust — with mutation-proven drift guards, deterministic apply, driver-lock serialization, and verifier-first review panels. Routing decisions are made against real measured throughput per hardware tier, via a multi-box telemetry pipeline whose data is in the repo — not vendor benchmarks. **628 hermetic unit gates** prove every guard can fail. Validated in production via [ParaKit](https://github.com/sherifican/ParaKit-Open_Source)
 
 ---
 >**So you wanna run an AI Fleet without it turning into a hallucination circus? I've put together a generalized version of my collection of skills and tools, please use as you see fit. This is not prompt engineering, more like automatic babysitting. I hope it helps, if you like what I've put together, throw me a star and I'll keep updating as I improve on the design, thanks!**
