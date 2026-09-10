@@ -23,6 +23,12 @@ jobs:
           python3 guard/mutation_harness.py --verify-anchors
           python3 guard/contract_agreement.py
           python -m pytest guard/tests/ -q
+          # The documented-count sweep runs HERE and nowhere else, because this job is the only
+          # place both suites can be collected in full. Without the monitor's dependencies the
+          # combined check SKIPS — correctly, since a partial collection is a floor, not a total —
+          # and a skip is not a pass. That skip is why the banner's combined total sat stale
+          # through two count changes: the watcher existed and never got to run.
+          python3 guard/doc_count_drift.py
 
   ref-gate:
     runs-on: ubuntu-latest

@@ -179,6 +179,25 @@ def test_video_ids_resolve_does_not_false_positive_on_prose():
     assert props(text)["video_ids_resolve"].ok
 
 
+def test_spec_publishes_the_kind_parameter_the_module_ships():
+    """The spec is what an adopter copies; the module is the behaviour. This pins their AGREEMENT,
+    which no existing test does — test_has_source_link_* pin the code, so deleting `kind` from the
+    spec would leave the whole suite green while the published interface lied.
+
+    That is the canary-spec failure: SPEC_leg_canary published the echo-accepting design its code
+    had already removed, and nothing went red for a month. Needle: drop `kind` from either signature
+    line in the spec and this test fails."""
+    import pathlib, re
+    spec = pathlib.Path(__file__).resolve().parents[1] / "specs" / "SPEC_properties.md"
+    text = spec.read_text(encoding="utf-8")
+    sigs = [l for l in text.splitlines() if re.match(r"\s*def extract(_file)?\(", l)]
+    assert len(sigs) == 2, f"expected both public signatures in the spec, found {len(sigs)}"
+    for line in sigs:
+        assert "kind" in line, (
+            f"the spec's published signature omits the kind parameter the module ships: {line.strip()!r}"
+        )
+
+
 def test_has_source_link_is_judged_for_a_FINAL():
     """A hub card links from the FINAL, so there the source URL is critical."""
     stripped = CLEAN.replace(f"https://youtu.be/{REAL_ID}", "(no link)")

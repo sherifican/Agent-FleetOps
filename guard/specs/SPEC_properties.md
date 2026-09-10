@@ -23,7 +23,7 @@ must always give the same output.
         value: object    # the measured value (bool, int, or tuple of str) - for reporting
         detail: str      # human-readable; "" when ok is True
 
-    def extract(text: str, *, id_registry: frozenset[str] | None = None) -> dict[str, Property]
+    def extract(text: str, *, id_registry: frozenset[str] | None = None, kind: str = "leg") -> dict[str, Property]
 
 `extract` takes the artifact TEXT (not a path) so it is trivially testable and replayable.
 It returns a dict keyed by `Property.name`. It must NEVER raise on malformed input — a property that
@@ -38,7 +38,7 @@ Reads the given files and returns every distinct 11-char YouTube id found in the
 file is skipped silently (it is a registry, not an assertion). Ids are matched as a run of exactly 11
 chars from `[A-Za-z0-9_-]` that is bounded by a non-id char on both sides.
 
-    def extract_file(path: str, *, id_registry=None) -> dict[str, Property]
+    def extract_file(path: str, *, id_registry=None, kind: str = "leg") -> dict[str, Property]
 
 Thin convenience wrapper: read the file (utf-8, errors=replace) and call `extract`. On OSError return
 a single-entry dict `{"readable": Property("readable", False, None, str(err))}`.
@@ -105,6 +105,10 @@ the section they describe is absent (then `ok=False`).
     Reports, does not judge.
 
 12. `has_source_link` — the text contains at least one `youtu.be/` or `youtube.com/watch` URL.
+    **Judged only when `kind == "final"`.** For any other kind it returns `ok=True` with a detail
+    saying it was not judged, because the contract never asks a leg to echo the source URL back —
+    the brief gives it to them. Measured 2026-07-31, judging it everywhere fired on 36.7% of the
+    leg corpus: the "always fires" defect, as useless as one that never fires and worse for trust.
 
 ## Parsing notes (learned the hard way — follow these)
 
