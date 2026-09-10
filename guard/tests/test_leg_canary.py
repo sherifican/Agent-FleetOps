@@ -259,6 +259,40 @@ def test_real_legs_are_declared():
         assert l.argv and isinstance(l.argv, list)
 
 
+def test_local_bin_entry_is_expanded_not_literal(tmp_path, monkeypatch):
+    """This fix shipped INERT. PATH carried a literal "~/.local/bin", and exec performs no tilde
+    expansion, so the entry was a dead string: the remedy looked applied while cron still could
+    not find a leg binary. Reverting prepend_local_bin to the literal form must fail this test."""
+    import shutil
+    import subprocess as sp
+    from guard.leg_canary import prepend_local_bin
+
+    home = tmp_path / "home"
+    bindir = home / ".local" / "bin"
+    bindir.mkdir(parents=True)
+    stub = bindir / "canary-stub-leg"
+    stub.write_text("#!/bin/sh\necho STUB-OK\n")
+    stub.chmod(0o755)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    # control: the stub really is executable, so a later miss means lookup, not a bad fixture
+    assert sp.run([str(stub)], capture_output=True, text=True).stdout.strip() == "STUB-OK"
+
+    # control: without the remedy a minimal PATH cannot find it by name
+    env = {"PATH": str(empty)}
+    assert shutil.which("canary-stub-leg", path=env["PATH"]) is None
+
+    # the production preparation is what must make it resolvable
+    newpath = prepend_local_bin(env)
+    assert shutil.which("canary-stub-leg", path=newpath) is not None, (
+        "the local bin entry did not resolve: a literal ~ is not expanded by exec"
+    )
+    # and it must not discard what PATH already carried
+    assert newpath.endswith(str(empty))
+
+
 def test_accepted_token_is_absent_from_the_prompt():
     """The 2026-08-03 fix: the prompt used to contain the token it accepted, so a leg that
     echoed its prompt — or a wrapper that printed it on an error path — passed as ALIVE.

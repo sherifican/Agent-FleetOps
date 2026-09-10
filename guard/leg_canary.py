@@ -149,10 +149,24 @@ def _dry_runner(argv: list, prompt: str, timeout: int) -> tuple[int, str]:
     return 0, CANARY_TOKEN
 
 
+def prepend_local_bin(env=None) -> str:
+    """Put the account's own bin directory on PATH before any leg is looked up.
+
+    Cron's default PATH lacks it, and every fleet leg binary lives there — the canary's first
+    5 days logged only UNMEASURED [Errno 2] (cron-PATH class, second instance).
+
+    ⚠ The tilde MUST be expanded here. `exec` does no tilde expansion, so a literal "~/.local/bin"
+    entry is a dead string that silently contributes nothing: the remedy looks applied and is not.
+    That is how this fix shipped inert. `test_local_bin_entry_is_expanded_not_literal` pins it.
+    """
+    env = os.environ if env is None else env
+    local_bin = os.path.expanduser("~/.local/bin")
+    env["PATH"] = local_bin + os.pathsep + env.get("PATH", "")
+    return env["PATH"]
+
+
 def main(argv=None) -> int:
-    # Cron's default PATH lacks ~/.local/bin, where every fleet leg binary lives — the canary's
-    # first 5 days logged only UNMEASURED [Errno 2] (cron-PATH class, second instance).
-    os.environ["PATH"] = "~/.local/bin:" + os.environ.get("PATH", "")
+    prepend_local_bin()
     parser = argparse.ArgumentParser()
     parser.add_argument("--state", default="leg_canary_state.json")
     parser.add_argument("--legs")

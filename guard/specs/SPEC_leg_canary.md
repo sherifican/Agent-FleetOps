@@ -58,6 +58,7 @@ verdict.
     def probe(leg: Leg, *, runner=None) -> Probe
     def probe_all(legs=None, *, runner=None) -> list
     def load_state(path) -> dict
+    def read_state(path) -> tuple[dict, str]   # (state, "bootstrap" | "ok" | "corrupt")
     def save_state(path, state) -> None
     def stale(state, legs, *, now, max_age_hours=26) -> list
     def main(argv=None) -> int
