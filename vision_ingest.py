@@ -1009,6 +1009,7 @@ def archive(root):
         print("archive: destination escapes the configured mount — SKIP (companions stay on primary)"); return
     os.makedirs(dest, exist_ok=True)
     moved, corrupt = [], 0
+    manifest_copied = synthesis_copied = False
     for fp in sorted(glob.glob(f"{keeps}/*.jpg")):
         dst = f"{dest}/{os.path.basename(fp)}"
         if not _file_destination_ok(dst, mount):
@@ -1045,6 +1046,7 @@ def archive(root):
             print("archive: companions.json destination escapes the configured mount — SKIP copy")
         else:
             shutil.copy2(cp, cp_dest)
+            manifest_copied = True
     syn = glob.glob(f"{root}/vision/SYNTHESIS_*.md")
     if syn:
         # copy2 onto a DIRECTORY picks the leaf itself, so the effective destination — the file
@@ -1054,11 +1056,23 @@ def archive(root):
             print("archive: synthesis destination escapes the configured mount — SKIP copy")
         else:
             shutil.copy2(syn[0], syn_dest)           # self-contained archive on the backup drive
+            synthesis_copied = True
+    cleared = False
     try:
         os.rmdir(keeps)                                          # remove now-empty primary keeps dir
+        cleared = True
     except OSError:
         pass
-    print(f"archive: moved {len(moved)} companions → {dest} (verified); synthesis+manifest copied; primary keeps/ cleared")
+    # Each clause states what THIS run did. The previous line asserted all three unconditionally,
+    # so a refusal one line above was followed by a success report contradicting it.
+    parts = [f"archive: moved {len(moved)} companions → {dest} (verified)"]
+    if os.path.exists(cp):
+        parts.append("manifest copied" if manifest_copied else "manifest NOT copied — refused")
+    if syn:
+        parts.append("synthesis copied" if synthesis_copied else "synthesis NOT copied — refused")
+    parts.append("primary keeps/ cleared" if cleared
+                 else "primary keeps/ RETAINED — not everything was archived")
+    print("; ".join(parts))
 
 
 if __name__ == "__main__":

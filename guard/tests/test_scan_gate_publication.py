@@ -1524,9 +1524,15 @@ def test_a_new_report_inherits_a_default_acl_the_way_an_ordinary_file_does(tmp_p
         pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
 
     expected = _ordinary_create_mode(reports_dir)
-    assert expected != 0o666 & ~0o022, (
-        "CONTROL: the ACL must actually change what an ordinary create produces, or this arm "
-        f"cannot distinguish the umask formula from the correct one (got {expected:04o})")
+    # The control must compare against the REAL umask, not a hard-coded one. Written as 0o022 it
+    # passed under `umask 027` even with the broken formula restored — measured in review — because
+    # 0o666 & ~0o027 and the ACL answer are both 0640 there, so the arm could not fail.
+    mask = os.umask(0o022)
+    os.umask(mask)
+    if expected == 0o666 & ~mask:
+        pytest.skip(
+            f"under umask {mask:03o} the ACL answer and the umask formula are both {expected:04o}, "
+            "so this arm cannot distinguish them; the sibling ordinary-create arm still applies")
 
     proc = scan(tmp_path, driver, staging)
     assert proc.returncode == 0, "CONTROL: a clean run"
@@ -1570,5 +1576,200 @@ def test_a_refusal_report_keeps_the_mode_the_report_it_replaces_had(tmp_path: Pa
         assert stat.S_IMODE(rp.stat().st_mode) == 0o600, (
             f"the report was 0600 and the refusal left it {stat.S_IMODE(rp.stat().st_mode):04o}; "
             "replacing a private report with a refusal must not publish it more widely")
+    finally:
+        locked.chmod(0o755)
+
+
+# =============================================================================================
+# GROUP 18 — the mode probe must not collide with, or destroy, a file it did not create
+#
+# Round-3 adversarial review. GROUP 17's contract is read by creating a probe file in the report's
+# own directory and asking the filesystem what mode it got. The first implementation used a FIXED
+# name and unlinked that path unconditionally, which produces two defects measured here:
+#
+#   1. A file already at that name makes O_EXCL fail, so every later report silently falls back to
+#      a umask-derived mode — the exact answer GROUP 17 exists to stop being used.
+#   2. The unlink runs in a finally, so it DELETES that file even though this code did not create
+#      it. A tool whose entire purpose is refusing to write through things it does not own must not
+#      remove a stranger's file at a predictable path.
+#
+# The probe has to be uniquely named per attempt, and nothing may be unlinked that was not created
+# by the attempt doing the unlinking.
+# =============================================================================================
+
+
+def test_the_mode_probe_never_deletes_a_file_it_did_not_create(tmp_path: Path) -> None:
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "probe_victim")
+    reports_dir = tmp_path / "_reports"
+    reports_dir.mkdir()
+    victim = reports_dir / ".scan_report_mode_probe"
+    victim.write_text("SOMEONE ELSE FILE", encoding="utf-8")
+
+    module._report_mode(str(reports_dir / "scan_report.txt"), str(reports_dir))
+
+    assert victim.exists(), "the probe must not remove a file it did not create"
+    assert victim.read_text(encoding="utf-8") == "SOMEONE ELSE FILE", "and must not rewrite it"
+
+
+def test_a_file_at_the_probe_name_does_not_downgrade_the_mode_contract(tmp_path: Path) -> None:
+    """A leftover must not silently push every later report onto the fallback.
+
+    This arm NEEDS a default ACL. Without one the fallback and the correct answer are the same
+    number on this box, so the assertion holds whether or not the collision was routed around —
+    a test that cannot fail. The control below refuses to proceed until they actually differ.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    if shutil.which("setfacl") is None:
+        pytest.skip("setfacl is not installed; without an ACL this arm cannot distinguish the two")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "probe_collision")
+    reports_dir = tmp_path / "_reports"
+    reports_dir.mkdir()
+    applied = subprocess.run(["setfacl", "-d", "-m", "u::rw,g::r,o::-", str(reports_dir)],
+                             capture_output=True, text=True)
+    if applied.returncode != 0:
+        pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
+
+    expected = _ordinary_create_mode(reports_dir)
+    mask = os.umask(0o022)
+    os.umask(mask)
+    assert expected != 0o666 & ~mask, (
+        "CONTROL: the ACL must make the correct answer differ from the fallback, or this arm "
+        f"cannot tell them apart (both would be {expected:04o})")
+
+    (reports_dir / ".scan_report_mode_probe").write_text("in the way\n", encoding="utf-8")
+    got = module._report_mode(str(reports_dir / "scan_report.txt"), str(reports_dir))
+
+    assert got == expected, (
+        f"with a file at the probe name the contract returned {got:04o} instead of {expected:04o}; "
+        "a collision must be routed around, not answered with the fallback guess")
+
+
+def test_the_fallback_is_used_only_when_the_directory_cannot_be_probed(tmp_path: Path) -> None:
+    """The branch that was invisible: a deliberately wrong fallback passed the whole suite."""
+    if os.geteuid() == 0:
+        pytest.skip("root can write a directory with no write bit; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "probe_fallback")
+    reports_dir = tmp_path / "_reports"
+    reports_dir.mkdir()
+    reports_dir.chmod(0o500)
+    try:
+        try:
+            (reports_dir / ".writable_probe").write_text("x", encoding="utf-8")
+            pytest.skip("the OS does not enforce the directory write bit here; arm not measurable")
+        except OSError:
+            pass
+        got = module._report_mode(str(reports_dir / "scan_report.txt"), str(reports_dir))
+        mask = os.umask(0o022)
+        os.umask(mask)
+        assert got == 0o666 & ~mask, (
+            f"an unprobeable directory must fall back to the umask mode, got {got:04o}")
+    finally:
+        reports_dir.chmod(0o700)
+
+
+# =============================================================================================
+# GROUP 19 — equal mode bits do not mean equal access
+#
+# Round-3 adversarial review, F2. Preserving st_mode across the atomic replace looked like it
+# preserved the permission contract. It does not: POSIX ACLs live in an extended attribute, not in
+# the mode bits, so a report carrying a named ACL entry comes back with the DIRECTORY's default ACL
+# instead of its own — same four octal digits, different set of people who can read it.
+#
+# Measured in review: before `user::rw-; user:1000:r--; group::---; mask::r--`, after
+# `user::rw-; user:1000:r--; group::r--; mask::r--`, with the mode 0640 on both sides. The group
+# gained read access and nothing in the mode said so.
+# =============================================================================================
+
+ACL_XATTR = "system.posix_acl_access"
+
+
+def _acl(path: Path):
+    try:
+        return os.getxattr(str(path), ACL_XATTR)
+    except OSError:
+        return None
+
+
+def test_replacing_a_report_preserves_its_access_control_list(tmp_path: Path) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root ignores these checks; this needs an unprivileged writer")
+    if shutil.which("setfacl") is None:
+        pytest.skip("setfacl is not installed; the ACL contract cannot be measured here")
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0, "CONTROL: a clean run, so there is a report to replace"
+    rp = staging / REPORT_REL
+    reports_dir = staging / "_reports"
+
+    named = subprocess.run(["setfacl", "-m", f"u:{os.geteuid()}:r", "--", str(rp)],
+                           capture_output=True, text=True)
+    if named.returncode != 0:
+        pytest.skip(f"the filesystem refused an ACL entry: {named.stderr.strip()[:80]}")
+    subprocess.run(["setfacl", "-d", "-m", "u::rw,g::r,o::-", str(reports_dir)],
+                   capture_output=True, text=True)
+
+    before = _acl(rp)
+    assert before is not None, "CONTROL: the report really does carry an ACL to preserve"
+    before_mode = stat.S_IMODE(rp.stat().st_mode)
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0 and report(staging) == "scan_gate: CLEAN\n", "it rewrote the report"
+
+    assert stat.S_IMODE(rp.stat().st_mode) == before_mode, "the mode is preserved (it already was)"
+    assert _acl(rp) == before, (
+        "the mode bits match and the ACL does not: replacing a report must not change WHO can read "
+        "or write it, and an ACL is where that is actually written")
+
+
+def test_a_refusal_report_preserves_the_access_control_list_too(tmp_path: Path) -> None:
+    """The refusal writer has its own replace, and the arm above only covers the ordinary one.
+
+    Found by the hunk sweep: reverting the refusal writer's ACL call left the suite green. That is
+    the same gap that the mode contract had one round earlier, in the same pair of functions — the
+    ordinary path gets the arm and its sibling is assumed to follow.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores these checks; this needs an unprivileged writer")
+    if shutil.which("setfacl") is None:
+        pytest.skip("setfacl is not installed; the ACL contract cannot be measured here")
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0, "CONTROL: a clean run, so there is a report to replace"
+    rp = staging / REPORT_REL
+    named = subprocess.run(["setfacl", "-m", f"u:{os.geteuid()}:r", "--", str(rp)],
+                           capture_output=True, text=True)
+    if named.returncode != 0:
+        pytest.skip(f"the filesystem refused an ACL entry: {named.stderr.strip()[:80]}")
+    subprocess.run(["setfacl", "-d", "-m", "u::rw,g::r,o::-", str(staging / "_reports")],
+                   capture_output=True, text=True)
+    before = _acl(rp)
+    assert before is not None, "CONTROL: the report really does carry an ACL to preserve"
+
+    locked = staging / "locked"
+    write(locked / "inner.txt", "unreachable\n")
+    locked.chmod(0)
+    try:
+        try:
+            os.scandir(str(locked)).close()
+            pytest.skip("the OS does not enforce directory mode 000 here (root?); arm not measurable")
+        except PermissionError:
+            pass
+        proc = scan(tmp_path, driver, staging)
+        assert proc.returncode == 2, "CONTROL: an unreadable directory refuses the scan"
+        assert report(staging) is not None and "REFUSED" in report(staging), \
+            "CONTROL: the refusal writer actually replaced the report"
+        assert _acl(rp) == before, (
+            "replacing a report with a refusal must not change who can read it; the refusal is the "
+            "artifact a reader most needs and the one most likely to be read by someone else")
     finally:
         locked.chmod(0o755)

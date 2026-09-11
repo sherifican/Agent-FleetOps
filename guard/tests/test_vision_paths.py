@@ -270,3 +270,68 @@ def test_a_directory_whose_name_begins_with_two_dots_is_still_inside_the_mount()
             'a directory merely NAMED with two leading dots stays inside the mount'
         assert vi._contained(os.path.join(mount, os.pardir, 'elsewhere'), mount) is False, \
             'CONTROL: a real parent traversal is still an escape'
+
+
+def test_the_synthesis_copy_lands_at_its_own_leaf_inside_the_run_directory(monkeypatch, tmp_path):
+    """The leaf join, pinned on its own rather than by another arm's setup control.
+
+    A sweep that reverts each source hunk and requires something to go red scored this change
+    GUARDED, but the arm that went red was the CONTROL inside the refusal test — "the ordinary
+    archive stopped working" — not the property. A reviewer pointed out that those two look
+    identical from the outside, and only one of them is evidence about this change.
+
+    So this arm states the positive fact directly: the synthesis is copied to a file named for its
+    source, inside the run directory, and nothing is left at the bare directory path.
+    """
+    primary, image, mount = _staged(tmp_path, monkeypatch)
+    syn = primary / 'vision' / 'SYNTHESIS_run.md'
+    syn.write_text('the synthesis\n', encoding='utf-8')
+
+    vi.archive(str(primary))
+
+    run_dir = mount / 'archive' / 'source'
+    landed = run_dir / 'SYNTHESIS_run.md'
+    assert landed.is_file(), \
+        'the synthesis must be copied to a leaf named for its source, not left to copy2 to choose'
+    assert landed.read_text(encoding='utf-8') == 'the synthesis\n', 'and it must carry the bytes'
+    assert sorted(p.name for p in run_dir.iterdir()) == ['SYNTHESIS_run.md', 'companions'], \
+        'nothing else may appear in the run directory'
+
+
+def test_the_summary_does_not_claim_work_that_was_refused(monkeypatch, tmp_path, capsys):
+    """Round-3 review, F3: the closing line reports success the run did not achieve.
+
+    Every refusal added here prints its own warning and then falls through to one unconditional
+    summary that says the manifest was copied and the primary was cleared. A reader who sees the
+    last line sees a clean archive. An unconditional success message is the same defect class as a
+    guard that cannot fail: it carries no information, because it is printed either way.
+    """
+    primary, image, mount = _staged(tmp_path, monkeypatch)
+    (primary / 'vision' / 'companions.json').write_text('[{"tc": "00:00:01"}]', encoding='utf-8')
+    # A plain directory where the metadata leaf belongs: refused, with no symlink involved at all.
+    (mount / 'archive' / 'source' / 'companions.json').mkdir(parents=True, exist_ok=True)
+
+    vi.archive(str(primary))
+    out = capsys.readouterr().out
+
+    assert 'SKIP copy' in out, 'CONTROL: the metadata copy really was refused on this run'
+    assert not (mount / 'archive' / 'source' / 'companions.json').is_file(), \
+        'CONTROL: and no manifest file was produced'
+    assert 'manifest copied' not in out, \
+        'the summary must not report a manifest it refused to copy'
+
+
+def test_the_summary_does_not_claim_a_cleared_primary_while_an_image_remains(monkeypatch, tmp_path,
+                                                                            capsys):
+    """The same line also asserts the primary was cleared, on a run that deliberately kept it."""
+    primary, image, mount = _staged(tmp_path, monkeypatch, payload=b'the only copy')
+    trap = mount / 'archive' / 'source' / 'companions' / 'fixture.jpg'
+    trap.mkdir(parents=True, exist_ok=True)
+
+    vi.archive(str(primary))
+    out = capsys.readouterr().out
+
+    assert image.exists(), 'CONTROL: the image really was kept on the primary'
+    assert 'KEPT on primary' in out, 'CONTROL: and the run said so at the time'
+    assert 'primary keeps/ cleared' not in out, \
+        'the summary must not report a cleared primary while an image is still sitting in it'

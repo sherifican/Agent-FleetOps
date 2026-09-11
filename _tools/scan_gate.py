@@ -25,7 +25,7 @@ Coverage disclosure — the five surfaces:
 Mutation proof (--self-test): a planted fake API key and a planted identity string
 must each go red; a clean fixture must pass.
 """
-import sys, os, re, stat, subprocess, tempfile, shutil
+import sys, os, re, stat, binascii, subprocess, tempfile, shutil
 
 SECRET_PATTERNS = [
     ("anthropic-key",      re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
@@ -267,18 +267,48 @@ def _report_mode(report_path, reports_dir):
             return stat.S_IMODE(st.st_mode)
     except OSError:
         pass
-    probe = os.path.join(reports_dir, ".scan_report_mode_probe")
-    try:
-        fd = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
-        os.close(fd)
-        return stat.S_IMODE(os.stat(probe).st_mode)
-    except OSError:
-        return 0o666 & ~_current_umask()
-    finally:
+    # A FIXED probe name collides with any leftover, and a finally that unlinks it deletes a file
+    # this code did not create. Both are avoided by naming each attempt uniquely and unlinking only
+    # inside the branch that actually created something.
+    for _ in range(8):
+        probe = os.path.join(reports_dir, ".scan_report_mode_probe_%s" % binascii.hexlify(os.urandom(6)).decode())
         try:
-            os.unlink(probe)
+            fd = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+        except FileExistsError:
+            continue                      # astronomically unlikely; retry rather than guess
         except OSError:
-            pass
+            return 0o666 & ~_current_umask()
+        try:
+            os.close(fd)
+            return stat.S_IMODE(os.stat(probe).st_mode)
+        except OSError:
+            return 0o666 & ~_current_umask()
+        finally:
+            try:
+                os.unlink(probe)          # only ever the file this iteration created
+            except OSError:
+                pass
+    return 0o666 & ~_current_umask()
+
+def _copy_access_acl(src, dst):
+    """Carry the access ACL across an atomic replace.
+
+    st_mode is only part of the permission contract. A POSIX ACL lives in an extended attribute, so
+    a replace that preserves the mode can still change WHO may read the file, because the new inode
+    inherits the directory's default ACL rather than the one the old report carried. Copy it after
+    the chmod, since applying an access ACL also rewrites the mode bits it covers.
+
+    No ACL on the source, or no ACL support on the filesystem, is not an error: there is simply
+    nothing extra to preserve, and the chmod already said everything there is to say.
+    """
+    try:
+        acl = os.getxattr(src, "system.posix_acl_access")
+    except OSError:
+        return
+    try:
+        os.setxattr(dst, "system.posix_acl_access", acl)
+    except OSError:
+        pass
 
 def write_report(staging, hits):
     reports_dir = os.path.join(staging, "_reports")
@@ -306,6 +336,7 @@ def write_report(staging, hits):
         # mkstemp creates at 0600 and os.replace preserves it, which would hand a reader a report
         # they cannot open. The artifact lands on the mode contract for this path.
         os.chmod(tmp_path, _report_mode(report_path, reports_dir))
+        _copy_access_acl(report_path, tmp_path)
         os.replace(tmp_path, report_path)
     except BaseException:
         try:
@@ -344,6 +375,7 @@ def _write_refusal_report(staging, refusal):
                 f.write(f"scan_gate: REFUSED {reason_class}\n")
             # The refusal report is the one a reader needs most, so it gets the same contract.
             os.chmod(tmp_path, _report_mode(report_path, reports_dir))
+            _copy_access_acl(report_path, tmp_path)
             os.replace(tmp_path, report_path)
         except BaseException:
             try:
