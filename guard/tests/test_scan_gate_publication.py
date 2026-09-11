@@ -1178,7 +1178,7 @@ def test_self_test_accepts_regex_special_first_term(tmp_path: Path, sep: str) ->
 
 
 # =============================================================================================
-# GROUP 13 — a refusal must invalidate a stale CLEAN on EVERY refusal path, and never destroy anything
+# GROUP 14 — a refusal must invalidate a stale CLEAN on EVERY refusal path, and never destroy anything
 # =============================================================================================
 
 def test_a_refusal_never_truncates_a_linked_report_target(tmp_path: Path) -> None:
