@@ -45,3 +45,31 @@ def test_existing_guard_tests_phrasing():
     line = "pytest guard/tests/ -q — 309 tests"
     rel = "README.md"
     assert _claims_guard_suite(line, rel) == [309]
+
+_claims_tui_suite = mod._claims_tui_suite
+
+
+def test_the_tui_acceptance_claim_in_the_adoption_guide_is_seen():
+    """CONTROL: the phrasing the finder was written for is still recognised."""
+    line = "**VERIFY — expected output:** pytest exits `0`; this export's acceptance run reports `386 passed`."
+    assert _claims_tui_suite(line, "adopt/10_tui.md") == [386]
+
+
+def test_the_same_claim_in_the_verify_all_guide_is_also_seen():
+    """The top-level verify-all guide publishes the SAME measurement in different words.
+
+    The finder was scoped to one filename so that historical results would not be read as current
+    claims. adopt/90_verify_all.md is not a historical result: it is the guide a reader runs, and its
+    number IS a claim about the current suite. Scoped out, it drifted to a count the suite has not
+    reported for some time while the checker said every documented count matched its instrument — a
+    guard reporting clean about a surface it cannot see.
+    """
+    line = ("**VERIFY — expected output:** inventory checks exit `0`; "
+            "TUI pytest exits `0` and reports `386 passed` in this export")
+    assert _claims_tui_suite(line, "adopt/90_verify_all.md") == [386]
+
+
+def test_a_tui_count_in_an_unrelated_document_is_still_not_claimed():
+    """The scoping still has to mean something: an arbitrary file is not a current claim."""
+    line = "back in June the acceptance run reports `300 passed` and we moved on"
+    assert _claims_tui_suite(line, "docs/history/old_notes.md") == []

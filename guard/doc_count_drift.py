@@ -131,12 +131,14 @@ def _claims_bench_tags(line, rel):
 def _claims_tui_suite(line, rel):
     out = [int(m.group(1)) for m in
            re.finditer(r"(\d+)[- ]test hermetic suite", line, re.I)]
-    # The TUI adoption guide publishes a pytest result rather than a suite label.
-    # Scope this alternate phrasing to its acceptance assertion: historical results
-    # and other adoption guides need not describe the current TUI suite.
-    if rel == "adopt/10_tui.md" and "**VERIFY — expected output:**" in line:
+    # The adoption guides publish a pytest result rather than a suite label, and two of them
+    # publish the CURRENT acceptance result in different words. Scope the alternate phrasing to
+    # those guides' VERIFY assertion, so a historical result elsewhere in the tree is still not
+    # read as a claim about the current TUI suite.
+    if rel in ("adopt/10_tui.md", "adopt/90_verify_all.md") and \
+            "**VERIFY — expected output:**" in line:
         out.extend(int(m.group(1)) for m in
-                   re.finditer(r"acceptance run reports `(\d+) passed`", line, re.I))
+                   re.finditer(r"reports `(\d+) passed`", line, re.I))
     return out
 
 
