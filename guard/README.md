@@ -264,6 +264,17 @@ During export, this directory's own gates caught the exporter twice: a sanitizat
 contract surfaces cwd-relative and the `isabs()` unit gate refused it; the mutation harness refused
 its baseline in the corpus-less tree. Guards that police their own maintainers are the point.
 
+A third export defect escaped both of those gates and shipped. The de-identification pass that turns an
+absolute home path into `~` rewrote a PATH entry in `guard/leg_canary.py`, and `exec` performs no tilde
+expansion — so the published canary's cron-PATH remedy was a dead string from the first export commit until
+`074ca30`, while the origin copy, which kept the absolute path, was never affected. Nothing caught it; it was
+found a month later while the function was being rewritten for another reason. The two catches above are
+mistakes the gates could see in the tree in front of them; a rewrite that is correct as prose and wrong as a
+string handed to `exec` is the case they cannot, and the only thing that pins it now is a test written after
+the fact (`test_local_bin_entry_is_expanded_not_literal`). The lesson is narrower than "sanitise carefully":
+a path in code has semantics a path in prose does not, and the export step that makes one look like the
+other is itself a code change that needs its own test.
+
 The ref gate defaults to `refs/heads/main`; adopters publishing another branch can set `git config fleetops.publishRef refs/heads/release` before running `python3 _tools/ref_gate.py .`. Other local publishing refs still fail the gate.
 
 For the honesty stop hook on a host with `ps` and `pgrep`, copy `guard/honesty_gate.config.minimal.example.json` to `guard/honesty_gate.config.json`, then run `python3 guard/honesty_stop_gate.py --check-config`; this process-only example inherits the claim and subject defaults and avoids optional service/container binaries. Adapt the config to the subjects and probes actually used on your host.
