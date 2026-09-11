@@ -243,6 +243,24 @@ def write_report(staging, hits):
         for rel, i, cls, name, surface in hits:
             f.write(f"{cls}\t{name}\t{surface}\t{rel}:{i}\n")
 
+
+def _write_refusal_report(staging, refusal):
+    """Best-effort: if a report already exists, overwrite it with a single REFUSED line so a
+    stale CLEAN cannot survive beside an rc 2. Never raises; the original ScanRefused still
+    propagates. If no report exists, there is nothing to clear."""
+    report_path = os.path.join(staging, "_reports", "scan_report.txt")
+    if not os.path.isfile(report_path):
+        return
+    msg = str(refusal)
+    reason_class = msg.split(" ", 1)[0].rstrip(";:,.")
+    if not reason_class or not re.fullmatch(r"[a-z][a-z0-9\-]*", reason_class):
+        reason_class = "unclassified"
+    try:
+        with open(report_path, "w") as f:
+            f.write(f"scan_gate: REFUSED {reason_class}\n")
+    except (OSError, UnicodeError):
+        pass
+
 def self_test():
     tmp = tempfile.mkdtemp(prefix="scangate_selftest_")
     try:
@@ -294,7 +312,11 @@ def main():
     if len(sys.argv) > 2 or (len(sys.argv) > 1 and sys.argv[1].startswith("-")):
         raise ScanRefused("unsupported-arguments; usage: scan_gate.py [directory | --self-test]")
     staging = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    hits = scan(staging)
+    try:
+        hits = scan(staging)
+    except ScanRefused as refusal:
+        _write_refusal_report(staging, refusal)
+        raise
     try:
         write_report(staging, hits)
     except (OSError, UnicodeError):

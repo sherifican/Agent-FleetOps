@@ -809,8 +809,7 @@ REFUSAL_STALE_REASON = (
 @pytest.mark.parametrize("arm", [
     "clean-report", "dirty-report", "stale-overwritten", "report-excluded",
     "read-failure", "walk-failure", "report-write-failure",
-    pytest.param("refusal-clears-stale-clean",
-                 marks=pytest.mark.xfail(strict=True, reason=REFUSAL_STALE_REASON)),
+    "refusal-clears-stale-clean",   # was a strict xfail; REPAIRED 2026-09-11 — the arm is now a live gate
 ])
 def test_report_and_read_failure(tmp_path: Path, arm: str) -> None:
     """Broken behaviour: an unreadable file was silently skipped (``continue``) and the scan
