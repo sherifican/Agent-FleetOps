@@ -49,9 +49,12 @@ trap 'rm -rf "$TMP"' EXIT
 [ -s "$TMP/out.png" ] || { echo "render_banner: chrome produced no image" >&2; exit 2; }
 mv "$TMP/out.png" "$PNG"
 
-# Records WHICH svg this png was rendered from, so an edited svg with a stale png
-# is a detectable state rather than an invisible one.
-sha256sum "$SVG" | awk '{print $1}' > "$STAMP"
+# Records WHICH svg this png was rendered from AND which png came out, so neither an
+# edited svg with a stale png nor a swapped png under an untouched svg is invisible.
+{ printf 'svg %s\n' "$(sha256sum "$SVG" | awk '{print $1}')"
+  printf 'png %s\n' "$(sha256sum "$PNG" | awk '{print $1}')"; } > "$STAMP"
 
 echo "render_banner: wrote $PNG at $((VW*2))x$((VH*2)) from $SVG (transparent ground)"
-python3 guard/banner_render.py || true
+# The checker runs AFTER the png is already in place, so swallowing its verdict would
+# leave a bad banner in the tree behind a zero exit. Its status is the script's status.
+python3 guard/banner_render.py

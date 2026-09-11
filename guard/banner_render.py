@@ -191,27 +191,46 @@ def check(root=ROOT):
         lines.append(f"   geometry      : {w}x{h} = {SCALE}x the viewBox")
 
     with open(svg, "rb") as fh:
-        digest = hashlib.sha256(fh.read()).hexdigest()
+        svg_digest = hashlib.sha256(fh.read()).hexdigest()
+    with open(png, "rb") as fh:
+        png_digest = hashlib.sha256(fh.read()).hexdigest()
     # A missing stamp is a cannot-check, but returning here would let it MASK a
     # violation already found above — reporting "no stamp" while the corners are
     # visibly white. Both are carried, and the violations still get named.
+    #
+    # The stamp records BOTH digests, one per line, "svg <hex>" and "png <hex>".
+    # Recording only the SVG answered "which SVG was this stamp written for" while the
+    # report claimed the banner matched its source: a PNG swapped, re-rendered elsewhere,
+    # or altered in a way that still parses passed every check, because nothing ever
+    # hashed the image the check was vouching for.
     unmeasured = []
+    recorded = {}
     if not os.path.isfile(stamp):
         unmeasured.append("the render stamp is missing, so a stale PNG would look "
                           "identical to a current one")
         lines.append("   freshness     : no stamp — cannot tell which SVG this PNG came from")
-        recorded = None
     else:
         with open(stamp, encoding="utf-8") as fh:
-            recorded = fh.read().strip()
-    if recorded is None:
-        pass                      # already reported as a cannot-check above
-    elif recorded != digest:
-        bad.append("the PNG was rendered from a different banner.svg than the one "
-                   "in the tree — re-run docs/render_banner.sh")
-        lines.append("   freshness     : STALE (stamp does not match banner.svg)")
-    else:
-        lines.append("   freshness     : rendered from the current banner.svg")
+            for raw in fh.read().split("\n"):
+                parts = raw.split()
+                if len(parts) == 2:
+                    recorded[parts[0]] = parts[1]
+                elif len(parts) == 1 and parts[0]:
+                    recorded.setdefault("svg", parts[0])   # the old single-hash format
+        if recorded.get("svg") and recorded["svg"] != svg_digest:
+            bad.append("the PNG was rendered from a different banner.svg than the one "
+                       "in the tree — re-run docs/render_banner.sh")
+            lines.append("   freshness     : STALE (stamp does not match banner.svg)")
+        elif "png" not in recorded:
+            unmeasured.append("the stamp records no PNG digest, so it cannot vouch for the "
+                              "banner.png in the tree — re-run docs/render_banner.sh")
+            lines.append("   freshness     : stamp predates PNG identity — cannot verify banner.png")
+        elif recorded["png"] != png_digest:
+            bad.append("the banner.png in the tree is not the PNG this stamp vouches for "
+                       "— re-run docs/render_banner.sh")
+            lines.append("   freshness     : STALE (stamp does not match banner.png)")
+        else:
+            lines.append("   freshness     : rendered from the current banner.svg")
 
     detail = lines + [f"   -> {b}" for b in bad] + \
         [f"   -> UNMEASURED: {u}" for u in unmeasured]
@@ -268,14 +287,22 @@ def _selftest():
 
         with open(svg_p, "w", encoding="utf-8") as fh:
             fh.write(svg_body)
-        with open(stamp_p, "w", encoding="utf-8") as fh:
-            fh.write(_h.sha256(svg_body.encode()).hexdigest())
-
         W, H = 8, 4          # 2x the 4x2 viewBox
+
+        def stamp_now():
+            # The stamp vouches for BOTH files, so it is written from what is on disk
+            # rather than from what the fixture believes it wrote.
+            with open(svg_p, "rb") as fh:
+                sd = _h.sha256(fh.read()).hexdigest()
+            with open(png_p, "rb") as fh:
+                pd = _h.sha256(fh.read()).hexdigest()
+            with open(stamp_p, "w", encoding="utf-8") as fh:
+                fh.write("svg %s\npng %s\n" % (sd, pd))
 
         def write(pixels, colortype=6):
             with open(png_p, "wb") as fh:
                 fh.write(_png(W, H, pixels, colortype))
+            stamp_now()          # each case then measures ITS defect, not a stale stamp
 
         good = [solid] * (W * H)
         for i in (0, W - 1, W * (H - 1), W * H - 1):
@@ -305,13 +332,12 @@ def _selftest():
         os.remove(stamp_p)
         case("a missing stamp is UNMEASURED, not a pass", check(td)[0] == 2)
 
-        with open(stamp_p, "w", encoding="utf-8") as fh:
-            fh.write(_h.sha256(svg_body.encode()).hexdigest())
         wrong = [solid] * (W * H)
         for i in (0, W - 1, W * (H - 1), W * H - 1):
             wrong[i] = clear
         with open(png_p, "wb") as fh:
             fh.write(_png(W, H // 2, wrong[:W * (H // 2)]))
+        stamp_now()
         case("the wrong geometry goes red", check(td)[0] == 1)
 
         with open(png_p, "wb") as fh:
