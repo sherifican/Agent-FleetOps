@@ -235,6 +235,19 @@ def scan(staging: str):
                         hits.append((rel, i, "PERSONAL", name, "content"))
     return list(dict.fromkeys(hits))
 
+def _current_umask():
+    """Read the process umask without leaving it changed.
+
+    There is no getter, so the value must be set to read it and then restored. Between those two
+    calls the mask IS 0o022 process-wide, so a concurrent thread creating a file in that window
+    would get that mask instead of the real one. This tool is a single-threaded CLI and never
+    opens that window in practice; the honest statement is that the window is narrow, not absent.
+    Should this ever be imported into a threaded process, read the mask once at startup.
+    """
+    mask = os.umask(0o022)
+    os.umask(mask)
+    return mask
+
 def write_report(staging, hits):
     reports_dir = os.path.join(staging, "_reports")
     report_path = os.path.join(reports_dir, "scan_report.txt")
@@ -258,6 +271,9 @@ def write_report(staging, hits):
     try:
         with os.fdopen(fd, "w") as f:
             f.write(body)
+        # mkstemp creates at 0600 and os.replace preserves it, which would hand a reader a report
+        # they cannot open. The artifact lands exactly as an ordinary create would.
+        os.chmod(tmp_path, 0o666 & ~_current_umask())
         os.replace(tmp_path, report_path)
     except BaseException:
         try:
@@ -294,6 +310,8 @@ def _write_refusal_report(staging, refusal):
         try:
             with os.fdopen(fd, "w") as f:
                 f.write(f"scan_gate: REFUSED {reason_class}\n")
+            # The refusal report is the one a reader needs most, so it gets the same ordinary mode.
+            os.chmod(tmp_path, 0o666 & ~_current_umask())
             os.replace(tmp_path, report_path)
         except BaseException:
             try:

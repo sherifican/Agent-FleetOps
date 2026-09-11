@@ -958,7 +958,9 @@ def _contained(path, mount):
             return False
         mount_real = os.path.realpath(mount)
         rel = os.path.relpath(path, mount)
-        if rel.startswith(".."):
+        # A prefix test also rejects legitimate names like "..archive"; only a rel that IS the parent,
+        # or begins with a parent COMPONENT, is an escape.
+        if rel == os.pardir or rel.startswith(os.pardir + os.sep):
             return False
         parts = rel.split(os.sep)
         current = mount
@@ -1034,7 +1036,9 @@ def archive(root):
             shutil.copy2(cp, cp_dest)
     syn = glob.glob(f"{root}/vision/SYNTHESIS_*.md")
     if syn:
-        syn_dest = f"{BACKUP_ROOT}/{slug}/"
+        # copy2 onto a DIRECTORY picks the leaf itself, so the effective destination — the file
+        # actually written — is the one that must be checked, not the directory holding it.
+        syn_dest = os.path.join(f"{BACKUP_ROOT}/{slug}", os.path.basename(syn[0]))
         if not _contained(syn_dest, mount):
             print("archive: synthesis destination escapes the configured mount — SKIP copy")
         else:

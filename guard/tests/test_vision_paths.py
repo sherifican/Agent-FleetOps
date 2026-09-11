@@ -101,15 +101,61 @@ def test_archive_refuses_a_linked_companions_directory(monkeypatch, tmp_path):
 
 
 def test_archive_refuses_a_linked_image_destination(monkeypatch, tmp_path):
-    """A linked destination LEAF is the same hazard one level down: copy2 follows it."""
-    primary, image, mount = _staged(tmp_path, monkeypatch, payload=b'the only copy')
+    """A linked destination LEAF is the same hazard one level down: copy2 follows it.
+
+    The control arm runs first, for the same reason the directory arm carries one: without it every
+    assertion below is satisfied by an archive that does nothing at all, and a refusal that is really
+    a no-op reads exactly like a refusal that is really a check.
+    """
+    primary, image, mount = _staged(tmp_path, monkeypatch)
+    vi.archive(str(primary))
+    assert not image.exists(), 'CONTROL: an ordinary run archives and clears the primary'
+    landed = mount / 'archive' / 'source' / 'companions' / 'fixture.jpg'
+    assert landed.exists(), 'CONTROL: it landed'
+
+    # Same fixture again, but now the destination LEAF itself is a link onto someone else's file.
+    keeps = primary / 'vision' / 'keeps'
+    keeps.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(b'the only copy')
     victim = tmp_path / 'victim.bin'
     victim.write_bytes(b'SOMEONE ELSE FILE')
-    dest_dir = mount / 'archive' / 'source' / 'companions'
-    dest_dir.mkdir(parents=True)
-    (dest_dir / 'fixture.jpg').symlink_to(victim)
+    landed.unlink()
+    landed.symlink_to(victim)
 
     vi.archive(str(primary))
 
     assert victim.read_bytes() == b'SOMEONE ELSE FILE', 'a linked leaf must not be written through'
+    assert image.exists(), 'the primary must not be deleted when its destination was refused'
     assert image.read_bytes() == b'the only copy', 'and the primary must survive'
+
+
+def test_archive_refuses_a_linked_companions_json_destination(monkeypatch, tmp_path):
+    """The metadata copy is the fifth destination, and it had no arm of its own.
+
+    The source passes an explicit leaf here rather than a directory, so the same walk that catches a
+    linked image leaf catches this one. That is an argument from reading the code, and a guard nobody
+    exercises is a guard nobody knows the state of: the previous review round named this path and
+    there was nothing to point at. This arm points at it.
+    """
+    primary, image, mount = _staged(tmp_path, monkeypatch)
+    manifest = primary / 'vision' / 'companions.json'
+    manifest.write_text('[{"tc": "00:00:01"}]', encoding='utf-8')
+    vi.archive(str(primary))
+    assert not image.exists(), 'CONTROL: an ordinary run archives and clears the primary'
+    meta = mount / 'archive' / 'source' / 'companions.json'
+    assert meta.is_file(), 'CONTROL: the metadata copy landed as a real file'
+
+    # Same fixture again, with the metadata destination pointing at someone else's file.
+    keeps = primary / 'vision' / 'keeps'
+    keeps.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(b'the only copy')
+    manifest.write_text('[{"tc": "00:00:01"}]', encoding='utf-8')
+    victim = tmp_path / 'victim.json'
+    victim.write_text('{"someone else": true}', encoding='utf-8')
+    meta.unlink()
+    meta.symlink_to(victim)
+
+    vi.archive(str(primary))
+
+    assert victim.read_text(encoding='utf-8') == '{"someone else": true}', \
+        'the metadata copy must not be written through a linked destination'

@@ -217,19 +217,31 @@ def check(root=ROOT):
                     recorded[parts[0]] = parts[1]
                 elif len(parts) == 1 and parts[0]:
                     recorded.setdefault("svg", parts[0])   # the old single-hash format
-        if recorded.get("svg") and recorded["svg"] != svg_digest:
+        # Each half is a separate fact about a separate file, so each is checked and reported on
+        # its own. An if/elif chain let the first failure suppress the second, and let a stamp
+        # carrying only one digest report the OTHER file as verified when it had never been read.
+        verified = True
+        if "svg" not in recorded:
+            verified = False
+            unmeasured.append("the stamp records no SVG digest, so it cannot say which "
+                              "banner.svg this PNG came from — re-run docs/render_banner.sh")
+            lines.append("   svg identity  : stamp records no SVG digest — cannot verify banner.svg")
+        elif recorded["svg"] != svg_digest:
+            verified = False
             bad.append("the PNG was rendered from a different banner.svg than the one "
                        "in the tree — re-run docs/render_banner.sh")
-            lines.append("   freshness     : STALE (stamp does not match banner.svg)")
-        elif "png" not in recorded:
+            lines.append("   svg identity  : STALE (stamp does not match banner.svg)")
+        if "png" not in recorded:
+            verified = False
             unmeasured.append("the stamp records no PNG digest, so it cannot vouch for the "
                               "banner.png in the tree — re-run docs/render_banner.sh")
-            lines.append("   freshness     : stamp predates PNG identity — cannot verify banner.png")
+            lines.append("   png identity  : stamp predates PNG identity — cannot verify banner.png")
         elif recorded["png"] != png_digest:
+            verified = False
             bad.append("the banner.png in the tree is not the PNG this stamp vouches for "
                        "— re-run docs/render_banner.sh")
-            lines.append("   freshness     : STALE (stamp does not match banner.png)")
-        else:
+            lines.append("   png identity  : STALE (stamp does not match banner.png)")
+        if verified:
             lines.append("   freshness     : rendered from the current banner.svg")
 
     detail = lines + [f"   -> {b}" for b in bad] + \

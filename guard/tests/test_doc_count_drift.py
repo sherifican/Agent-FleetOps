@@ -70,6 +70,16 @@ def test_the_same_claim_in_the_verify_all_guide_is_also_seen():
 
 
 def test_a_tui_count_in_an_unrelated_document_is_still_not_claimed():
-    """The scoping still has to mean something: an arbitrary file is not a current claim."""
-    line = "back in June the acceptance run reports `300 passed` and we moved on"
-    assert _claims_tui_suite(line, "docs/history/old_notes.md") == []
+    """The scoping still has to mean something: an arbitrary file is not a current claim.
+
+    The first version of this arm used prose WITHOUT the VERIFY marker, so it returned [] whether or
+    not the filename scoping existed — it passed for the wrong reason and could not have failed if the
+    scoping were deleted. Adversarial review caught that. The text below is now byte-identical to the
+    allowed-path arm; only `rel` differs, so the filename restriction is the only thing under test.
+    """
+    line = ("**VERIFY — expected output:** inventory checks exit `0`; "
+            "TUI pytest exits `0` and reports `386 passed` in this export")
+    assert _claims_tui_suite(line, "adopt/90_verify_all.md") == [386], \
+        "CONTROL: the identical line IS claimed on an allowed path"
+    assert _claims_tui_suite(line, "docs/history/old_notes.md") == [], \
+        "the same text on an unrelated path must not be read as a current claim"

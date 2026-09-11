@@ -1379,3 +1379,57 @@ def test_clean_write_does_not_create_the_target_of_a_dangling_report_link(tmp_pa
     assert not target.exists(), "a dangling report link must not bring its target into existence"
     assert proc.returncode == 2, "a linked report path is a refusal, not a pass"
     assert "report-path-unsafe" in proc.stderr, "and the refusal names itself"
+
+
+# =============================================================================================
+# GROUP 16 — the atomic writer must not silently narrow who can READ the report
+#
+# Adversarial review, S1. GROUP 15 replaced open(...,"w") with mkstemp + os.replace. mkstemp
+# creates at 0600 by design and os.replace preserves the source mode, so the committed report
+# went from umask-normal (0644 on this box) to owner-only. The report is the artifact a human
+# or a later stage reads to see WHY publication was refused; a hardening pass that makes it
+# unreadable to everyone but the scanning uid has traded one silent failure for another.
+#
+# The expected mode is derived from the running umask rather than hard-coded, so the test
+# states the property (an ordinary file, readable like any other) and not one box's octal.
+# =============================================================================================
+
+
+def test_the_report_is_left_readable_like_an_ordinary_file(tmp_path: Path) -> None:
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0 and report(staging) == "scan_gate: CLEAN\n", "CONTROL: a clean run"
+
+    reference = tmp_path / "umask_reference.txt"
+    reference.write_text("what an ordinary create produces here\n", encoding="utf-8")
+    expected = stat.S_IMODE(reference.stat().st_mode)
+
+    actual = stat.S_IMODE((staging / REPORT_REL).stat().st_mode)
+    assert actual == expected, (
+        f"the committed report is mode {actual:04o} where an ordinary create gives {expected:04o}; "
+        "mkstemp's 0600 must not survive into the artifact a reader has to open")
+
+
+def test_a_refusal_report_is_readable_too(tmp_path: Path) -> None:
+    """The refusal path is the one a reader needs MOST, and it has its own mkstemp call."""
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+    (staging / "_reports").mkdir(parents=True, exist_ok=True)
+    (staging / "_reports" / "scan_report.txt").symlink_to(tmp_path / "elsewhere.txt")
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 2, "CONTROL: a linked report path is still a refusal"
+
+    reference = tmp_path / "umask_reference_refusal.txt"
+    reference.write_text("what an ordinary create produces here\n", encoding="utf-8")
+    expected = stat.S_IMODE(reference.stat().st_mode)
+
+    rp = staging / REPORT_REL
+    assert rp.is_file() and not rp.is_symlink(), "the refusal wrote a real report"
+    actual = stat.S_IMODE(rp.stat().st_mode)
+    assert actual == expected, (
+        f"the refusal report is mode {actual:04o} where an ordinary create gives {expected:04o}")

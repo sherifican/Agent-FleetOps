@@ -494,6 +494,8 @@ def test_a_partly_unknown_selection_does_not_pass_on_the_half_that_matched(tmp_p
 
     rc = main(["--state", str(tmp_path / "partial.json"), "--legs", "testleg,nosuchleg"])
 
+    assert calls == [], \
+        "the refusal must land BEFORE any runner, or the half that resolved was probed anyway"
     assert rc == 2, "a requested leg that does not exist is unmeasured, whatever the rest did"
 
 

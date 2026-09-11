@@ -13,7 +13,9 @@ import hashlib
 import importlib.util
 import os
 import pathlib
+import shutil
 import struct
+import subprocess
 import zlib
 
 MODULE_PATH = pathlib.Path(__file__).resolve().parent.parent / "banner_render.py"
@@ -140,3 +142,84 @@ def test_the_render_script_does_not_discard_the_checkers_verdict():
     for ln in checker_lines:
         assert "|| true" not in ln and "|| :" not in ln, (
             "the checker's verdict must reach the caller, not be discarded: " + ln.strip())
+
+
+def test_a_stamp_with_only_a_png_digest_does_not_pass(tmp_path):
+    """Adversarial review, B1: a PNG-only stamp bypassed SVG identity entirely.
+
+    The first version guarded the SVG comparison behind `recorded.get("svg")`, so a stamp carrying
+    only a matching PNG digest skipped the SVG check, fell through to a matching PNG, and reported
+    "rendered from the current banner.svg" — about an SVG it had never compared.
+    """
+    root = _trio(tmp_path)
+    png_digest = hashlib.sha256((root / "docs" / "banner.png").read_bytes()).hexdigest()
+    (root / "docs" / "banner.stamp").write_text("png %s\n" % png_digest, encoding="utf-8")
+    code, report = banner_render.check(str(root))
+    assert code == 2, ("a stamp that cannot identify the SVG is UNMEASURED", report)
+
+
+def test_both_halves_of_a_wrong_stamp_are_reported_not_just_the_first(tmp_path):
+    """Adversarial review, B2: an if/elif chain let one identity failure hide the other.
+
+    With both digests wrong the SVG branch fired and the PNG problem was never mentioned, so a reader
+    fixing the named problem would still be left with an unverified image.
+    """
+    root = _trio(tmp_path)
+    (root / "docs" / "banner.stamp").write_text(
+        "svg %s\npng %s\n" % ("0" * 64, "1" * 64), encoding="utf-8")
+    code, report = banner_render.check(str(root))
+    assert code != 0, report
+    blob = "\n".join(report)
+    assert "banner.svg" in blob and "banner.png" in blob, \
+        ("both identities must be named, not just the first to fail", report)
+
+
+def test_the_checkers_exit_status_really_becomes_the_scripts_exit_status(tmp_path):
+    """Adversarial review: the arm above greps the script's text, and text is not behaviour.
+
+    `|| true` is one way to discard a status. `set +e`, an `if` wrapper, or a trailing `exit 0`
+    are others, and every one of them passes a grep for `|| true`. So this arm runs the real
+    script and reads what the shell actually returns.
+
+    No headless browser is needed: the script takes CHROME from the environment, so a stub that
+    writes the bytes Chrome would write is enough to reach the final line. The checker is stubbed
+    to a known non-zero status, and the test asserts the script returns THAT status — not merely
+    that it is non-zero, so a script that failed earlier for an unrelated reason cannot pass.
+    """
+    repo = pathlib.Path(banner_render.__file__).resolve().parent.parent
+    sandbox = tmp_path / "tree"
+    (sandbox / "docs").mkdir(parents=True)
+    (sandbox / "guard").mkdir(parents=True)
+    shutil.copy2(repo / "docs" / "render_banner.sh", sandbox / "docs" / "render_banner.sh")
+    (sandbox / "docs" / "banner.svg").write_text(SVG_BODY, encoding="utf-8")
+
+    chrome = tmp_path / "fake_chrome.sh"
+    chrome.write_text(
+        '#!/usr/bin/env bash\n'
+        'for arg in "$@"; do\n'
+        '  case "$arg" in --screenshot=*) out="${arg#--screenshot=}" ;; esac\n'
+        'done\n'
+        '[ -n "$out" ] || exit 9\n'
+        'printf "not really a png but not empty either" > "$out"\n',
+        encoding="utf-8")
+    chrome.chmod(0o755)
+
+    checker = sandbox / "guard" / "banner_render.py"
+
+    def run_with_checker_exiting(status):
+        checker.write_text(f"import sys\nsys.exit({status})\n", encoding="utf-8")
+        return subprocess.run(["bash", "docs/render_banner.sh"], cwd=str(sandbox),
+                              env={**os.environ, "CHROME": str(chrome)},
+                              capture_output=True, text=True)
+
+    ok = run_with_checker_exiting(0)
+    assert ok.returncode == 0, (
+        "CONTROL: with a passing checker the script must succeed, or this fixture proves nothing "
+        f"about status propagation:\n{ok.stdout}\n{ok.stderr}")
+    assert (sandbox / "docs" / "banner.png").exists(), "CONTROL: the render step actually ran"
+
+    for status in (1, 2, 3):
+        red = run_with_checker_exiting(status)
+        assert red.returncode == status, (
+            f"the checker exited {status} and the script returned {red.returncode}; a swallowed "
+            f"verdict leaves a bad banner in the tree behind a clean exit:\n{red.stderr}")
