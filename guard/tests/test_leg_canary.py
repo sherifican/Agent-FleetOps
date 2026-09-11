@@ -395,3 +395,38 @@ def test_a_disabled_leg_beside_an_alive_one_exits_0_and_is_reported(tmp_path, mo
     out = capsys.readouterr().out
     assert rc == 0
     assert "DISABLED" in out and "reason on file" in out, "the disabled leg is reported on its own line with its reason"
+
+
+# --- a response FILE that exists but says nothing must not outrank the streams ---------------------------
+
+def _fake_wrapper(tmp_path, monkeypatch, body: str):
+    """Install a fake `grok-dispatch.sh` first on PATH. It receives (brief, response) like the real one."""
+    import os
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    fake = bin_dir / "grok-dispatch.sh"
+    fake.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
+
+
+@pytest.mark.parametrize("arm, body", [
+    ("empty-file",      ': > "$2"\necho "provider: usage limit reached" >&2\nexit 4\n'),
+    ("whitespace-file", 'printf "  \\n\\n" > "$2"\necho "provider: usage limit reached" >&2\nexit 4\n'),
+    ("absent-file",     'echo "provider: usage limit reached" >&2\nexit 4\n'),
+])
+def test_default_runner_falls_back_to_the_artifact_when_the_response_file_says_nothing(tmp_path, monkeypatch, arm, body):
+    """A wrapper that touches its response file and then refuses on stderr used to win with the blank
+    file: probe() saw '' and logged DEAD '<empty response>' while the cause sat on stderr."""
+    from guard.leg_canary import _default_runner
+    _fake_wrapper(tmp_path, monkeypatch, body)
+    rc, text = _default_runner(["grok-dispatch.sh"], "ignored", 10)
+    assert rc == 4, arm
+    assert "usage limit reached" in text and text.startswith("<stderr> "), f"[{arm}] the stderr artifact is the evidence"
+
+
+def test_default_runner_prefers_a_substantive_response_file_over_the_streams(tmp_path, monkeypatch):
+    from guard.leg_canary import _default_runner
+    _fake_wrapper(tmp_path, monkeypatch, 'echo "CANARY-42" > "$2"\necho "noise" >&2\nexit 0\n')
+    rc, text = _default_runner(["grok-dispatch.sh"], "ignored", 10)
+    assert rc == 0 and "CANARY-42" in text and "noise" not in text, "a response file with content is the artifact"

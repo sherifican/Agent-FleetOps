@@ -83,7 +83,8 @@ def _default_runner(argv: list, prompt: str, timeout: int) -> tuple[int, str]:
             response = Path(directory) / "response.txt"
             brief.write_text(prompt, encoding="utf-8")
             result = run([*argv, str(brief), str(response)])
-            text = response.read_text(encoding="utf-8") if response.exists() else _artifact(result)
+            file_text = response.read_text(encoding="utf-8") if response.exists() else ""
+            text = file_text if file_text.strip() else _artifact(result)
             return result.returncode, text
 
     result = run([*argv, prompt])
