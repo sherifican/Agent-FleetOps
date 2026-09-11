@@ -57,7 +57,7 @@ def _load_identity_terms():
             "   class it names: personal and account names; machine nicknames and short hostnames,\n"
             "   including any box alias used in benchmark or log annotations; LAN domain suffixes;\n"
             "   personal email local-parts.\n")
-        sys.exit(2)
+        raise ScanRefused("missing-identity-terms")
     terms = [t.strip() for t in open(p, encoding="utf8") if t.strip() and not t.startswith("#")]
     return terms
 
@@ -245,19 +245,38 @@ def write_report(staging, hits):
 
 
 def _write_refusal_report(staging, refusal):
-    """Best-effort: if a report already exists, overwrite it with a single REFUSED line so a
-    stale CLEAN cannot survive beside an rc 2. Never raises; the original ScanRefused still
-    propagates. If no report exists, there is nothing to clear."""
+    """Best-effort: overwrite any existing report with a single REFUSED line so a
+    stale CLEAN cannot survive beside an rc 2. Never raises; the original refusal still
+    propagates. Nothing is created when no report exists. Never writes through a
+    symlink: a link at the report path is unlinked first, then a regular file is
+    atomically placed via os.replace."""
     report_path = os.path.join(staging, "_reports", "scan_report.txt")
-    if not os.path.isfile(report_path):
-        return
-    msg = str(refusal)
-    reason_class = msg.split(" ", 1)[0].rstrip(";:,.")
-    if not reason_class or not re.fullmatch(r"[a-z][a-z0-9\-]*", reason_class):
-        reason_class = "unclassified"
+    if isinstance(refusal, (OSError, UnicodeError)):
+        reason_class = "input-error"
+    else:
+        msg = str(refusal)
+        reason_class = msg.split(" ", 1)[0].rstrip(";:,.")
+        if not reason_class or not re.fullmatch(r"[a-z][a-z0-9\-]*", reason_class):
+            reason_class = "unclassified"
     try:
-        with open(report_path, "w") as f:
-            f.write(f"scan_gate: REFUSED {reason_class}\n")
+        # Only an EXISTING report is replaced: a refusal with no prior report creates nothing
+        # (the tree's contract: no report for an unmeasured scan, nothing under a missing target).
+        if not os.path.lexists(report_path):
+            return
+        reports_dir = os.path.dirname(report_path)
+        if os.path.islink(report_path):
+            os.unlink(report_path)
+        fd, tmp_path = tempfile.mkstemp(dir=reports_dir, prefix=".scan_report_")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(f"scan_gate: REFUSED {reason_class}\n")
+            os.replace(tmp_path, report_path)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     except (OSError, UnicodeError):
         pass
 
@@ -314,7 +333,7 @@ def main():
     staging = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
         hits = scan(staging)
-    except ScanRefused as refusal:
+    except (ScanRefused, OSError, UnicodeError) as refusal:
         _write_refusal_report(staging, refusal)
         raise
     try:

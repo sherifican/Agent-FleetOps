@@ -826,7 +826,7 @@ def test_report_and_read_failure(tmp_path: Path, arm: str) -> None:
     enforcing the mode is checked first; if it does not, the arm is skipped with that reason).
     report-write-failure — REPAIRED (old tracebacks with rc 1): ``_reports`` existing as a
     FILE refuses with rc 2 and names ``report-write-error``.
-    refusal-clears-stale-clean — xfail(strict) RECORD: after a CLEAN run, a refusal (rc 2)
+    refusal-clears-stale-clean — formerly xfail(strict), now a LIVE arm (repaired 3a9b87a): after a CLEAN run, a refusal (rc 2)
     leaves the previous CLEAN report in place; the assertion that consumers cannot read a
     stale CLEAN beside an rc 2 fails on the candidate and is recorded as such.
 
@@ -921,7 +921,7 @@ def test_report_and_read_failure(tmp_path: Path, arm: str) -> None:
         assert "report-write-error" in proc.stderr, "REPAIRED: the refusal names the report write"
         return
 
-    # refusal-clears-stale-clean (xfail strict on the candidate)
+    # refusal-clears-stale-clean (was xfail strict; live since 3a9b87a)
     write(staging / "docs" / "readme.md", "nothing private here\n")
     proc = scan(tmp_path, driver, staging)
     assert proc.returncode == 0 and report(staging) == "scan_gate: CLEAN\n", "CONTROL: first run CLEAN"
@@ -1175,3 +1175,52 @@ def test_self_test_accepts_regex_special_first_term(tmp_path: Path, sep: str) ->
     assert "self-test: PASS" in proc.stdout and "mutations red" in proc.stdout, \
         f"REPAIRED[{sep}]: the self-test prints its PASS line naming the live arms"
     assert "self-test: FAIL" not in proc.stdout, f"REPAIRED[{sep}]: no FAIL verdict"
+
+
+# =============================================================================================
+# GROUP 12 — a refusal must invalidate a stale CLEAN on EVERY refusal path, and never destroy anything
+# =============================================================================================
+
+def test_a_refusal_never_truncates_a_linked_report_target(tmp_path: Path) -> None:
+    """Broken behaviour: the refusal writer opened the report path directly, so a report path that is a
+    SYMLINK had its target truncated on refusal — destructive, in the very broken-link scenario the
+    scanner refuses on.
+    CONTROL: first run CLEAN writes a real report. Then the report is replaced by a symlink to a victim
+    file and a broken link is planted; the second run refuses (rc 2), the victim keeps its bytes, and
+    the report path becomes a regular file carrying the refusal."""
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0 and report(staging) == "scan_gate: CLEAN\n", "CONTROL: first run CLEAN"
+    victim = write(tmp_path / "victim.txt", "precious bytes\n")
+    rp = staging / REPORT_REL
+    rp.unlink()
+    rp.symlink_to(victim)
+    (staging / "docs" / "ghost.txt").symlink_to(tmp_path / "nowhere")
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 2, "the second run still refuses"
+    assert victim.read_text(encoding="utf8") == "precious bytes\n", "REPAIRED: a linked target is never truncated"
+    assert not rp.is_symlink() and rp.is_file(), "REPAIRED: the report path is replaced by a regular file"
+    assert (report(staging) or "").startswith("scan_gate: REFUSED"), "and it carries the refusal"
+
+
+@pytest.mark.parametrize("arm", ["missing-policy", "undecodable-policy"])
+def test_a_policy_input_refusal_after_a_clean_run_invalidates_the_stale_report(tmp_path: Path, arm: str) -> None:
+    """Broken behaviour: the identity-terms refusal exited before the handler, so a previous CLEAN survived
+    it; an undecodable terms file took the module-level OSError/UnicodeError path with the same effect.
+    CONTROL: first run CLEAN. Then the policy input is removed / made undecodable; the second run exits 2
+    and the report no longer reads CLEAN."""
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0 and report(staging) == "scan_gate: CLEAN\n", "CONTROL: first run CLEAN"
+    terms = driver.parent / "identity_terms.txt"
+    if arm == "missing-policy":
+        terms.unlink()
+    else:
+        write(terms, b"\xff\xfe\x00 not utf8\n")
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 2, f"REPAIRED[{arm}]: a policy-input refusal still exits 2"
+    assert report(staging) != "scan_gate: CLEAN\n", f"REPAIRED[{arm}]: a stale CLEAN must not survive a policy-input refusal"
