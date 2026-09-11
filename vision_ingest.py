@@ -941,6 +941,39 @@ BACKUP_ROOT = _configured_path("VI_BACKUP_ROOT")
 BACKUP_MOUNT = _configured_path("VI_BACKUP_MOUNT")
 
 
+def _contained(path, mount):
+    """True when path may be created or written inside the configured backup mount.
+
+    The root is already checked once with realpath + commonpath, but every destination is built by
+    APPENDING to it, and an appended component can be a link off the drive. A copy through such a link
+    still hash-verifies, because the read-back follows the same link the write did, and the primary is
+    then deleted: the only copy leaves the machine's backup while the log says "verified".
+
+    So this walks every component from the mount down, not just the leaf — the demonstrated escape was
+    a directory in the middle — and refuses a symlink or a real location outside the mount. It answers
+    False rather than raising, so a caller can skip one destination without aborting the run.
+    """
+    try:
+        if os.path.islink(path):
+            return False
+        mount_real = os.path.realpath(mount)
+        rel = os.path.relpath(path, mount)
+        if rel.startswith(".."):
+            return False
+        parts = rel.split(os.sep)
+        current = mount
+        for part in parts:
+            current = os.path.join(current, part)
+            if os.path.islink(current):
+                return False
+            real = os.path.realpath(current)
+            if os.path.commonpath([mount_real, real]) != mount_real:
+                return False
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def archive(root):
     """Move the SAVED companion images to the BACKUP drive so the primary stays lean (owner 2026-07-15).
     Copy → verify (size match) → delete the primary copy. Leaves companions.json annotated with backup paths +
@@ -954,11 +987,21 @@ def archive(root):
     if not os.path.ismount(mount):
         print("archive: configured backup mount NOT mounted — SKIP (companions stay on primary)"); return
     slug = os.path.basename(root.rstrip("/"))
-    dest = f"{BACKUP_ROOT}/{slug}/companions"
+    run_dir = f"{BACKUP_ROOT}/{slug}"
+    if not _contained(run_dir, mount):
+        print("archive: destination escapes the configured mount — SKIP (companions stay on primary)"); return
+    os.makedirs(run_dir, exist_ok=True)
+    dest = f"{run_dir}/companions"
+    if not _contained(dest, mount):
+        print("archive: destination escapes the configured mount — SKIP (companions stay on primary)"); return
     os.makedirs(dest, exist_ok=True)
     moved, corrupt = [], 0
     for fp in sorted(glob.glob(f"{keeps}/*.jpg")):
         dst = f"{dest}/{os.path.basename(fp)}"
+        if not _contained(dst, mount):
+            corrupt += 1
+            print(f"archive: ⚠ destination escapes the configured mount for {os.path.basename(fp)} — KEPT on primary")
+            continue
         src_h = hashlib.sha256(open(fp, "rb").read()).hexdigest()
         shutil.copy2(fp, dst)
         # HASH-verify the READ-BACK — the original backup enclosure SILENTLY corrupted data
@@ -984,10 +1027,18 @@ def archive(root):
                 if c["tc"].replace(":", "m") in os.path.basename(m):
                     c["backup_path"] = m
         json.dump(comp, open(cp, "w"), indent=1)
-        shutil.copy2(cp, f"{BACKUP_ROOT}/{slug}/companions.json")
+        cp_dest = f"{BACKUP_ROOT}/{slug}/companions.json"
+        if not _contained(cp_dest, mount):
+            print("archive: companions.json destination escapes the configured mount — SKIP copy")
+        else:
+            shutil.copy2(cp, cp_dest)
     syn = glob.glob(f"{root}/vision/SYNTHESIS_*.md")
     if syn:
-        shutil.copy2(syn[0], f"{BACKUP_ROOT}/{slug}/")           # self-contained archive on the backup drive
+        syn_dest = f"{BACKUP_ROOT}/{slug}/"
+        if not _contained(syn_dest, mount):
+            print("archive: synthesis destination escapes the configured mount — SKIP copy")
+        else:
+            shutil.copy2(syn[0], syn_dest)           # self-contained archive on the backup drive
     try:
         os.rmdir(keeps)                                          # remove now-empty primary keeps dir
     except OSError:
