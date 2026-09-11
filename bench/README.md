@@ -34,6 +34,14 @@ bar. This is an honestly bounded operating log, not a benchmark.
 
 Three further constraints worth naming:
 
+- **Runtime versions are not pinned per row.** `local_model_throughput.csv` carries a `serving_stack` column and
+  no runtime version: of its 67 rows, roughly a third are ollama-family (`ollama`, `ollama-cuda`, `ollama-vulkan`),
+  a third are `llama.cpp` or `llama-server`, and the rest carry no stack at all. The `ollama 0.33.2` statement
+  belongs to the 2026-09-06 power study (`power_undervolt.csv` names it on every row) and to nothing else here.
+  Upstream ollama 0.33.3 changed two things that bear on these numbers — GGUF-model-defined default sampler
+  parameters are now honoured below Modelfile and request options, and llama.cpp was bumped — so a row measured
+  after an upgrade is not comparable to one measured before it unless its runtime is recorded. New rows record
+  the server's reported version; old rows are not back-filled with a guess.
 - **Mixed serving stacks and boxes.** `ollama`, `llama.cpp`, and `llama-server` are not interchangeable
   experimental conditions. Cross-box charts state box/device and sample size so the difference stays visible.
 - **Published cell values.** For a model measured once, that value is labelled `n=1`; two-rep paired
