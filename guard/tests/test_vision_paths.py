@@ -1,5 +1,6 @@
 """Archive configuration must refuse before touching primary files."""
 import importlib
+import os
 from unittest.mock import Mock
 
 import pytest
@@ -159,3 +160,113 @@ def test_archive_refuses_a_linked_companions_json_destination(monkeypatch, tmp_p
 
     assert victim.read_text(encoding='utf-8') == '{"someone else": true}', \
         'the metadata copy must not be written through a linked destination'
+
+
+def test_archive_refuses_a_linked_synthesis_destination(monkeypatch, tmp_path):
+    """The round-1 blocker itself, which the repair shipped WITHOUT an arm of its own.
+
+    A reviewer demonstrated the gap by reverting the one-line join back to the directory form and
+    running the suite: it stayed green, so the headline fix of that commit was pinned by nothing.
+    That is precisely the state the same commit message calls out as unacceptable for the metadata
+    path, which makes leaving it here indefensible rather than merely untidy.
+
+    The defect is that shutil.copy2 accepts a DIRECTORY and chooses the leaf itself from the
+    source's basename, so checking the directory says nothing about the file that gets written.
+    This arm plants the link on that leaf.
+    """
+    primary, image, mount = _staged(tmp_path, monkeypatch)
+    syn = primary / 'vision' / 'SYNTHESIS_run.md'
+    syn.write_text('the synthesis\n', encoding='utf-8')
+    vi.archive(str(primary))
+    assert not image.exists(), 'CONTROL: an ordinary run archives and clears the primary'
+    landed = mount / 'archive' / 'source' / 'SYNTHESIS_run.md'
+    assert landed.is_file() and landed.read_text(encoding='utf-8') == 'the synthesis\n', \
+        'CONTROL: the synthesis copy landed as a real file, so the leaf path is the one under test'
+
+    # Same fixture again, with the synthesis LEAF replaced by a link onto someone else's file.
+    keeps = primary / 'vision' / 'keeps'
+    keeps.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(b'the only copy')
+    syn.write_text('a second synthesis\n', encoding='utf-8')
+    victim = tmp_path / 'victim.md'
+    victim.write_text('SOMEONE ELSE FILE', encoding='utf-8')
+    landed.unlink()
+    landed.symlink_to(victim)
+
+    vi.archive(str(primary))
+
+    assert victim.read_text(encoding='utf-8') == 'SOMEONE ELSE FILE', \
+        'the synthesis copy must not be written through a linked destination leaf'
+
+
+def test_a_directory_named_like_the_file_is_not_a_usable_destination(monkeypatch, tmp_path):
+    """Round-2 review, F1: checking the leaf is not enough while copy2 can reinterpret it.
+
+    shutil.copy2 appends the source basename to ANY existing directory it is handed. Naming the leaf
+    explicitly moved the problem one level down instead of removing it: if a DIRECTORY sits at the
+    checked leaf path, copy2 appends the basename again and writes inside it, following a symlink
+    there that containment never visited.
+
+    This is a REGRESSION the leaf fix introduced, not a pre-existing hole. Before it, the same state
+    raised IsADirectoryError and the victim survived; after it, the copy returned normally and the
+    victim outside the mount held the payload. Measured on both revisions.
+    """
+    primary, image, mount = _staged(tmp_path, monkeypatch)
+    syn = primary / 'vision' / 'SYNTHESIS_notes.md'
+    syn.write_text('SYNTHESIS PAYLOAD', encoding='utf-8')
+    (primary / 'vision' / 'companions.json').write_text('[{"tc": "00:00:01"}]', encoding='utf-8')
+
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    victims = {}
+    for name in ('SYNTHESIS_notes.md', 'companions.json'):
+        victim = outside / f'victim_{name}'
+        victim.write_text('ORIGINAL', encoding='utf-8')
+        victims[name] = victim
+        trap = mount / 'archive' / 'source' / name
+        trap.mkdir(parents=True, exist_ok=True)
+        (trap / name).symlink_to(victim)
+
+    vi.archive(str(primary))
+
+    for name, victim in victims.items():
+        assert victim.read_text(encoding='utf-8') == 'ORIGINAL', (
+            f'a directory standing where the {name} leaf belongs must be refused, not treated as a '
+            'destination whose children copy2 may pick')
+    assert syn.read_text(encoding='utf-8') == 'SYNTHESIS PAYLOAD', 'the primary synthesis survives'
+
+
+def test_a_directory_standing_in_for_an_image_leaf_is_refused(monkeypatch, tmp_path):
+    """Same mechanism on the per-image copy, which has its own loop and its own read-back."""
+    primary, image, mount = _staged(tmp_path, monkeypatch, payload=b'the only copy')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    victim = outside / 'victim.jpg'
+    victim.write_bytes(b'ORIGINAL')
+    trap = mount / 'archive' / 'source' / 'companions' / 'fixture.jpg'
+    trap.mkdir(parents=True, exist_ok=True)
+    (trap / 'fixture.jpg').symlink_to(victim)
+
+    vi.archive(str(primary))
+
+    assert victim.read_bytes() == b'ORIGINAL', 'no image may be written through a linked child'
+    assert image.exists() and image.read_bytes() == b'the only copy', \
+        'and a refused destination must never cost the primary'
+
+
+def test_a_directory_whose_name_begins_with_two_dots_is_still_inside_the_mount():
+    """The `..archive` correction, which shipped with no arm of its own.
+
+    A reviewer demonstrated the gap by reverting the fix to the old string-prefix form and running
+    the suite: it stayed green. A prefix test reads a legitimate name like "..archive" as a parent
+    traversal and silently refuses a real backup layout.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        mount = os.path.join(td, 'mount')
+        inside = os.path.join(mount, '..archive', 'run')
+        os.makedirs(inside)
+        assert vi._contained(inside, mount) is True, \
+            'a directory merely NAMED with two leading dots stays inside the mount'
+        assert vi._contained(os.path.join(mount, os.pardir, 'elsewhere'), mount) is False, \
+            'CONTROL: a real parent traversal is still an escape'

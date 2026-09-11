@@ -25,7 +25,7 @@ Coverage disclosure — the five surfaces:
 Mutation proof (--self-test): a planted fake API key and a planted identity string
 must each go red; a clean fixture must pass.
 """
-import sys, os, re, subprocess, tempfile, shutil
+import sys, os, re, stat, subprocess, tempfile, shutil
 
 SECRET_PATTERNS = [
     ("anthropic-key",      re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
@@ -248,6 +248,38 @@ def _current_umask():
     os.umask(mask)
     return mask
 
+def _report_mode(report_path, reports_dir):
+    """The mode the committed report must land with.
+
+    mkstemp creates at 0600 and os.replace preserves the source mode, so the temporary file's mode
+    becomes the artifact's mode unless it is set deliberately. What to set it TO is a contract, not
+    a constant. Replacing an existing report must not change who can read or write it, so that
+    file's current mode wins. For a NEW report the answer is whatever an ordinary create in this
+    same directory produces — asking the filesystem rather than computing from the umask is what
+    makes a default ACL inherit correctly, since a umask formula cannot see one.
+
+    The umask formula remains only as the fallback for when the probe itself cannot be created,
+    which is the same condition under which mkstemp would already have failed.
+    """
+    try:
+        st = os.lstat(report_path)
+        if stat.S_ISREG(st.st_mode):
+            return stat.S_IMODE(st.st_mode)
+    except OSError:
+        pass
+    probe = os.path.join(reports_dir, ".scan_report_mode_probe")
+    try:
+        fd = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+        os.close(fd)
+        return stat.S_IMODE(os.stat(probe).st_mode)
+    except OSError:
+        return 0o666 & ~_current_umask()
+    finally:
+        try:
+            os.unlink(probe)
+        except OSError:
+            pass
+
 def write_report(staging, hits):
     reports_dir = os.path.join(staging, "_reports")
     report_path = os.path.join(reports_dir, "scan_report.txt")
@@ -272,8 +304,8 @@ def write_report(staging, hits):
         with os.fdopen(fd, "w") as f:
             f.write(body)
         # mkstemp creates at 0600 and os.replace preserves it, which would hand a reader a report
-        # they cannot open. The artifact lands exactly as an ordinary create would.
-        os.chmod(tmp_path, 0o666 & ~_current_umask())
+        # they cannot open. The artifact lands on the mode contract for this path.
+        os.chmod(tmp_path, _report_mode(report_path, reports_dir))
         os.replace(tmp_path, report_path)
     except BaseException:
         try:
@@ -310,8 +342,8 @@ def _write_refusal_report(staging, refusal):
         try:
             with os.fdopen(fd, "w") as f:
                 f.write(f"scan_gate: REFUSED {reason_class}\n")
-            # The refusal report is the one a reader needs most, so it gets the same ordinary mode.
-            os.chmod(tmp_path, 0o666 & ~_current_umask())
+            # The refusal report is the one a reader needs most, so it gets the same contract.
+            os.chmod(tmp_path, _report_mode(report_path, reports_dir))
             os.replace(tmp_path, report_path)
         except BaseException:
             try:

@@ -976,6 +976,17 @@ def _contained(path, mount):
         return False
 
 
+def _file_destination_ok(path, mount):
+    """A destination a FILE may be copied to: inside the mount, AND not an object copy2 would
+    reinterpret. shutil.copy2 appends the source basename to any existing DIRECTORY it is handed,
+    so a directory standing at the checked leaf moves the write one level down, past every check
+    that was just performed on the leaf itself.
+    """
+    if not _contained(path, mount):
+        return False
+    return not (os.path.lexists(path) and not os.path.isfile(path))
+
+
 def archive(root):
     """Move the SAVED companion images to the BACKUP drive so the primary stays lean (owner 2026-07-15).
     Copy → verify (size match) → delete the primary copy. Leaves companions.json annotated with backup paths +
@@ -1000,7 +1011,7 @@ def archive(root):
     moved, corrupt = [], 0
     for fp in sorted(glob.glob(f"{keeps}/*.jpg")):
         dst = f"{dest}/{os.path.basename(fp)}"
-        if not _contained(dst, mount):
+        if not _file_destination_ok(dst, mount):
             corrupt += 1
             print(f"archive: ⚠ destination escapes the configured mount for {os.path.basename(fp)} — KEPT on primary")
             continue
@@ -1030,7 +1041,7 @@ def archive(root):
                     c["backup_path"] = m
         json.dump(comp, open(cp, "w"), indent=1)
         cp_dest = f"{BACKUP_ROOT}/{slug}/companions.json"
-        if not _contained(cp_dest, mount):
+        if not _file_destination_ok(cp_dest, mount):
             print("archive: companions.json destination escapes the configured mount — SKIP copy")
         else:
             shutil.copy2(cp, cp_dest)
@@ -1039,7 +1050,7 @@ def archive(root):
         # copy2 onto a DIRECTORY picks the leaf itself, so the effective destination — the file
         # actually written — is the one that must be checked, not the directory holding it.
         syn_dest = os.path.join(f"{BACKUP_ROOT}/{slug}", os.path.basename(syn[0]))
-        if not _contained(syn_dest, mount):
+        if not _file_destination_ok(syn_dest, mount):
             print("archive: synthesis destination escapes the configured mount — SKIP copy")
         else:
             shutil.copy2(syn[0], syn_dest)           # self-contained archive on the backup drive

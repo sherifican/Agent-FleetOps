@@ -1403,9 +1403,13 @@ def test_the_report_is_left_readable_like_an_ordinary_file(tmp_path: Path) -> No
     proc = scan(tmp_path, driver, staging)
     assert proc.returncode == 0 and report(staging) == "scan_gate: CLEAN\n", "CONTROL: a clean run"
 
-    reference = tmp_path / "umask_reference.txt"
+    # The reference is created in the REPORT'S OWN directory, not just somewhere with the same
+    # umask: a default ACL on that directory changes what an ordinary create produces there, and a
+    # reference taken elsewhere would agree with a umask formula and miss it.
+    reference = staging / "_reports" / "umask_reference.txt"
     reference.write_text("what an ordinary create produces here\n", encoding="utf-8")
     expected = stat.S_IMODE(reference.stat().st_mode)
+    reference.unlink()
 
     actual = stat.S_IMODE((staging / REPORT_REL).stat().st_mode)
     assert actual == expected, (
@@ -1424,12 +1428,147 @@ def test_a_refusal_report_is_readable_too(tmp_path: Path) -> None:
     proc = scan(tmp_path, driver, staging)
     assert proc.returncode == 2, "CONTROL: a linked report path is still a refusal"
 
-    reference = tmp_path / "umask_reference_refusal.txt"
+    reference = staging / "_reports" / "umask_reference_refusal.txt"
     reference.write_text("what an ordinary create produces here\n", encoding="utf-8")
     expected = stat.S_IMODE(reference.stat().st_mode)
+    reference.unlink()
 
     rp = staging / REPORT_REL
     assert rp.is_file() and not rp.is_symlink(), "the refusal wrote a real report"
     actual = stat.S_IMODE(rp.stat().st_mode)
     assert actual == expected, (
         f"the refusal report is mode {actual:04o} where an ordinary create gives {expected:04o}")
+
+
+# =============================================================================================
+# GROUP 17 — the report's mode is a CONTRACT, and forcing a umask-derived one overrides it
+#
+# Round-2 adversarial review, F2. GROUP 16 fixed mkstemp's 0600 by forcing 0o666 & ~umask. That
+# overcorrected in three measured ways: an existing PRIVATE report (0600) was widened, an existing
+# group-writable report (0660) lost group write, and in a directory carrying a default ACL the
+# report no longer matched what an ordinary create there produces.
+#
+# The property is not "some particular octal". It is: replacing a report must not change who could
+# read or write it, and creating one must land exactly where an ordinary create in that same
+# directory lands — which is the only way to inherit a default ACL without knowing it exists.
+# =============================================================================================
+
+
+def _mode(p: Path) -> int:
+    return stat.S_IMODE(p.stat().st_mode)
+
+
+def _ordinary_create_mode(directory: Path, name: str = ".ordinary_probe") -> int:
+    """What a plain create in THIS directory produces — umask and default ACL included."""
+    probe = directory / name
+    probe.write_text("probe\n", encoding="utf-8")
+    try:
+        return _mode(probe)
+    finally:
+        probe.unlink()
+
+
+@pytest.mark.parametrize("preset", [0o600, 0o660, 0o640])
+def test_replacing_a_report_preserves_the_mode_it_already_had(tmp_path: Path, preset: int) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0, "CONTROL: a clean run, so a report exists to replace"
+    rp = staging / REPORT_REL
+    rp.chmod(preset)
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0 and report(staging) == "scan_gate: CLEAN\n", "it rewrote the report"
+    assert _mode(rp) == preset, (
+        f"the report was {preset:04o} and is now {_mode(rp):04o}; replacing a file must not change "
+        "who can read or write it — widening a private report and narrowing a shared one are both "
+        "silent policy changes")
+
+
+def test_a_new_report_lands_where_an_ordinary_create_in_that_directory_lands(tmp_path: Path) -> None:
+    """Covers the default-ACL case without needing to know whether one is present."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    expected = _ordinary_create_mode(reports_dir)
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0, "CONTROL: a clean run"
+    assert _mode(staging / REPORT_REL) == expected, (
+        f"a new report is {_mode(staging / REPORT_REL):04o} where an ordinary create in the same "
+        f"directory gives {expected:04o}")
+
+
+def test_a_new_report_inherits_a_default_acl_the_way_an_ordinary_file_does(tmp_path: Path) -> None:
+    """The measurement that made the umask formula insufficient, run against a real default ACL."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    if shutil.which("setfacl") is None:
+        pytest.skip("setfacl is not installed; the default-ACL contract cannot be measured here")
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    applied = subprocess.run(["setfacl", "-d", "-m", "u::rw,g::r,o::-", str(reports_dir)],
+                             capture_output=True, text=True)
+    if applied.returncode != 0:
+        pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
+
+    expected = _ordinary_create_mode(reports_dir)
+    assert expected != 0o666 & ~0o022, (
+        "CONTROL: the ACL must actually change what an ordinary create produces, or this arm "
+        f"cannot distinguish the umask formula from the correct one (got {expected:04o})")
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0, "CONTROL: a clean run"
+    assert _mode(staging / REPORT_REL) == expected, (
+        f"the report is {_mode(staging / REPORT_REL):04o} where an ordinary create under this "
+        f"default ACL gives {expected:04o}; a umask-derived mode cannot see the ACL")
+
+
+def test_a_refusal_report_keeps_the_mode_the_report_it_replaces_had(tmp_path: Path) -> None:
+    """The refusal writer has its OWN chmod call, and the arms above only exercise the ordinary one.
+
+    Found by reverting each source hunk in turn and requiring something to go red: this one stayed
+    green, which means the refusal path's mode contract was shipped with nothing holding it. The
+    refusal report is the artifact a reader opens to find out why publication stopped, so its
+    permissions matter at least as much as the clean one's.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0, "CONTROL: a clean run, so there is a report to replace"
+    rp = staging / REPORT_REL
+    rp.chmod(0o600)
+
+    locked = staging / "locked"
+    write(locked / "inner.txt", "unreachable\n")
+    locked.chmod(0)
+    try:
+        try:
+            os.scandir(str(locked)).close()
+            pytest.skip("the OS does not enforce directory mode 000 here (root?); arm not measurable")
+        except PermissionError:
+            pass
+        proc = scan(tmp_path, driver, staging)
+        assert proc.returncode == 2, "CONTROL: an unreadable directory refuses the scan"
+        assert report(staging) is not None and "REFUSED" in report(staging), \
+            "CONTROL: the refusal writer actually replaced the stale CLEAN, or nothing was measured"
+        assert stat.S_IMODE(rp.stat().st_mode) == 0o600, (
+            f"the report was 0600 and the refusal left it {stat.S_IMODE(rp.stat().st_mode):04o}; "
+            "replacing a private report with a refusal must not publish it more widely")
+    finally:
+        locked.chmod(0o755)
