@@ -103,7 +103,10 @@ The default runner returns stdout as the artifact. When stdout is empty or white
 instead, prefixed `<stderr> ` so the reader knows which stream it was — a refusal written to stderr (a
 quota cap, an auth refusal, an operator's disable notice) reaches `evidence` instead of collapsing to
 `<empty response>` while the cause sits on the stream that was thrown away. Fake runners in tests are
-unaffected; the substitution lives in the one function that touches a subprocess.
+unaffected; the substitution lives in the one function that touches a subprocess. For the wrappers that
+answer through a response file, the same rule applies to the file: a file with content is the artifact; an
+absent, empty, or whitespace-only file falls through to the streams, so a wrapper that touches its file and
+then refuses on stderr is not read as `<empty response>`.
 
 ## Staleness
 
