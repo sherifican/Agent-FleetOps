@@ -236,12 +236,35 @@ def scan(staging: str):
     return list(dict.fromkeys(hits))
 
 def write_report(staging, hits):
-    os.makedirs(os.path.join(staging, "_reports"), exist_ok=True)
-    with open(os.path.join(staging, "_reports", "scan_report.txt"), "w") as f:
-        if not hits:
-            f.write("scan_gate: CLEAN\n")
-        for rel, i, cls, name, surface in hits:
-            f.write(f"{cls}\t{name}\t{surface}\t{rel}:{i}\n")
+    reports_dir = os.path.join(staging, "_reports")
+    report_path = os.path.join(reports_dir, "scan_report.txt")
+
+    if os.path.islink(reports_dir):
+        raise ScanRefused("report-path-unsafe '_reports'")
+
+    os.makedirs(reports_dir, exist_ok=True)
+    if not os.path.isdir(reports_dir):
+        raise ScanRefused("report-path-unsafe '_reports'")
+
+    if os.path.islink(report_path):
+        raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
+
+    if not hits:
+        body = "scan_gate: CLEAN\n"
+    else:
+        body = "".join(f"{cls}\t{name}\t{surface}\t{rel}:{i}\n" for rel, i, cls, name, surface in hits)
+
+    fd, tmp_path = tempfile.mkstemp(dir=reports_dir, prefix=".scan_report_")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(body)
+        os.replace(tmp_path, report_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _write_refusal_report(staging, refusal):
@@ -339,7 +362,10 @@ def main():
         raise
     try:
         write_report(staging, hits)
-    except (OSError, UnicodeError):
+    except (ScanRefused, OSError, UnicodeError) as exc:
+        if isinstance(exc, ScanRefused):
+            _write_refusal_report(staging, exc)
+            raise
         _write_refusal_report(staging, ScanRefused("report-write-error"))
         raise ScanRefused("report-write-error '_reports/scan_report.txt'") from None
     if hits:

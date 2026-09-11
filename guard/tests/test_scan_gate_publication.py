@@ -1249,11 +1249,12 @@ def test_a_refusal_never_writes_through_a_symlinked_reports_directory(tmp_path: 
     assert (staging / "_reports").is_symlink(), "REPAIRED: the linked parent is left alone, not replaced"
 
 
-def test_a_report_write_refusal_still_invalidates_the_stale_report(tmp_path: Path) -> None:
-    """Broken behaviour: the ordinary path's own report-write failure raised after the refusal wrap, so a
-    previous CLEAN survived it. CONTROL: first run CLEAN. Then the report file is made read-only; the
-    next run cannot write its ordinary report (rc 2, report-write-error) and the atomic replace — which
-    needs directory permission, not file permission — must still turn the stale CLEAN into REFUSED."""
+def test_a_read_only_stale_report_no_longer_blocks_the_ordinary_write(tmp_path: Path) -> None:
+    """Was: the read-only report file made the ORDINARY write fail, and the arm proved the refusal
+    still replaced the stale CLEAN. GROUP 15 made the ordinary writer atomic too, so that state is no
+    longer reachable this way: os.replace needs permission on the DIRECTORY, not on the old file. The
+    property that a write failure is a refusal is kept below, on a state that can still occur; this arm
+    now pins the behaviour the change actually produces, so the improvement cannot regress silently."""
     if os.geteuid() == 0:
         pytest.skip("root ignores file mode bits; this arm needs an unprivileged writer")
     driver = make_tool(tmp_path)
@@ -1265,12 +1266,116 @@ def test_a_report_write_refusal_still_invalidates_the_stale_report(tmp_path: Pat
     rp.chmod(0o444)
     try:
         proc = scan(tmp_path, driver, staging)
-        assert proc.returncode == 2, "REPAIRED: a report-write failure is a refusal"
-        assert "report-write-error" in proc.stderr, "and it is named"
-        assert (report(staging) or "").startswith("scan_gate: REFUSED"), \
-            "REPAIRED: the stale CLEAN is replaced even though the old file was unwritable"
+        assert proc.returncode == 0, "an unwritable STALE report no longer fails the ordinary write"
+        assert report(staging) == "scan_gate: CLEAN\n", "the atomic replace put a fresh report in place"
+        assert not (staging / REPORT_REL).is_symlink(), "and it is a regular file"
     finally:
         try:
             rp.chmod(0o644)
         except OSError:
             pass
+
+
+def test_an_ordinary_report_write_failure_is_still_a_named_refusal(tmp_path: Path) -> None:
+    """The property the arm above used to carry, on a state that IS still reachable.
+
+    A regular FILE where _reports must be means the ordinary writer cannot create its directory. That is
+    an OSError, and the contract is that it becomes a named refusal rather than a pass. The refusal
+    writer correctly declines to build anything under a non-directory, so the assertion here is that
+    nothing was created and nothing was destroyed — not that a refusal report appeared."""
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+    blocker = staging / "_reports"
+    write(blocker, "I AM NOT A DIRECTORY\n")
+
+    proc = scan(tmp_path, driver, staging)
+
+    assert proc.returncode == 2, "an ordinary report-write failure is a refusal, not a pass"
+    assert "report-write-error" in proc.stderr, "and it is named"
+    assert blocker.read_text(encoding="utf8") == "I AM NOT A DIRECTORY\n", \
+        "the blocking file must be left exactly as it was"
+    assert blocker.is_file(), "and it must not have been replaced by a directory"
+
+# =============================================================================================
+# GROUP 15 — the ORDINARY report writer must not follow a link either
+#
+# GROUP 14 hardened the refusal writer. Its sibling, write_report, was left with
+# makedirs(exist_ok=True) + open(...,"w"): it follows a symlinked _reports directory, truncates a
+# symlinked report file, and creates the target of a dangling one — every time reporting rc 0 and
+# "scan_gate: CLEAN". GROUP 14 cannot catch this: its fixtures plant the link only AFTER a clean run
+# has already created a real directory, so no arm starts with the link in place.
+#
+# A vacuous pass here asserts only the return code and the report text. Both are already true today
+# while the victim is destroyed. Every arm below must open the VICTIM.
+# =============================================================================================
+
+
+def _clean_tree(staging: Path) -> None:
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+
+
+def test_ordinary_clean_write_still_produces_a_real_report(tmp_path: Path) -> None:
+    """CONTROL: with no link anywhere, an ordinary clean scan still writes its own report.
+
+    Without this arm the group could be satisfied by refusing everything.
+    """
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    _clean_tree(staging)
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0, "CONTROL: a clean tree still passes"
+    assert report(staging) == "scan_gate: CLEAN\n", "CONTROL: and its report is a real file"
+    assert not (staging / REPORT_REL).is_symlink(), "CONTROL: written as a regular file"
+
+
+def test_clean_write_does_not_truncate_a_symlinked_report_file(tmp_path: Path) -> None:
+    """A symlinked scan_report.txt must not be written through on the SUCCESS path."""
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    _clean_tree(staging)
+    victim = tmp_path / "victim.txt"
+    write(victim, "PRECIOUS BYTES\n")
+    (staging / "_reports").mkdir(parents=True, exist_ok=True)
+    (staging / REPORT_REL).symlink_to(victim)
+
+    proc = scan(tmp_path, driver, staging)
+
+    assert victim.read_text(encoding="utf8") == "PRECIOUS BYTES\n", \
+        "the victim of a symlinked report path must survive an ordinary CLEAN scan"
+    assert proc.returncode == 2, "following a linked report path is a refusal, not a pass"
+    assert "report-path-unsafe" in proc.stderr, "and the refusal names itself"
+
+
+def test_clean_write_does_not_follow_a_symlinked_reports_directory(tmp_path: Path) -> None:
+    """A symlinked _reports directory, planted BEFORE the first run, must not be written through."""
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    _clean_tree(staging)
+    outside = tmp_path / "outside_reports"
+    outside.mkdir()
+    write(outside / "scan_report.txt", "SOMEONE ELSE'S REPORT\n")
+    (staging / "_reports").symlink_to(outside, target_is_directory=True)
+
+    proc = scan(tmp_path, driver, staging)
+
+    assert (outside / "scan_report.txt").read_text(encoding="utf8") == "SOMEONE ELSE'S REPORT\n", \
+        "a linked _reports directory must not receive the scan's report"
+    assert proc.returncode == 2, "a linked report directory is a refusal, not a pass"
+    assert "report-path-unsafe" in proc.stderr, "and the refusal names itself"
+
+
+def test_clean_write_does_not_create_the_target_of_a_dangling_report_link(tmp_path: Path) -> None:
+    """A dangling report symlink must not be used to CREATE a file outside the staging tree."""
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    _clean_tree(staging)
+    target = tmp_path / "not_yet_there.txt"
+    (staging / "_reports").mkdir(parents=True, exist_ok=True)
+    (staging / REPORT_REL).symlink_to(target)
+
+    proc = scan(tmp_path, driver, staging)
+
+    assert not target.exists(), "a dangling report link must not bring its target into existence"
+    assert proc.returncode == 2, "a linked report path is a refusal, not a pass"
+    assert "report-path-unsafe" in proc.stderr, "and the refusal names itself"
