@@ -31,6 +31,7 @@ class Leg:
     name: str
     argv: list
     timeout: int = 120
+    disabled: str = ""      # operator's reason; non-empty means DO NOT PROBE
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,8 @@ def _has_token(text: object) -> bool:
 
 def probe(leg: Leg, *, runner: Runner | None = None) -> Probe:
     """Measure one leg; operational failures become UNMEASURED, never exceptions."""
+    if leg.disabled:
+        return Probe(leg.name, "DISABLED", leg.disabled, None)
     try:
         chosen_runner = _default_runner if runner is None else runner
         result = chosen_runner(leg.argv, CANARY_PROMPT, leg.timeout)
@@ -143,6 +146,8 @@ def save_state(path, state) -> None:
 def stale(state, legs, *, now, max_age_hours=26) -> list:
     stale_legs = []
     for leg in legs:
+        if leg.disabled:
+            continue
         try:
             last_alive = state[leg.name]["last_alive_seq"]
         except (KeyError, TypeError):
@@ -231,6 +236,9 @@ def main(argv=None) -> int:
         return 2
     if any(result.outcome == "DEAD" for result in results) or stale_legs:
         return 1
+    if results and all(r.outcome == "DISABLED" for r in results):
+        print("DISABLED ONLY: no active leg was probed -> UNMEASURED")
+        return 2
     return 0
 
 

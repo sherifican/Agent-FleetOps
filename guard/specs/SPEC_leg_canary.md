@@ -32,11 +32,12 @@ verdict.
         name: str
         argv: list          # the command; the prompt is appended as the final argument
         timeout: int = 120
+        disabled: str = ""  # operator's reason; non-empty means the leg is NOT probed
 
     @dataclass(frozen=True)
     class Probe:
         leg: str
-        outcome: str        # "ALIVE" | "DEAD" | "UNMEASURED"
+        outcome: str        # "ALIVE" | "DEAD" | "UNMEASURED" | "DISABLED"
         evidence: str       # trimmed response excerpt or the failure reason
         rc: object          # the exit code, recorded but NOT the verdict (None if never ran)
 
@@ -72,10 +73,19 @@ fully exercisable with no network and no cloud spend. A guard you cannot test of
     ALIVE       CANARY_TOKEN appears in the response text (case-insensitive, whitespace-tolerant)
     DEAD        the runner returned, but the token is absent — INCLUDING when rc == 0
     UNMEASURED  the runner raised, timed out, or the command does not exist
+    DISABLED    the roster carries an operator's reason for this leg; the runner is never invoked
 
 `DEAD` and `UNMEASURED` are different: DEAD means a probe ran and got a wrong answer (the leg is broken);
 UNMEASURED means the probe could not run (the probe is broken). Conflating them sends you debugging the
 wrong system — a sibling team burned a day on three false reds that were all broken measurements.
+
+`DISABLED` is a fourth outcome and it is decided by the OBSERVER, never by the leg: a non-empty
+`Leg.disabled` (the operator's reason, e.g. `"parked 2026-09-04: rate cap; grok covers"`) is checked
+before any command runs, `evidence` is that reason, `rc` is `None`, and the leg's last-alive history
+is frozen, not refreshed. A wrapper that prints `LANE DISABLED` or exits with a special code while the
+roster says enabled has answered wrongly — that is `DEAD`, exactly as any other wrong answer. A guard
+whose job is to be believed cannot let the thing it watches write its own exemption: the ALIVE token
+is the only thing a leg's output can prove, and only in the positive direction.
 
 A third distinction sits one level below those two, on the state file rather than on the probe:
 ABSENT and CORRUPT are not the same either. A missing state file on a first run is BOOTSTRAP —
@@ -108,6 +118,9 @@ once and passes it down. This keeps every other function deterministic and testa
 `max_age_hours`. A leg that has NEVER been alive is stale — absence of evidence is not evidence of
 health, and a fresh state file must not read as a clean bill of health.
 
+A leg the roster has disabled is never stale: its history is frozen, not judged. Re-enable it and
+the ordinary rule applies again from its last recorded alive tick.
+
 Default 26 hours (not 24) so a daily cron does not false-alarm on ordinary jitter.
 
 ## main / CLI
@@ -125,7 +138,8 @@ Exit codes:
 
     0 = every probed leg ALIVE and nothing stale
     1 = any DEAD or any stale leg
-    2 = any UNMEASURED
+    2 = any UNMEASURED, or every selected leg DISABLED (nothing was probed; printed as
+        `DISABLED ONLY: no active leg was probed -> UNMEASURED`)
 
 Exit 2 dominates: if a leg could not be measured, it is unknown whether the others' results are
 meaningful.
@@ -140,6 +154,8 @@ exactly as it freezes a value.
 
 - No network in any function except the default real runner.
 - `probe()` must never raise; every failure becomes UNMEASURED.
+- A leg's own output or exit code never disables it. Only the roster can, and the roster is the
+  operator's, read before any command runs.
 - The canary prompt must stay trivially cheap — no tools, no extra context — and the accepted
   token must not appear in it.
 

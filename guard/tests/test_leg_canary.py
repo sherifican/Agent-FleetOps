@@ -331,3 +331,67 @@ def test_default_runner_prefers_stdout_when_both_streams_carry_text():
     from guard.leg_canary import _default_runner
     rc, text = _default_runner(["sh", "-c", 'echo "CANARY-42"; echo "noise" >&2'], "ignored", 10)
     assert rc == 0 and "CANARY-42" in text and "noise" not in text, "stdout is the artifact whenever it has content"
+
+
+# --- DISABLED is operator policy in the roster, never a claim by the leg ---------------------------------
+
+def _raising_runner(argv, prompt, timeout):
+    raise AssertionError("the runner must not be invoked for a disabled leg")
+
+
+def test_a_disabled_leg_is_DISABLED_and_its_runner_is_never_invoked():
+    off = Leg("parked", ["echo"], disabled="parked by the operator 2026-09-04: rate cap; cover leg assigned")
+    p = probe(off, runner=_raising_runner)
+    assert p.outcome == "DISABLED"
+    assert p.evidence == off.disabled, "the operator's reason IS the evidence"
+    assert p.rc is None, "nothing ran"
+
+
+def test_disabled_is_decided_by_the_roster_not_by_the_wrapper():
+    """A wrapper that prints 'LANE DISABLED' (or exits 4) while the roster says enabled is a leg that
+    answered wrongly — DEAD. The thing being watched cannot write its own exemption."""
+    p = probe(L, runner=runner_returning(4, "LANE DISABLED by the owner; route elsewhere"))
+    assert p.outcome == "DEAD"
+    assert "LANE DISABLED" in p.evidence
+
+
+def test_a_disabled_probe_never_updates_last_alive(tmp_path, monkeypatch):
+    p = str(tmp_path / "state.json")
+    save_state(p, {"parked": {"last_alive_seq": 10}})
+    monkeypatch.setattr("guard.leg_canary.LEGS", [Leg("parked", ["echo"], disabled="parked"), L])
+    monkeypatch.setattr("guard.leg_canary._default_runner", runner_returning(0, CANARY_TOKEN))
+    main(["--state", p, "--max-age-hours", "9999"])
+    assert load_state(p)["parked"]["last_alive_seq"] == 10, "a disabled leg's history is frozen, not refreshed"
+
+
+def test_a_disabled_leg_is_never_stale():
+    off = Leg("parked", ["echo"], disabled="parked")
+    assert stale({}, [off, L], now=1000) == ["testleg"], "only the enabled never-seen leg is stale"
+
+
+def test_a_pure_disabled_run_is_UNMEASURED_not_clean(tmp_path, monkeypatch, capsys):
+    """If every selected leg is disabled, nothing was probed; that must never read as a clean 0."""
+    p = str(tmp_path / "state.json")
+    monkeypatch.setattr("guard.leg_canary.LEGS", [Leg("parked", ["echo"], disabled="parked")])
+    monkeypatch.setattr("guard.leg_canary._default_runner", _raising_runner)
+    rc = main(["--state", p])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "no active leg was probed" in out
+
+
+def test_a_disabled_leg_does_not_hide_a_dead_sibling(tmp_path, monkeypatch):
+    p = str(tmp_path / "state.json")
+    monkeypatch.setattr("guard.leg_canary.LEGS", [Leg("parked", ["echo"], disabled="parked"), L])
+    monkeypatch.setattr("guard.leg_canary._default_runner", runner_returning(0, ""))
+    assert main(["--state", p, "--max-age-hours", "9999"]) == 1
+
+
+def test_a_disabled_leg_beside_an_alive_one_exits_0_and_is_reported(tmp_path, monkeypatch, capsys):
+    p = str(tmp_path / "state.json")
+    monkeypatch.setattr("guard.leg_canary.LEGS", [Leg("parked", ["echo"], disabled="parked: reason on file"), L])
+    monkeypatch.setattr("guard.leg_canary._default_runner", runner_returning(0, CANARY_TOKEN))
+    rc = main(["--state", p, "--max-age-hours", "9999"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "DISABLED" in out and "reason on file" in out, "the disabled leg is reported on its own line with its reason"
