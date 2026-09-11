@@ -435,7 +435,7 @@ mismatched, mainstream, lane-starved hardware** — that is the point, not an ap
 | **Memory** | **122 GiB LPDDR5-8000**, shared between CPU and iGPU |
 | **Chassis** | GMKtec EVO-X3 mini-PC |
 | **Serving stack** | ollama 0.33.2 over **Vulkan (RADV GFX1201)** (previously documented 0.32.15) — *not* ROCm, *not* CUDA; a different kernel path from Box A entirely |
-| **dGPU link** | PCIe x16 Gen5 |
+| **dGPU link** | PCIe x4 Gen5 (oculink)|
 | **dGPU power** | Applied board cap **300 W** (default 300 W; minimum 210 W); exposed maximum 330 W after enabling overdrive, previously 300 W |
 | **Kernel arg** | `amdgpu.ppfeaturemask=0xfff7ffff`; only overdrive bit `0x4000` added to the previous `0xfff7bfff`; voltage offset 0 mV (range −200..0), clock offset 0 MHz, cap 300 W |
 | **OS** | Ubuntu 26.04 LTS, kernel 7.0.0-31-generic (Server Edition) |
