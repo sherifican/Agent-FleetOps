@@ -189,8 +189,17 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     selected = LEGS
-    if args.legs:
+    if args.legs is not None:
         wanted = {name.strip() for name in args.legs.split(",") if name.strip()}
+        roster_names = {leg.name for leg in LEGS}
+        if not wanted:
+            print("SELECTION UNMEASURED: empty --legs selection -> nothing was probed")
+            return 2
+        unknown = wanted - roster_names
+        if unknown:
+            for name in sorted(unknown):
+                print(f"SELECTION UNMEASURED: no such leg: {name} -> nothing was probed")
+            return 2
         selected = [leg for leg in LEGS if leg.name in wanted]
     now = int(time.time() // 3600)
     state, state_status = read_state(args.state)
@@ -234,6 +243,8 @@ def main(argv=None) -> int:
         print(f"STALE: {name} (last alive {age})")
 
     if any(result.outcome == "UNMEASURED" for result in results):
+        return 2
+    if state_status == "corrupt":
         return 2
     if any(result.outcome == "DEAD" for result in results) or stale_legs:
         return 1

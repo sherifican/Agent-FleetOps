@@ -430,3 +430,80 @@ def test_default_runner_prefers_a_substantive_response_file_over_the_streams(tmp
     _fake_wrapper(tmp_path, monkeypatch, 'echo "CANARY-42" > "$2"\necho "noise" >&2\nexit 0\n')
     rc, text = _default_runner(["grok-dispatch.sh"], "ignored", 10)
     assert rc == 0 and "CANARY-42" in text and "noise" not in text, "a response file with content is the artifact"
+
+
+# --- a run that measured nothing must not report success -----------------------------------------------
+
+def test_a_corrupt_state_file_is_unmeasured_even_when_every_probe_is_alive(tmp_path, monkeypatch, capsys):
+    """rc is decided by probe outcomes alone, so a destroyed health record can exit 0.
+
+    The sibling arm above uses a DEAD runner and never asserts rc, so it stays green on this path. With
+    an ALIVE probe the run prints UNMEASURED, rebuilds the accumulator from this tick alone, and returns
+    the same 0 a healthy tick returns — and cron reads rc, not stdout. A tick that could not read the
+    record it is supposed to be extending has not measured the thing it reports on.
+    """
+    p = str(tmp_path / "state.json")
+    bad_bytes = b"{this is not valid json at all"
+    (tmp_path / "state.json").write_bytes(bad_bytes)
+    monkeypatch.setattr("guard.leg_canary.LEGS", [L])
+    monkeypatch.setattr("guard.leg_canary._default_runner", runner_returning(0, CANARY_TOKEN))
+
+    rc = main(["--state", p])
+    out = capsys.readouterr().out
+
+    assert "ALIVE" in out, "CONTROL: the probe really did come back alive on this path"
+    assert "UNMEASURED" in out, "the unreadable state is still announced"
+    assert rc == 2, "an unreadable state file is UNMEASURED, and 2 dominates a clean probe result"
+    siblings = list(tmp_path.glob("state.json.corrupt-*"))
+    assert len(siblings) == 1 and siblings[0].read_bytes() == bad_bytes, \
+        "and the original bytes are still kept beside it"
+
+
+def _counting_runner(calls):
+    def r(argv, prompt, timeout):
+        calls.append(argv[0] if argv else "?")
+        return 0, CANARY_TOKEN
+    return r
+
+
+def test_a_selection_that_matches_no_leg_is_unmeasured_not_a_pass(tmp_path, monkeypatch, capsys):
+    """--legs is intersected with the roster in silence, so a typo probes nothing and exits 0.
+
+    A renamed or mistyped leg in a scheduled selection then reports success indefinitely while nothing
+    is watched. The control runs first: a real name must still probe once and pass, so this cannot be
+    satisfied by refusing every selection.
+    """
+    monkeypatch.setattr("guard.leg_canary.LEGS", [L])
+    calls = []
+    monkeypatch.setattr("guard.leg_canary._default_runner", _counting_runner(calls))
+
+    rc = main(["--state", str(tmp_path / "control.json"), "--legs", "testleg"])
+    assert rc == 0 and calls == ["echo"], "CONTROL: a known name probes once and passes"
+
+    calls.clear()
+    rc = main(["--state", str(tmp_path / "unknown.json"), "--legs", "nosuchleg"])
+    assert calls == [], "nothing was probed"
+    assert rc == 2, "a selection that matched no leg measured nothing, so it cannot report success"
+
+
+def test_a_partly_unknown_selection_does_not_pass_on_the_half_that_matched(tmp_path, monkeypatch):
+    """The more misleading shape: a real ALIVE line is printed for the half that resolved."""
+    monkeypatch.setattr("guard.leg_canary.LEGS", [L])
+    calls = []
+    monkeypatch.setattr("guard.leg_canary._default_runner", _counting_runner(calls))
+
+    rc = main(["--state", str(tmp_path / "partial.json"), "--legs", "testleg,nosuchleg"])
+
+    assert rc == 2, "a requested leg that does not exist is unmeasured, whatever the rest did"
+
+
+def test_an_explicitly_empty_selection_is_unmeasured(tmp_path, monkeypatch):
+    """An empty or comma-only value is a supplied selection that resolves to nothing, not 'all legs'."""
+    monkeypatch.setattr("guard.leg_canary.LEGS", [L])
+    calls = []
+    monkeypatch.setattr("guard.leg_canary._default_runner", _counting_runner(calls))
+
+    rc = main(["--state", str(tmp_path / "empty.json"), "--legs", ","])
+
+    assert calls == [], "nothing was probed"
+    assert rc == 2, "an explicitly empty selection measured nothing"
