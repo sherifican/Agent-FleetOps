@@ -9,7 +9,7 @@ serving stacks; this is not a controlled cross-vendor comparison.
 | | box-a | box-b |
 |---|---|---|
 | Compute | two 16 GB consumer dGPUs (dual RTX 5060 Ti 16GB) | 32 GB workstation dGPU (Radeon AI PRO R9700) plus unified-memory iGPU (Strix Halo / Radeon 8060S integrated) |
-| Memory / link context | throughput charts: 30 GiB DDR4-2933 (4 × 8 GB, mismatched); power study and chart 06 (2026-09-06 onward): 60.7 GiB DDR4-3200 (4 × 16 GB, matched). One dGPU on PCIe Gen4 x8 and one on Gen3 x4 throughout | power study: dGPU on PCIe x16 Gen5, board cap 300 W, Vulkan (RADV GFX1201), not ROCm; historical iGPU runs use unified memory |
+| Memory / link context | throughput charts: 30 GiB DDR4-2933 (4 × 8 GB, mismatched); power study and chart 06 (2026-09-06 onward): 60.7 GiB DDR4-3200 (4 × 16 GB, matched). One dGPU on PCIe Gen4 x8 and one on Gen3 x4 throughout | power study: dGPU on PCIe x4 Gen5 (oculink, four-lane cable), board cap 300 W, Vulkan (RADV GFX1201), not ROCm; historical iGPU runs use unified memory |
 | Published device labels | `dgpu-a`, `both-dgpu` | `dgpu-b`, `igpu` |
 
 The generalized labels identify roles rather than hosts, vendors, or product names. `serving_stack`
