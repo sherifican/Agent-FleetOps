@@ -1224,3 +1224,53 @@ def test_a_policy_input_refusal_after_a_clean_run_invalidates_the_stale_report(t
     proc = scan(tmp_path, driver, staging)
     assert proc.returncode == 2, f"REPAIRED[{arm}]: a policy-input refusal still exits 2"
     assert report(staging) != "scan_gate: CLEAN\n", f"REPAIRED[{arm}]: a stale CLEAN must not survive a policy-input refusal"
+
+
+def test_a_refusal_never_writes_through_a_symlinked_reports_directory(tmp_path: Path) -> None:
+    """Broken behaviour: the refusal writer anchored on dirname(report_path), so a `_reports` directory
+    that is a SYMLINK carried the temp file and the atomic replace into an external directory.
+    CONTROL: first run CLEAN. Then `_reports` is replaced by a symlink to an external directory holding
+    its own scan_report.txt; a broken link is planted; the second run refuses (rc 2) and the external
+    file keeps its bytes — nothing is written through the linked parent."""
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0 and report(staging) == "scan_gate: CLEAN\n", "CONTROL: first run CLEAN"
+    external = tmp_path / "external"
+    write(external / "scan_report.txt", "external bytes\n")
+    shutil.rmtree(staging / "_reports")
+    (staging / "_reports").symlink_to(external, target_is_directory=True)
+    (staging / "docs" / "ghost.txt").symlink_to(tmp_path / "nowhere")
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 2, "the second run still refuses"
+    assert (external / "scan_report.txt").read_text(encoding="utf8") == "external bytes\n", \
+        "REPAIRED: nothing is written through a symlinked _reports directory"
+    assert (staging / "_reports").is_symlink(), "REPAIRED: the linked parent is left alone, not replaced"
+
+
+def test_a_report_write_refusal_still_invalidates_the_stale_report(tmp_path: Path) -> None:
+    """Broken behaviour: the ordinary path's own report-write failure raised after the refusal wrap, so a
+    previous CLEAN survived it. CONTROL: first run CLEAN. Then the report file is made read-only; the
+    next run cannot write its ordinary report (rc 2, report-write-error) and the atomic replace — which
+    needs directory permission, not file permission — must still turn the stale CLEAN into REFUSED."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores file mode bits; this arm needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0 and report(staging) == "scan_gate: CLEAN\n", "CONTROL: first run CLEAN"
+    rp = staging / REPORT_REL
+    rp.chmod(0o444)
+    try:
+        proc = scan(tmp_path, driver, staging)
+        assert proc.returncode == 2, "REPAIRED: a report-write failure is a refusal"
+        assert "report-write-error" in proc.stderr, "and it is named"
+        assert (report(staging) or "").startswith("scan_gate: REFUSED"), \
+            "REPAIRED: the stale CLEAN is replaced even though the old file was unwritable"
+    finally:
+        try:
+            rp.chmod(0o644)
+        except OSError:
+            pass

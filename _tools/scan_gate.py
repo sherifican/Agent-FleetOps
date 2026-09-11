@@ -245,12 +245,18 @@ def write_report(staging, hits):
 
 
 def _write_refusal_report(staging, refusal):
-    """Best-effort: overwrite any existing report with a single REFUSED line so a
-    stale CLEAN cannot survive beside an rc 2. Never raises; the original refusal still
-    propagates. Nothing is created when no report exists. Never writes through a
-    symlink: a link at the report path is unlinked first, then a regular file is
-    atomically placed via os.replace."""
-    report_path = os.path.join(staging, "_reports", "scan_report.txt")
+    """Best-effort: replace an EXISTING report with a single REFUSED line so a stale CLEAN cannot
+    survive beside an rc 2. Never raises; the original refusal still propagates. Anchors on the
+    real <staging>/_reports directory and never writes through a link: a symlinked or absent
+    _reports directory is left alone, a symlinked report file is unlinked, and the new report is
+    written to a temporary file in the same directory and atomically put in place with os.replace.
+    Creates nothing when no report exists."""
+    reports_dir = os.path.join(staging, "_reports")
+    if os.path.islink(reports_dir) or not os.path.isdir(reports_dir):
+        return
+    report_path = os.path.join(reports_dir, "scan_report.txt")
+    if not os.path.lexists(report_path):
+        return
     if isinstance(refusal, (OSError, UnicodeError)):
         reason_class = "input-error"
     else:
@@ -259,11 +265,6 @@ def _write_refusal_report(staging, refusal):
         if not reason_class or not re.fullmatch(r"[a-z][a-z0-9\-]*", reason_class):
             reason_class = "unclassified"
     try:
-        # Only an EXISTING report is replaced: a refusal with no prior report creates nothing
-        # (the tree's contract: no report for an unmeasured scan, nothing under a missing target).
-        if not os.path.lexists(report_path):
-            return
-        reports_dir = os.path.dirname(report_path)
         if os.path.islink(report_path):
             os.unlink(report_path)
         fd, tmp_path = tempfile.mkstemp(dir=reports_dir, prefix=".scan_report_")
@@ -339,6 +340,7 @@ def main():
     try:
         write_report(staging, hits)
     except (OSError, UnicodeError):
+        _write_refusal_report(staging, ScanRefused("report-write-error"))
         raise ScanRefused("report-write-error '_reports/scan_report.txt'") from None
     if hits:
         for rel, i, cls, name, surface in hits[:40]:
