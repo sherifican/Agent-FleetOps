@@ -312,3 +312,22 @@ def test_module_has_no_network_calls_outside_the_default_runner():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# --- evidence must carry what actually came back, whichever stream it came on ----------------------------
+
+def test_default_runner_carries_stderr_into_the_artifact_when_stdout_is_empty():
+    """A wrapper that refuses on stderr (a quota cap, an auth refusal, an operator's disable notice)
+    used to reach probe() as '' — DEAD with evidence '<empty response>' — while the cause sat on the
+    stream the runner threw away. The spec requires evidence to show what came back instead."""
+    from guard.leg_canary import _default_runner
+    rc, text = _default_runner(["sh", "-c", 'echo "provider: usage limit reached" >&2; exit 4'], "ignored", 10)
+    assert rc == 4
+    assert "usage limit reached" in text, "stderr is the artifact when stdout is empty"
+    assert text.startswith("<stderr> "), "the substituted stream is named, so a reader knows it was not stdout"
+
+
+def test_default_runner_prefers_stdout_when_both_streams_carry_text():
+    from guard.leg_canary import _default_runner
+    rc, text = _default_runner(["sh", "-c", 'echo "CANARY-42"; echo "noise" >&2'], "ignored", 10)
+    assert rc == 0 and "CANARY-42" in text and "noise" not in text, "stdout is the artifact whenever it has content"

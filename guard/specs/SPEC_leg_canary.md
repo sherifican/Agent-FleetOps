@@ -89,6 +89,12 @@ looking.
 `evidence` for a DEAD leg must include the first ~200 chars of what came back instead, so a human can
 tell a quota message from a crash from an empty string without re-running anything.
 
+The default runner returns stdout as the artifact. When stdout is empty or whitespace it returns stderr
+instead, prefixed `<stderr> ` so the reader knows which stream it was — a refusal written to stderr (a
+quota cap, an auth refusal, an operator's disable notice) reaches `evidence` instead of collapsing to
+`<empty response>` while the cause sits on the stream that was thrown away. Fake runners in tests are
+unaffected; the substitution lives in the one function that touches a subprocess.
+
 ## Staleness
 
 State file is JSON: `{ "<leg>": {"last_alive_seq": <int>} }`.

@@ -52,6 +52,14 @@ LEGS = [
 Runner = Callable[[list, str, int], tuple[int, str]]
 
 
+def _artifact(result) -> str:
+    text = result.stdout if isinstance(result.stdout, str) else ""
+    if text.strip():
+        return text
+    err = result.stderr if isinstance(result.stderr, str) else ""
+    return ("<stderr> " + err) if err.strip() else text
+
+
 def _default_runner(argv: list, prompt: str, timeout: int) -> tuple[int, str]:
     """Run a real leg and return its exit status and response artifact."""
     def run(command: list):
@@ -64,7 +72,7 @@ def _default_runner(argv: list, prompt: str, timeout: int) -> tuple[int, str]:
     command = argv[0]
     if command == "kimi-cli":
         result = run([*argv, prompt])
-        return result.returncode, result.stdout
+        return result.returncode, _artifact(result)
 
     if command in {"grok-dispatch.sh", "codex-luna", "agy-flash"}:
         with tempfile.TemporaryDirectory(
@@ -74,11 +82,11 @@ def _default_runner(argv: list, prompt: str, timeout: int) -> tuple[int, str]:
             response = Path(directory) / "response.txt"
             brief.write_text(prompt, encoding="utf-8")
             result = run([*argv, str(brief), str(response)])
-            text = response.read_text(encoding="utf-8") if response.exists() else result.stdout
+            text = response.read_text(encoding="utf-8") if response.exists() else _artifact(result)
             return result.returncode, text
 
     result = run([*argv, prompt])
-    return result.returncode, result.stdout
+    return result.returncode, _artifact(result)
 
 
 def _has_token(text: object) -> bool:
