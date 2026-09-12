@@ -2375,7 +2375,13 @@ def test_findings_that_cannot_be_preserved_are_not_destroyed(tmp_path: Path) -> 
     rp = reports_dir / "scan_report.txt"
     findings = "SECRET\tgeneric_key_assignment\tcontents\tdocs/example.md:12\n"
     rp.write_text(findings, encoding="utf-8")
-    (reports_dir / "scan_report.superseded.txt").mkdir()
+    # EVERY slot blocked by a populated directory: none can be unlinked, linked over, or mistaken
+    # for a preserved copy. Round nine added alternates, so blocking only the first name no longer
+    # makes the evidence unpreservable — it just moves it to the next slot, which is the point.
+    for name in _superseded_names():
+        d = reports_dir / name
+        d.mkdir()
+        (d / "somebody-elses-data.txt").write_text("not mine\n", encoding="utf-8")
 
     module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'a'"))
 
@@ -2447,3 +2453,190 @@ def test_a_stale_clean_is_still_replaced_and_leaves_the_slot_free(tmp_path: Path
         "beside an exit code that says it was not")
     assert not (reports_dir / "scan_report.superseded.txt").exists(), (
         "a status line took the preservation slot, which the next findings report then cannot use")
+
+
+def _superseded_names():
+    """Every preservation slot name, mirroring _superseded_slots in the scanner."""
+    return ["scan_report.superseded.txt"] + [
+        "scan_report.superseded.%d.txt" % n for n in range(1, 8)]
+
+
+
+# GROUP 21 — the ninth review round. Two independent gate legs, given no shared premise, both
+# reproduced the same hole from the CLI: the "already preserved" check followed a symlink. One of
+# them additionally found the fix for the eighth round had introduced a stale-CLEAN regression.
+
+
+def test_a_symlink_at_the_slot_cannot_authorize_destroying_the_findings(tmp_path: Path) -> None:
+    """The identity check asked os.stat, which FOLLOWS.
+
+    Plant a symlink at the preservation slot pointing back at the report, and the inode
+    comparison succeeded against the report's own inode — so the check answered "already
+    preserved" when no second directory entry for that inode existed anywhere, and the caller
+    destroyed the only copy. Reproduced independently by both gate legs, from the CLI, no race.
+
+    Only a second directory entry for THIS inode counts: lstat rather than stat, st_dev carried
+    alongside st_ino because inode numbers are unique only within a filesystem, and S_ISREG
+    because a hard link is by definition a regular file.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "slot_symlink_identity")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    findings = "SECRET\tgeneric_key_assignment\tcontents\tdocs/example.md:12\n"
+    rp.write_text(findings, encoding="utf-8")
+    # every slot a symlink at the report, so no link can be created and ONLY the identity
+    # comparison decides the outcome
+    for name in _superseded_names():
+        os.symlink("scan_report.txt", reports_dir / name)
+
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'a'"))
+
+    assert rp.read_text(encoding="utf-8") == findings, (
+        "a symlink at the preservation slot authorized destroying the findings. os.stat follows; "
+        "the question is whether a second directory entry holds this inode, which only lstat "
+        "plus (st_dev, st_ino) can answer")
+
+
+def test_a_real_hard_link_still_authorizes_the_replace(tmp_path: Path) -> None:
+    """The other direction, so the check is not merely refusing everything.
+
+    A genuine hard link IS preservation, and the report may then be replaced. Without this arm the
+    fix above is satisfied by a predicate that always answers "not preserved".
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "slot_hardlink_identity")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    findings = "SECRET\tgeneric_key_assignment\tcontents\tdocs/example.md:12\n"
+    rp.write_text(findings, encoding="utf-8")
+    names = _superseded_names()
+    os.link(rp, reports_dir / names[0])          # genuinely preserved
+    for name in names[1:]:
+        os.symlink("scan_report.txt", reports_dir / name)
+
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'a'"))
+
+    assert rp.read_text(encoding="utf-8").startswith("scan_gate: REFUSED"), (
+        "a genuine hard link is preservation, so the replace was safe and must have happened")
+    assert (reports_dir / names[0]).read_text(encoding="utf-8") == findings, (
+        "and the preserved copy must still hold the findings")
+
+
+def test_an_occupied_slot_no_longer_denies_preservation(tmp_path: Path) -> None:
+    """Gate review, round nine: the eighth round's fix left a stale CLEAN standing.
+
+    A report the scanner cannot READ is treated as findings, which is the safe direction for
+    evidence. Combined with "findings may not be replaced unless preserved", an occupied slot
+    meant an unreadable stale CLEAN survived beside an rc 2 — a false authorization, measured at
+    mode 0044 where the owner cannot read the file but another user can.
+
+    One name can be occupied by something that cannot be removed. A set of them makes occupancy
+    stop being a denial of preservation, which is what let the replace proceed again.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "occupied_slot")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    squatted = reports_dir / _superseded_names()[0]
+    squatted.mkdir()
+    (squatted / "somebody-elses-data.txt").write_text("not mine\n", encoding="utf-8")
+    if os.geteuid() != 0:
+        rp.chmod(0o044)                 # owner cannot read it; another user still can
+    try:
+        module._write_refusal_report(str(staging), module.ScanRefused("invalid-wide-encoding 'b'"))
+    finally:
+        try:
+            rp.chmod(0o644)
+        except OSError:
+            pass
+
+    assert rp.read_text(encoding="utf-8").startswith("scan_gate: REFUSED"), (
+        "a stale CLEAN survived beside an rc 2 because one preservation name was occupied by a "
+        "directory that could not be removed. A reader who CAN read it is told this tree was "
+        "scanned and passed, beside an exit code saying it was not")
+
+
+def test_a_planted_clean_behind_a_symlinked_reports_directory_is_a_known_limitation(
+        tmp_path: Path) -> None:
+    """PINS A LIMITATION THAT IS NOT FIXED, so it stays visible instead of being rediscovered.
+
+    The scanned tree is untrusted, so it can ship `_reports -> payload/` with a prewritten CLEAN
+    behind it. The writer refuses to publish through the link, and a reader following the
+    documented path is handed that planted CLEAN beside an rc 2. Gate review reproduced it from
+    the CLI with no race.
+
+    Removing the link was implemented and REVERTED: a symlinked _reports can be a deliberate
+    setup, deleting it destroys that configuration, and it still would not close the class,
+    because every defence available to the writer is writer-side and the exposure is reader-side.
+
+    The real fix is to stop authorizing from a path inside the scanned tree. Until that is made,
+    this arm asserts the limitation EXISTS. It is expected to fail, loudly, on the commit that
+    finally fixes it — which is what a pinned limitation is for.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "reports_symlink_plant")
+    staging = tmp_path / "staging"
+    payload = staging / "payload"
+    payload.mkdir(parents=True)
+    planted = payload / "scan_report.txt"
+    planted.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    os.symlink("payload", staging / "_reports")
+
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe '_reports'"))
+
+    canonical = staging / "_reports" / "scan_report.txt"
+    assert canonical.read_text(encoding="utf-8") == "scan_gate: CLEAN\n", (
+        "the planted CLEAN is no longer readable through the symlinked _reports directory. If "
+        "that is because the reader-side hole was closed, DELETE this arm and say so; it exists "
+        "only to keep an unfixed limitation visible")
+    assert planted.read_text(encoding="utf-8") == "scan_gate: CLEAN\n", (
+        "and nothing was written through the link")
+
+
+def test_a_platform_without_xattrs_does_not_break_the_refusal_writer(tmp_path: Path) -> None:
+    """POSIX-ACL extended attributes are a LINUX API.
+
+    Elsewhere os.getxattr does not merely fail, it does not EXIST — and AttributeError is not an
+    OSError, so it escaped a function documented as raising only OSError, and escaped the refusal
+    writer's "never raises" contract with it. Gate review found that a macOS or Windows adopter
+    would have the refusal writer replace the very refusal it was called to report.
+
+    The platform is simulated by giving THIS module copy an os whose three xattr names are
+    absent; import_driver hands each test its own module, so nothing leaks between arms.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "no_xattr_platform")
+
+    real_os = module.os
+    absent = ("getxattr", "setxattr", "removexattr")
+
+    class _NoXattrOS:
+        def __getattr__(self, name):
+            if name in absent:
+                raise AttributeError(name)
+            return getattr(real_os, name)
+
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+
+    module.os = _NoXattrOS()
+    module._XATTR_SUPPORTED = False       # what the probe would have found on that platform
+    try:
+        module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'a'"))
+    finally:
+        module.os = real_os
+
+    assert rp.read_text(encoding="utf-8").startswith("scan_gate: REFUSED"), (
+        "on a platform without POSIX-ACL xattrs the refusal was not published. The mode is the "
+        "whole access policy there, and carrying it over is the complete job")

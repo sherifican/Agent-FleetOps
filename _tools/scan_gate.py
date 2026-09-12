@@ -305,6 +305,13 @@ def _report_mode(report_path, reports_dir):
 
 ACL_XATTR = "system.posix_acl_access"
 
+# POSIX-ACL extended attributes are a LINUX API. Elsewhere os.getxattr does not merely fail, it
+# does not EXIST — and AttributeError is not an OSError, so it would escape a function documented
+# as raising only OSError, and escape the refusal writer's "never raises" contract with it. Gate
+# review found that a macOS or Windows adopter would have the refusal writer replace the refusal
+# it was called to report. Probed once, here, rather than guessed per platform.
+_XATTR_SUPPORTED = all(hasattr(os, _n) for _n in ("getxattr", "setxattr", "removexattr"))
+
 # A filesystem carrying no POSIX extended attributes answers every ACL question with one of these,
 # and an ordinary scan there must not become a refusal. What they establish is narrower than it
 # looks, so the comment that used to say they "all mean there is no ACL here" has been corrected:
@@ -379,6 +386,11 @@ def _install_posix_acl_policy(src, dst):
                 raise OSError(errno.EPERM, "report-policy-group-not-preservable")
 
         mode = stat.S_IMODE(old.st_mode)
+        if not _XATTR_SUPPORTED:
+            # No ACLs on this platform, so the mode IS the whole access policy and carrying it
+            # over is the complete job. Narrower than the Linux path and honest about it.
+            os.chmod(dst, mode)
+            return
         try:
             acl = os.getxattr(src, ACL_XATTR, follow_symlinks=False)
         except OSError as exc:
@@ -406,6 +418,24 @@ def _install_posix_acl_policy(src, dst):
             raise OSError(errno.EIO, "report-mode-verification-failed")
     except OSError as exc:
         raise OSError(exc.errno, "report-permission-preservation-failed") from exc
+
+# The preservation slot, and why it is a SET of names rather than one.
+#
+# A single name can be OCCUPIED, and an occupant that cannot be removed — a populated directory,
+# a file owned by somebody else — used to mean preservation was impossible, which in turn meant a
+# report could not be safely replaced. Gate review measured the consequence: an unreadable stale
+# CLEAN survived beside an rc 2 because the one slot was taken, so the scanner declined to
+# invalidate a report that falsely said this tree had passed. Occupancy of one name must not be
+# able to deny preservation, so a bounded set of alternates is tried in order.
+_SUPERSEDED_SLOTS = 8
+
+
+def _superseded_slots(reports_dir):
+    """Every name the preserved copy may occupy, in the order they are tried."""
+    yield os.path.join(reports_dir, "scan_report.superseded.txt")
+    for n in range(1, _SUPERSEDED_SLOTS):
+        yield os.path.join(reports_dir, "scan_report.superseded.%d.txt" % n)
+
 
 def write_report(staging, hits):
     reports_dir = os.path.join(staging, "_reports")
@@ -441,19 +471,19 @@ def write_report(staging, hits):
         # held the slot while the current ones were destroyed. A planted name had the same effect
         # permanently, which made refusing to overwrite into a denial-of-preservation. The slot
         # belongs to one report generation, and this is where that generation ends.
-        _superseded = os.path.join(reports_dir, "scan_report.superseded.txt")
-        try:
-            os.unlink(_superseded)
-        except IsADirectoryError:
-            # A directory at that name cannot be unlinked, and gate review reproduced one
-            # blocking every later preservation permanently. An EMPTY one is removable; a
-            # populated one is somebody else's data and is left alone.
+        for _superseded in _superseded_slots(reports_dir):
             try:
-                os.rmdir(_superseded)
+                os.unlink(_superseded)
+            except IsADirectoryError:
+                # A directory at that name cannot be unlinked, and gate review reproduced one
+                # blocking every later preservation permanently. An EMPTY one is removable; a
+                # populated one is somebody else's data and is left alone.
+                try:
+                    os.rmdir(_superseded)
+                except OSError:
+                    pass
             except OSError:
                 pass
-        except OSError:
-            pass
     except BaseException:
         try:
             os.unlink(tmp_path)
@@ -496,13 +526,14 @@ def _preserve_superseded(reports_dir, report_path):
     if not stat.S_ISREG(previous.st_mode):
         return True                       # not a regular file; not ours to preserve
 
-    superseded = os.path.join(reports_dir, "scan_report.superseded.txt")
-    linked = False
-    try:
-        os.link(report_path, superseded)
-        linked = True
-    except OSError:
-        pass                              # occupied, unusable, or unsupported — resolved below
+    linked = None
+    for candidate in _superseded_slots(reports_dir):
+        try:
+            os.link(report_path, candidate)
+        except OSError:
+            continue                      # occupied, unusable, or unsupported — try the next
+        linked = candidate
+        break
 
     # Classify only AFTER the link, so a failed read cannot prevent preservation.
     try:
@@ -512,45 +543,97 @@ def _preserve_superseded(reports_dir, report_path):
         is_status_line = False            # cannot tell: assume findings, the costly case
 
     if is_status_line:
-        # A CLEAN or REFUSED report is not worth the single slot, and parking one there was
-        # measured blocking a real findings report from ever being kept. Give the slot back.
-        if linked:
+        # A CLEAN or REFUSED report is not worth a slot, and parking one there was measured
+        # blocking a real findings report from ever being kept. Give the slot back.
+        if linked is not None:
             try:
-                os.unlink(superseded)
+                os.unlink(linked)
             except OSError:
                 pass
         return True
 
-    if linked:
+    if linked is not None:
         return True
-    try:
-        if os.stat(superseded).st_ino == previous.st_ino:
+
+    # Nothing could be linked. The findings may still be preserved already, by an earlier call
+    # that linked them under one of these names — but ONLY a second directory entry for THIS
+    # inode counts. The previous revision asked os.stat, which FOLLOWS symlinks, so a symlink
+    # planted at the slot and pointing back at the report answered "already preserved" when
+    # nothing was preserved at all, and the caller then destroyed the only copy. Both gate legs
+    # reproduced that independently, from the CLI, with no race.
+    #
+    # lstat does not follow. st_ino is unique only within a filesystem, so st_dev travels with
+    # it. A hard link is by definition a regular file, so a directory or a device at the name
+    # cannot pass either.
+    for candidate in _superseded_slots(reports_dir):
+        try:
+            kept = os.lstat(candidate)
+        except OSError:
+            continue
+        if (stat.S_ISREG(kept.st_mode)
+                and (kept.st_dev, kept.st_ino) == (previous.st_dev, previous.st_ino)):
             return True                   # already preserved by an earlier call; oldest wins
-    except OSError:
-        pass
-    return False                          # findings, and the slot would not take them
+    return False                          # findings, and no slot would take them
 
 
 def _write_refusal_report(staging, refusal):
-    """Best-effort: replace an EXISTING report with a single REFUSED line so a stale CLEAN cannot
-    survive beside an rc 2. Never raises; the original refusal still propagates. Anchors on the
-    real <staging>/_reports directory and never writes through a link: a symlinked or absent
-    _reports directory is left alone, a symlinked report file is unlinked, and the new report is
-    written to a temporary file in the same directory and atomically put in place with os.replace.
-    Creates nothing when no report exists.
+    """Best-effort: replace an EXISTING report with a single REFUSED line, so that a stale CLEAN
+    does not survive beside an rc 2 wherever this function can reach it. Never raises; the
+    original refusal still propagates. Writes through a temporary file in the real
+    <staging>/_reports directory, atomically put in place with os.replace. Creates nothing when
+    no report exists.
+
+    WHERE IT CANNOT REACH, stated plainly because an earlier revision of this docstring claimed
+    the guarantee unconditionally and gate review falsified it three ways:
+
+      - An UNWRITABLE report directory. Both publish attempts fail and the old report, CLEAN or
+        not, survives untouched. This function cannot promise a write on a filesystem refusing
+        writes, and it is the EXIT CODE, not the report, that carries the refusal.
+      - A report whose bytes cannot be READ and cannot be preserved under any slot. It is treated
+        as findings and left standing, because destroying unknown evidence is the worse error.
+        If it was in fact a stale CLEAN, it survives. The preservation slots exist to make this
+        case rare; they do not make it impossible.
+      - Anything a reader reaches by a path this function refused to follow. A symlinked _reports
+        is now REMOVED rather than left in place, which turns a planted CLEAN into no report at
+        all — but the report living inside the scanned tree is a structural limitation, not a
+        closed hole.
+
+    On links: a symlinked _reports directory is unlinked (the link, never its target) and nothing
+    is published; a symlinked report FILE is unlinked before the replace. So the claim that "the
+    canonical name is never unlinked" — which an earlier revision made — is false on that branch,
+    and there IS a window in which the report is missing: between that unlink and the replace, or
+    if the publish then fails. What the function does NOT do is write through a link.
 
     "Never raises" is scoped to the errors this can expect — OSError and UnicodeError. An
     unexpected type still propagates: a refusal whose __str__ raises ValueError will replace the
     refusal being reported, which `except Exception` would close at the cost of swallowing the
     defects this file exists to surface. That trade has not been made, so the narrower claim is
-    the true one.
+    the true one. AttributeError from the POSIX-ACL path on a non-Linux platform used to escape
+    the same way; that one is closed at its source rather than by widening this catch.
 
-    When the replacement cannot be published under the old policy, a private 0600 refusal replaces
-    it instead; the canonical name is never unlinked. If THAT write also fails — a read-only or
-    unwritable report directory — the old report survives unchanged. Removal was never promised
-    and cannot be: only the exit code is guaranteed."""
+    When the replacement cannot be published under the old policy, a private 0600 refusal
+    replaces it instead. 0600 is not simply "narrower": against an old 0400 or 0000 report it
+    ADDS owner write, while removing group and other access. It is narrower for every reader
+    other than the owner, which is the property that matters here, and the earlier blanket
+    "never wider" was wrong."""
     reports_dir = os.path.join(staging, "_reports")
     if os.path.islink(reports_dir) or not os.path.isdir(reports_dir):
+        # KNOWN STRUCTURAL LIMITATION, left in place deliberately and pinned by an arm.
+        #
+        # The scanned tree is UNTRUSTED, so it can ship `_reports -> payload/` with a prewritten
+        # `scan_gate: CLEAN` behind it. This writer correctly refuses to publish through the link
+        # — and a reader following the documented path is then handed that planted CLEAN beside
+        # an rc 2. Gate review reproduced it from the CLI with no race.
+        #
+        # Removing the link was tried and REVERTED. A symlinked _reports can be a deliberate
+        # setup (reports collected outside the tree), and deleting it destroys that configuration
+        # to defend against a plant — while still not closing the class, because every defence
+        # available here is writer-side and the exposure is reader-side.
+        #
+        # The actual fix is to stop authorizing from a path inside the scanned tree: keep the
+        # artifact outside it, or hand the caller the O_NOFOLLOW descriptor this scanner already
+        # held. That is a design change and is NOT made here. Until it is, the guarantee this
+        # function offers is bounded by the exit code, which no plant can forge.
         return
     report_path = os.path.join(reports_dir, "scan_report.txt")
     if not os.path.lexists(report_path):
@@ -601,11 +684,21 @@ def _write_refusal_report(staging, refusal):
         # was handed a way to erase the report through this writer's own authority — a capability
         # they did not otherwise have if they could not write this directory.
         #
-        # So the name is never dropped. The refusal is published at the private mode mkstemp
-        # already gave the staged file: 0600 can be narrower than the old policy but never wider,
-        # and it replaces the old bytes atomically, so no window exists in which the report is
-        # missing. If even that fails, the old report is left exactly as it was — this function
-        # cannot promise a write on a filesystem refusing writes, and it is the EXIT CODE, not the
+        # So the name is not dropped HERE. The refusal is published at the private mode mkstemp
+        # already gave the staged file, and replaces the old bytes atomically, so THIS branch
+        # opens no window in which the report is missing. Two corrections gate review forced on
+        # the claims this comment used to make:
+        #
+        #   0600 is not unconditionally narrower. Against an old 0400 or 0000 report it ADDS
+        #   owner write. It is narrower for every reader other than the owner, which is the
+        #   property this fallback needs, and "never wider" was simply wrong.
+        #
+        #   "No window exists" is true of this branch only. The symlinked-report branch above
+        #   unlinks the canonical name before the replace, and a failure in between leaves it
+        #   missing.
+        #
+        # If even this fails, the old report is left exactly as it was — this function cannot
+        # promise a write on a filesystem refusing writes, and it is the EXIT CODE, not the
         # report, that says this scan refused.
         try:
             fd, tmp_path = tempfile.mkstemp(dir=reports_dir, prefix=".scan_report_")
