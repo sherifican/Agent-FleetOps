@@ -25,7 +25,7 @@ Coverage disclosure — the five surfaces:
 Mutation proof (--self-test): a planted fake API key and a planted identity string
 must each go red; a clean fixture must pass.
 """
-import sys, os, re, stat, binascii, subprocess, tempfile, shutil
+import sys, os, re, stat, errno, subprocess, tempfile, shutil
 
 SECRET_PATTERNS = [
     ("anthropic-key",      re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
@@ -267,48 +267,107 @@ def _report_mode(report_path, reports_dir):
             return stat.S_IMODE(st.st_mode)
     except OSError:
         pass
-    # A FIXED probe name collides with any leftover, and a finally that unlinks it deletes a file
-    # this code did not create. Both are avoided by naming each attempt uniquely and unlinking only
-    # inside the branch that actually created something.
-    for _ in range(8):
-        probe = os.path.join(reports_dir, ".scan_report_mode_probe_%s" % binascii.hexlify(os.urandom(6)).decode())
+    # Measure an ordinary create WITHOUT publishing a pathname. A named probe can be renamed onto
+    # between the create and the stat: the mode read back then describes an intruder's file, and
+    # the unlink that follows destroys it. Naming each attempt uniquely narrows that window but
+    # does not close it, because the unlink and the stat still name a path rather than hold a
+    # descriptor. An unnamed file has no directory entry for anything to substitute.
+    #
+    # An O_TMPFILE inode inherits the directory's default ACL exactly as an ordinary create does
+    # (measured on ext4: both 0640 under a u::rw,g::r,o::- default, where the umask formula gives
+    # 0664), so asking this way costs nothing in accuracy.
+    #
+    # O_TMPFILE is Linux-only and not carried by every filesystem — NFS among them — while the
+    # mkstemp that precedes this call works there. So its absence falls back to the umask formula
+    # as before: a guess that cannot see a default ACL, but a report written under a slightly wrong
+    # mode beats refusing to write one at all on a filesystem where everything else works.
+    tmpfile = getattr(os, "O_TMPFILE", 0)
+    if tmpfile:
         try:
-            fd = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
-        except FileExistsError:
-            continue                      # astronomically unlikely; retry rather than guess
-        except OSError:
-            return 0o666 & ~_current_umask()
-        try:
-            os.close(fd)
-            return stat.S_IMODE(os.stat(probe).st_mode)
-        except OSError:
-            return 0o666 & ~_current_umask()
-        finally:
+            fd = os.open(reports_dir, tmpfile | os.O_EXCL | os.O_RDWR, 0o666)
             try:
-                os.unlink(probe)          # only ever the file this iteration created
-            except OSError:
-                pass
+                return stat.S_IMODE(os.fstat(fd).st_mode)
+            finally:
+                os.close(fd)
+        except OSError:
+            pass
     return 0o666 & ~_current_umask()
 
-def _copy_access_acl(src, dst):
-    """Carry the access ACL across an atomic replace.
+ACL_XATTR = "system.posix_acl_access"
+
+# A filesystem carrying no extended attributes answers every ACL question with one of these. They
+# all mean "there is no ACL here", which is not the same as failing to preserve one, and must not
+# turn an ordinary scan on such a filesystem into a refusal.
+_ACL_ABSENT = frozenset(
+    code for code in (getattr(errno, name, None)
+                      for name in ("ENODATA", "ENOATTR", "EOPNOTSUPP", "ENOTSUP"))
+    if code is not None)
+
+
+def _install_access_policy(src, dst):
+    """Install the report's whole access policy on dst, while dst is still private.
 
     st_mode is only part of the permission contract. A POSIX ACL lives in an extended attribute, so
     a replace that preserves the mode can still change WHO may read the file, because the new inode
-    inherits the directory's default ACL rather than the one the old report carried. Copy it after
-    the chmod, since applying an access ACL also rewrites the mode bits it covers.
+    inherits the DIRECTORY's default ACL rather than the one the old report carried.
 
-    No ACL on the source, or no ACL support on the filesystem, is not an error: there is simply
-    nothing extra to preserve, and the chmod already said everything there is to say.
+    The ORDER is the contract, and it is why this is one function rather than a chmod standing
+    beside an ACL copy. Setting the mode first opens a window in which the temporary file already
+    grants group and other access under the INHERITED policy, and the intended one lands after.
+    Installing both here, with dst still at mkstemp's 0600, means that window never opens.
+
+    Replacing an existing report preserves its mode AND its ACL, including the ABSENCE of one: an
+    inherited entry is removed rather than left to widen access silently. A genuinely new report
+    keeps what the directory gave it.
+
+    Failure raises. A report whose access policy could not be established must not be published
+    under a guess about who may read it.
     """
     try:
-        acl = os.getxattr(src, "system.posix_acl_access")
-    except OSError:
-        return
-    try:
-        os.setxattr(dst, "system.posix_acl_access", acl)
-    except OSError:
-        pass
+        try:
+            old = os.stat(src, follow_symlinks=False)
+        except FileNotFoundError:
+            # A new report: whatever an ordinary create in this directory produces is the answer,
+            # and the ACL it inherited is the correct one to keep.
+            os.chmod(dst, _report_mode(src, os.path.dirname(dst)))
+            return
+
+        current = os.stat(dst, follow_symlinks=False)
+        if not stat.S_ISREG(old.st_mode) or not stat.S_ISREG(current.st_mode):
+            raise OSError(errno.EINVAL, "report-policy-requires-regular-files")
+        if old.st_uid != current.st_uid or old.st_gid != current.st_gid:
+            # Identical mode bits and ACL bytes under a different owning identity are a different
+            # access policy. Refuse rather than guess which change was intended.
+            raise OSError(errno.EPERM, "report-policy-owner-or-group-differs")
+
+        mode = stat.S_IMODE(old.st_mode)
+        try:
+            acl = os.getxattr(src, ACL_XATTR, follow_symlinks=False)
+        except OSError as exc:
+            if exc.errno not in _ACL_ABSENT:
+                raise
+            acl = None
+
+        if acl is None:
+            # Drop the inherited entry while group and other access are still switched off.
+            try:
+                os.removexattr(dst, ACL_XATTR, follow_symlinks=False)
+            except OSError as exc:
+                if exc.errno not in _ACL_ABSENT:
+                    raise
+            os.chmod(dst, mode)
+        else:
+            # Special bits only; content access stays private until the ACL itself supplies the
+            # owner, mask and other bits.
+            os.chmod(dst, (mode & 0o7000) | 0o600)
+            os.setxattr(dst, ACL_XATTR, acl, follow_symlinks=False)
+            if os.getxattr(dst, ACL_XATTR, follow_symlinks=False) != acl:
+                raise OSError(errno.EIO, "report-access-acl-verification-failed")
+
+        if stat.S_IMODE(os.stat(dst, follow_symlinks=False).st_mode) != mode:
+            raise OSError(errno.EIO, "report-mode-verification-failed")
+    except OSError as exc:
+        raise OSError(exc.errno, "report-permission-preservation-failed") from exc
 
 def write_report(staging, hits):
     reports_dir = os.path.join(staging, "_reports")
@@ -334,9 +393,9 @@ def write_report(staging, hits):
         with os.fdopen(fd, "w") as f:
             f.write(body)
         # mkstemp creates at 0600 and os.replace preserves it, which would hand a reader a report
-        # they cannot open. The artifact lands on the mode contract for this path.
-        os.chmod(tmp_path, _report_mode(report_path, reports_dir))
-        _copy_access_acl(report_path, tmp_path)
+        # they cannot open. The whole access policy is installed while the file is still private,
+        # so no reader ever observes the directory's inherited one.
+        _install_access_policy(report_path, tmp_path)
         os.replace(tmp_path, report_path)
     except BaseException:
         try:
@@ -352,21 +411,29 @@ def _write_refusal_report(staging, refusal):
     real <staging>/_reports directory and never writes through a link: a symlinked or absent
     _reports directory is left alone, a symlinked report file is unlinked, and the new report is
     written to a temporary file in the same directory and atomically put in place with os.replace.
-    Creates nothing when no report exists."""
+    Creates nothing when no report exists.
+
+    "Never raises" is scoped to the errors this can expect — OSError and UnicodeError. An
+    unexpected exception type still propagates; claiming otherwise would need a bare except, which
+    would swallow the defects this file is supposed to surface. When the replacement cannot be
+    published the stale report is REMOVED rather than left: see the fallback at the bottom."""
     reports_dir = os.path.join(staging, "_reports")
     if os.path.islink(reports_dir) or not os.path.isdir(reports_dir):
         return
     report_path = os.path.join(reports_dir, "scan_report.txt")
     if not os.path.lexists(report_path):
         return
-    if isinstance(refusal, (OSError, UnicodeError)):
-        reason_class = "input-error"
-    else:
-        msg = str(refusal)
-        reason_class = msg.split(" ", 1)[0].rstrip(";:,.")
-        if not reason_class or not re.fullmatch(r"[a-z][a-z0-9\-]*", reason_class):
-            reason_class = "unclassified"
     try:
+        # Classified INSIDE the guarded block. str() on a refusal is not guaranteed to succeed,
+        # and out here a failure would propagate from a function whose whole job is to not let the
+        # report writer displace the refusal it was called to report.
+        if isinstance(refusal, (OSError, UnicodeError)):
+            reason_class = "input-error"
+        else:
+            msg = str(refusal)
+            reason_class = msg.split(" ", 1)[0].rstrip(";:,.")
+            if not reason_class or not re.fullmatch(r"[a-z][a-z0-9\-]*", reason_class):
+                reason_class = "unclassified"
         if os.path.islink(report_path):
             os.unlink(report_path)
         fd, tmp_path = tempfile.mkstemp(dir=reports_dir, prefix=".scan_report_")
@@ -374,8 +441,7 @@ def _write_refusal_report(staging, refusal):
             with os.fdopen(fd, "w") as f:
                 f.write(f"scan_gate: REFUSED {reason_class}\n")
             # The refusal report is the one a reader needs most, so it gets the same contract.
-            os.chmod(tmp_path, _report_mode(report_path, reports_dir))
-            _copy_access_acl(report_path, tmp_path)
+            _install_access_policy(report_path, tmp_path)
             os.replace(tmp_path, report_path)
         except BaseException:
             try:
@@ -384,7 +450,20 @@ def _write_refusal_report(staging, refusal):
                 pass
             raise
     except (OSError, UnicodeError):
-        pass
+        # The replacement could not be published. Most often that is _install_access_policy
+        # refusing to publish under a guessed access policy — a refusal, not a reason to leave the
+        # old bytes standing. What must not survive an rc 2 is a stale "scan_gate: CLEAN" telling a
+        # reader this tree was scanned and passed, so remove the canonical name instead.
+        #
+        # Absent is not success. A reader that treats a missing report as a pass reproduces one
+        # level up the exact defect this function exists to prevent; the contract is that only
+        # rc 0 WITH a report authorizes anything. Removal also loses the report's history, which
+        # is the price of not leaving a lie in place, and is why it is the fallback and not the
+        # first move.
+        try:
+            os.unlink(report_path)
+        except OSError:
+            pass
 
 def self_test():
     tmp = tempfile.mkdtemp(prefix="scangate_selftest_")

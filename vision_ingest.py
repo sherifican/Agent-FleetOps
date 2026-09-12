@@ -1014,7 +1014,7 @@ def archive(root):
         dst = f"{dest}/{os.path.basename(fp)}"
         if not _file_destination_ok(dst, mount):
             corrupt += 1
-            print(f"archive: ⚠ destination escapes the configured mount for {os.path.basename(fp)} — KEPT on primary")
+            print(f"archive: ⚠ no usable destination inside the configured mount for {os.path.basename(fp)} — KEPT on primary")
             continue
         src_h = hashlib.sha256(open(fp, "rb").read()).hexdigest()
         shutil.copy2(fp, dst)
@@ -1043,7 +1043,7 @@ def archive(root):
         json.dump(comp, open(cp, "w"), indent=1)
         cp_dest = f"{BACKUP_ROOT}/{slug}/companions.json"
         if not _file_destination_ok(cp_dest, mount):
-            print("archive: companions.json destination escapes the configured mount — SKIP copy")
+            print("archive: companions.json has no usable destination inside the configured mount — SKIP copy")
         else:
             shutil.copy2(cp, cp_dest)
             manifest_copied = True
@@ -1053,7 +1053,7 @@ def archive(root):
         # actually written — is the one that must be checked, not the directory holding it.
         syn_dest = os.path.join(f"{BACKUP_ROOT}/{slug}", os.path.basename(syn[0]))
         if not _file_destination_ok(syn_dest, mount):
-            print("archive: synthesis destination escapes the configured mount — SKIP copy")
+            print("archive: synthesis has no usable destination inside the configured mount — SKIP copy")
         else:
             shutil.copy2(syn[0], syn_dest)           # self-contained archive on the backup drive
             synthesis_copied = True

@@ -335,3 +335,33 @@ def test_the_summary_does_not_claim_a_cleared_primary_while_an_image_remains(mon
     assert 'KEPT on primary' in out, 'CONTROL: and the run said so at the time'
     assert 'primary keeps/ cleared' not in out, \
         'the summary must not report a cleared primary while an image is still sitting in it'
+
+
+def test_a_refusal_names_the_reason_it_actually_had(monkeypatch, tmp_path, capsys):
+    """Round-4 review: the refusal text named a cause that had not occurred.
+
+    _file_destination_ok refuses for two different reasons — the destination escapes the mount, or
+    something stands at the leaf that copy2 would write straight through. Both call sites printed
+    "escapes the configured mount", so a refusal caused by the second sent a reader hunting for a
+    mount problem that did not exist. The existing arms assert only that SOME refusal was printed,
+    which is why the wrong reason survived them.
+
+    Here the destination is squarely INSIDE the configured mount: nothing escapes anything. Only a
+    directory is in the way.
+    """
+    primary, image, mount = _staged(tmp_path, monkeypatch)
+    (primary / 'vision' / 'companions.json').write_text('[{"tc": "00:00:01"}]', encoding='utf-8')
+    trap = mount / 'archive' / 'source' / 'companions.json'
+    trap.mkdir(parents=True, exist_ok=True)
+
+    vi.archive(str(primary))
+    out = capsys.readouterr().out
+
+    refusals = [ln for ln in out.splitlines() if 'companions.json' in ln and 'SKIP copy' in ln]
+    assert refusals, 'CONTROL: the metadata copy really was refused on this run, with a line to read'
+    assert not trap.is_file(), 'CONTROL: and no manifest file was produced'
+    assert str(trap).startswith(str(mount)), \
+        'CONTROL: the destination is inside the mount, so "escapes" would be a false statement'
+    assert 'escapes the configured mount' not in refusals[0], (
+        f'the refusal blamed an escape that did not happen: {refusals[0]!r}. The destination is '
+        'inside the configured mount; what stopped the copy was a directory standing at the leaf')

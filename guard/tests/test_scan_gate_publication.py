@@ -1773,3 +1773,193 @@ def test_a_refusal_report_preserves_the_access_control_list_too(tmp_path: Path) 
             "artifact a reader most needs and the one most likely to be read by someone else")
     finally:
         locked.chmod(0o755)
+
+
+# =============================================================================================
+# GROUP 20 — the probe must publish no name, and the policy must land before any access
+#
+# Round-4 adversarial review. Three findings, each a case where the SUITE stayed green:
+#
+#   probe-rename-race — the unique-name probe closed the collision but not the race. The stat
+#     and the unlink still name a PATH rather than hold the descriptor the open returned, so a
+#     file renamed onto that name between them is measured as the contract and then deleted.
+#   acl-copy-after-chmod-order-unpinned — swapping the chmod and the ACL copy left every test
+#     green, while the commit message asserted the order was load-bearing. It is: between them
+#     the temporary report carries the DIRECTORY's inherited policy at its full mode.
+#   an existing report with NO acl silently gained the directory's default one, because "no ACL
+#     to copy" was read as "nothing to do" rather than as a policy in its own right.
+# =============================================================================================
+
+
+def test_the_mode_probe_cannot_be_raced_onto_a_name(tmp_path: Path, monkeypatch) -> None:
+    """A named probe is a promise an attacker can keep for you.
+
+    The instrument substitutes a file for whatever named entry the probe creates, which is what a
+    writer to the reports directory can do between the create and the stat. Against a probe that
+    never publishes a name there is nothing to substitute and the hook finds no file to rename.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "probe_race")
+    reports_dir = tmp_path / "_reports"
+    reports_dir.mkdir()
+    victim = reports_dir / "someone_elses_file"
+    victim.write_text("SOMEONE ELSE FILE", encoding="utf-8")
+    victim.chmod(0o606)
+
+    real_open = module.os.open
+    opens: list[str] = []
+
+    probe_dir = str(reports_dir)
+
+    def racing_open(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        opens.append(str(path))
+        # Keyed on a named FILE appearing, not on a flag bit, so the arm does not depend on how
+        # any particular libc spells its open modes. Scoped to entries the scanner creates inside
+        # the reports directory: os.open is process-wide while patched, so an unscoped hook would
+        # happily rename the victim over an unrelated file pytest itself opened.
+        if (isinstance(path, str) and os.path.dirname(path) == probe_dir
+                and path != str(victim) and os.path.isfile(path)):
+            try:
+                os.rename(str(victim), path)
+            except OSError:
+                pass
+        return fd
+
+    monkeypatch.setattr(module.os, "open", racing_open)
+    got = module._report_mode(str(reports_dir / "scan_report.txt"), str(reports_dir))
+
+    assert opens, "CONTROL: the instrument saw no open() at all, so this arm measured nothing"
+    assert victim.exists(), (
+        "the probe deleted a file it did not create: a rename onto the probe's name puts a "
+        "stranger's inode where the unlink is aimed, and unique naming does not close that")
+    assert victim.read_text(encoding="utf-8") == "SOMEONE ELSE FILE", "and must not rewrite it"
+    assert got != 0o606, (
+        f"the contract came back as {got:04o}, the substituted file's mode: a probe that stats a "
+        "NAME reports whatever was standing at that name, not what an ordinary create produces")
+
+
+def test_a_report_with_no_acl_does_not_inherit_the_directorys_default(tmp_path: Path) -> None:
+    """Absence of an ACL is a policy, not an absence of one.
+
+    The old helper read "no ACL on the source" as "nothing to preserve" and returned. But the
+    temporary file was created inside the reports directory, so it already carried that
+    directory's DEFAULT ACL — and the replace published it. Every mode bit matches across the
+    swap and the set of people who can read the report is different.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores these checks; this needs an unprivileged writer")
+    if shutil.which("setfacl") is None:
+        pytest.skip("setfacl is not installed; the ACL contract cannot be measured here")
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0, "CONTROL: a clean run, so there is a report to replace"
+    rp = staging / REPORT_REL
+    reports_dir = staging / "_reports"
+
+    subprocess.run(["setfacl", "-b", "--", str(rp)], capture_output=True, text=True)
+    # A default ACL of the three BASE entries alone lives in the mode bits and creates no extended
+    # attribute, so an inherited policy would be invisible here and this arm would pass against
+    # any implementation at all. A NAMED entry is what forces a real xattr into existence. Caught
+    # by running this arm against the old scanner and watching it come back green.
+    applied = subprocess.run(
+        ["setfacl", "-d", "-m", f"u::rw,g::r,o::-,u:{os.geteuid()}:r", str(reports_dir)],
+        capture_output=True, text=True)
+    if applied.returncode != 0:
+        pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
+    canary = reports_dir / ".inheritance_canary"
+    canary.write_text("x", encoding="utf-8")
+    inherited = _acl(canary)
+    canary.unlink()
+    if inherited is None:
+        pytest.skip("CONTROL: new files here inherit no ACL xattr, so this arm cannot distinguish "
+                    "a preserved policy from an inherited one")
+    if _acl(rp) is not None:
+        pytest.skip("this filesystem keeps an access ACL on the report; the arm needs one without")
+    before_mode = stat.S_IMODE(rp.stat().st_mode)
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0, "it rewrote the report"
+
+    assert _acl(rp) is None, (
+        "the replaced report inherited the DIRECTORY's default ACL. The old report's policy was "
+        "its mode alone; handing the new one an inherited ACL changes who may read it while "
+        "every mode bit stays identical — the same failure as round 3, in the other direction")
+    assert stat.S_IMODE(rp.stat().st_mode) == before_mode, "and the mode is still preserved"
+
+
+def test_the_access_policy_lands_before_any_group_or_other_access(tmp_path: Path, monkeypatch) -> None:
+    """The ordering the commit message claimed was load-bearing, now actually pinned.
+
+    Reverting the order left the whole suite green, which is what made this worth writing. The
+    instrument reads the temporary file's mode at the instant the ACL is installed: if the mode
+    was set first, the file has already granted group and other access under the INHERITED
+    policy by then.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores these checks; this needs an unprivileged writer")
+    if shutil.which("setfacl") is None:
+        pytest.skip("setfacl is not installed; the ACL contract cannot be measured here")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "acl_order")
+    reports_dir = tmp_path / "_reports"
+    reports_dir.mkdir()
+    rp = reports_dir / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    rp.chmod(0o664)
+    named = subprocess.run(["setfacl", "-m", f"u:{os.geteuid()}:r", "--", str(rp)],
+                           capture_output=True, text=True)
+    if named.returncode != 0:
+        pytest.skip(f"the filesystem refused an ACL entry: {named.stderr.strip()[:80]}")
+
+    staged = reports_dir / ".scan_report_staged"
+    staged.write_text("scan_gate: REFUSED input-error\n", encoding="utf-8")
+    staged.chmod(0o600)
+
+    real_setxattr = module.os.setxattr
+    at_install: list[int] = []
+
+    def watching_setxattr(path, name, value, *args, **kwargs):
+        at_install.append(stat.S_IMODE(os.stat(path).st_mode))
+        return real_setxattr(path, name, value, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "setxattr", watching_setxattr)
+    module._install_access_policy(str(rp), str(staged))
+
+    assert at_install, "CONTROL: no ACL was ever installed, so the ordering was not exercised"
+    assert all(mode & 0o077 == 0 for mode in at_install), (
+        f"the staged report already granted group/other access ({[oct(m) for m in at_install]}) "
+        "at the moment the ACL was installed: until the ACL lands, those bits belong to the "
+        "directory's inherited policy, and publishing through that window is the whole defect")
+
+
+def test_a_refusal_that_cannot_publish_removes_the_stale_clean(tmp_path: Path, monkeypatch) -> None:
+    """The half of the permission change nobody had specified.
+
+    Making the policy helper RAISE gave the refusal writer a failure it had no answer for: its
+    outer handler swallowed it and left the previous report in place. That report can say CLEAN
+    next to an rc 2, which is the one outcome this writer exists to prevent. Removing the name
+    is worse for a reader than a correct refusal and better than a lie.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "refusal_unpublishable")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+
+    def refuses(src, dst):
+        raise OSError("report-permission-preservation-failed")
+
+    monkeypatch.setattr(module, "_install_access_policy", refuses)
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe '_reports'"))
+
+    assert not rp.exists(), (
+        "a refusal that could not publish its replacement left the old report standing; a stale "
+        "'scan_gate: CLEAN' beside an rc 2 tells a reader the tree was scanned and passed")
+    leftovers = sorted(p.name for p in reports_dir.iterdir() if p.name.startswith(".scan_report_"))
+    assert not leftovers, f"and the temporary file must not be abandoned either: {leftovers}"
