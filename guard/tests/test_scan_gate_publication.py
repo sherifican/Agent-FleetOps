@@ -2355,3 +2355,95 @@ def test_a_planted_sibling_does_not_deny_preservation_forever(tmp_path: Path) ->
     module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'c'"))
     assert "docs/x.md" in superseded.read_text(encoding="utf-8"), (
         "and after the plant is cleared the refusal must be able to keep the real findings")
+
+
+def test_findings_that_cannot_be_preserved_are_not_destroyed(tmp_path: Path) -> None:
+    """Publication gate, reproduced from the CLI: preservation failed silently and the replace
+    went ahead anyway.
+
+    A DIRECTORY at the sibling name cannot be unlinked by the clearing step and cannot be linked
+    over, so every later refusal destroyed the only findings report while every failure on the way
+    was swallowed. The two rules are not symmetric: a stale CLEAN beside an rc 2 falsely
+    authorizes and must go, while a stale FINDINGS report says there are secrets here and is the
+    conservative thing to leave. So findings are replaced only once they are safely kept.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "preserve_blocked")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    findings = "SECRET\tgeneric_key_assignment\tcontents\tdocs/example.md:12\n"
+    rp.write_text(findings, encoding="utf-8")
+    (reports_dir / "scan_report.superseded.txt").mkdir()
+
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'a'"))
+
+    assert rp.read_text(encoding="utf-8") == findings, (
+        "the findings were destroyed by a refusal that could not preserve them. Replacing is only "
+        "safe once the evidence is kept; a report that says there are secrets is not a false "
+        "authorization, so leaving it costs a reader nothing and losing it costs the evidence")
+
+
+def test_an_unreadable_findings_report_is_still_preserved(tmp_path: Path) -> None:
+    """A hard link needs no read permission on its source.
+
+    Classifying the report before linking it made an unreadable findings report unpreservable —
+    and therefore replaceable. Reproduced from the CLI at mode 000. The link now comes first.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root can read a 000 file; this needs an unprivileged reader")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "preserve_unreadable")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    findings = "SECRET\tgeneric_key_assignment\tcontents\tdocs/example.md:12\n"
+    rp.write_text(findings, encoding="utf-8")
+    rp.chmod(0o000)
+    try:
+        try:
+            rp.read_text(encoding="utf-8")
+            pytest.skip("this filesystem does not enforce mode 000; the arm is not measurable")
+        except PermissionError:
+            pass
+
+        module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'a'"))
+
+        superseded = reports_dir / "scan_report.superseded.txt"
+        assert superseded.exists(), (
+            "an unreadable findings report was not preserved. A hard link does not read its "
+            "source, so a failed read must not be what decides whether evidence survives")
+        superseded.chmod(0o600)
+        assert superseded.read_text(encoding="utf-8") == findings, "and it must be the findings"
+    finally:
+        for leftover in (rp, reports_dir / "scan_report.superseded.txt"):
+            try:
+                leftover.chmod(0o600)
+            except OSError:
+                pass
+
+
+def test_a_stale_clean_is_still_replaced_and_leaves_the_slot_free(tmp_path: Path) -> None:
+    """The asymmetry, asserted from the other side.
+
+    Making findings un-replaceable must not make a stale CLEAN un-replaceable too — that is the
+    false authorization this whole writer exists to prevent. And a status line must not occupy the
+    preservation slot, or the next real findings report cannot be kept.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "stale_clean_replaced")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'a'"))
+
+    assert rp.read_text(encoding="utf-8").startswith("scan_gate: REFUSED"), (
+        "a stale CLEAN survived a refusal: it tells a reader this tree was scanned and passed, "
+        "beside an exit code that says it was not")
+    assert not (reports_dir / "scan_report.superseded.txt").exists(), (
+        "a status line took the preservation slot, which the next findings report then cannot use")

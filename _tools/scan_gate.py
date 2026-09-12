@@ -441,8 +441,17 @@ def write_report(staging, hits):
         # held the slot while the current ones were destroyed. A planted name had the same effect
         # permanently, which made refusing to overwrite into a denial-of-preservation. The slot
         # belongs to one report generation, and this is where that generation ends.
+        _superseded = os.path.join(reports_dir, "scan_report.superseded.txt")
         try:
-            os.unlink(os.path.join(reports_dir, "scan_report.superseded.txt"))
+            os.unlink(_superseded)
+        except IsADirectoryError:
+            # A directory at that name cannot be unlinked, and gate review reproduced one
+            # blocking every later preservation permanently. An EMPTY one is removable; a
+            # populated one is somebody else's data and is left alone.
+            try:
+                os.rmdir(_superseded)
+            except OSError:
+                pass
         except OSError:
             pass
     except BaseException:
@@ -458,40 +467,68 @@ _STATUS_LINE_PREFIX = b"scan_gate: "
 
 
 def _preserve_superseded(reports_dir, report_path):
-    """Keep the report that is about to be replaced, under a sibling name.
+    """Keep the report about to be replaced, and say whether replacing it is now safe.
 
-    os.replace destroys the old bytes, so preserving the NAME is not preserving the EVIDENCE — and
-    a report carrying HITS is the artifact a reader most needs kept. A hard LINK keeps the old
-    INODE alive, which means the original content, mode, owner and ACL rather than something that
-    merely resembles them.
+    Returns True when the caller may replace the report, False when replacing it would destroy
+    findings that could NOT be preserved.
 
-    Never overwrites an existing preserved copy, so two refusals in a row cannot replace kept
-    findings with a copy of the refusal. That rule only holds because the slot is emptied by the
-    next successful scan: without that, an old generation's copy — or a planted file at the same
-    name — would block preservation forever, which is the opposite of the intent. Occupancy is
-    not by itself evidence that what occupies it is worth more than what is being replaced.
+    os.replace destroys the old bytes, so keeping the NAME is not keeping the EVIDENCE. A hard
+    LINK keeps the old INODE — its content, mode, owner and ACL, not a copy that resembles them.
 
-    Called before EITHER replace in the refusal writer. An earlier revision guarded only the
-    fallback, so the ordinary path — the common one — went on destroying the findings while the
-    commit message said otherwise.
+    Two rules decide the outcome, and they are not symmetric. A stale "CLEAN" beside an rc 2 is
+    dangerous: it tells a reader this tree was scanned and passed, which is a false authorization.
+    A stale FINDINGS report beside an rc 2 is not dangerous — it says there are secrets here,
+    which is the conservative direction. So a status line may always be replaced, and findings may
+    be replaced ONLY once they are safely kept. Gate review found the earlier version replacing
+    them regardless, with every failure to preserve swallowed on the way.
 
-    Best effort, and silent: publishing an accurate current report outranks keeping history.
+    The link is attempted BEFORE the report is read, because a hard link needs no read permission
+    on its source. Reading first made an unreadable findings report unpreservable and therefore
+    destroyable — measured at mode 000.
+
+    An unreadable report is treated as findings. That is the expensive assumption in the safe
+    direction: the cost of being wrong is one preserved status line, against losing evidence.
     """
     try:
         previous = os.lstat(report_path)
-        if not stat.S_ISREG(previous.st_mode):
-            return
-        # Only a FINDINGS report earns the slot. A CLEAN or a REFUSED report is a status line
-        # carrying nothing a reader would mourn, and parking one here occupies the single slot
-        # forever: measured, a CLEAN report saved by an earlier refusal then blocked a real
-        # findings report from being kept at all. That is the "oldest wins" rule eating precisely
-        # what it was added to protect, so the rule is now "oldest FINDINGS wins".
+    except OSError:
+        return True                       # nothing there; nothing to lose
+    if not stat.S_ISREG(previous.st_mode):
+        return True                       # not a regular file; not ours to preserve
+
+    superseded = os.path.join(reports_dir, "scan_report.superseded.txt")
+    linked = False
+    try:
+        os.link(report_path, superseded)
+        linked = True
+    except OSError:
+        pass                              # occupied, unusable, or unsupported — resolved below
+
+    # Classify only AFTER the link, so a failed read cannot prevent preservation.
+    try:
         with open(report_path, "rb") as handle:
-            if handle.read(len(_STATUS_LINE_PREFIX)) == _STATUS_LINE_PREFIX:
-                return
-        os.link(report_path, os.path.join(reports_dir, "scan_report.superseded.txt"))
+            is_status_line = handle.read(len(_STATUS_LINE_PREFIX)) == _STATUS_LINE_PREFIX
+    except OSError:
+        is_status_line = False            # cannot tell: assume findings, the costly case
+
+    if is_status_line:
+        # A CLEAN or REFUSED report is not worth the single slot, and parking one there was
+        # measured blocking a real findings report from ever being kept. Give the slot back.
+        if linked:
+            try:
+                os.unlink(superseded)
+            except OSError:
+                pass
+        return True
+
+    if linked:
+        return True
+    try:
+        if os.stat(superseded).st_ino == previous.st_ino:
+            return True                   # already preserved by an earlier call; oldest wins
     except OSError:
         pass
+    return False                          # findings, and the slot would not take them
 
 
 def _write_refusal_report(staging, refusal):
@@ -534,8 +571,13 @@ def _write_refusal_report(staging, refusal):
                 reason_class = "unclassified"
         if os.path.islink(report_path):
             os.unlink(report_path)
-        # Before EITHER publish attempt, so the ordinary path is covered and not just the fallback.
-        _preserve_superseded(reports_dir, report_path)
+        # Before EITHER publish attempt, so the ordinary path is covered and not just the
+        # fallback. A False verdict means the report holds findings that could not be kept, and
+        # destroying evidence is worse than leaving a report that says "there are secrets here".
+        # The refusal still reaches the caller through the exit code, which is the channel that
+        # actually carries it.
+        if not _preserve_superseded(reports_dir, report_path):
+            return
         fd, tmp_path = tempfile.mkstemp(dir=reports_dir, prefix=".scan_report_")
         try:
             with os.fdopen(fd, "w") as f:
