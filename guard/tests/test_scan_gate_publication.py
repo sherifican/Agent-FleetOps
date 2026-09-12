@@ -1867,15 +1867,19 @@ def test_the_mode_probe_cannot_be_raced_onto_a_name(tmp_path: Path, monkeypatch)
     # that makes that true.
     # An O_TMPFILE open names the DIRECTORY, not a file in it, so both shapes count: the
     # directory itself (the unnamed case) and any entry within it (the named case this forbids).
-    inside = [(p, f) for p, f in opens
-              if p == str(reports_dir) or os.path.dirname(p) == str(reports_dir)]
-    assert inside, "CONTROL: nothing was opened in or on the reports directory at all"
-    # EVERY open inside the reports directory, not merely SOME open anywhere: an implementation
-    # could open a decoy unnamed file, discard it, and still publish a named one.
-    assert all(f & os.O_TMPFILE == os.O_TMPFILE for _, f in inside), (
-        f"a NAMED entry was opened in the reports directory: {[(p, oct(f)) for p, f in inside]}. "
+    # The property is that no NAMED entry is created, not that the directory is never opened.
+    # Requiring every open here to carry O_TMPFILE also forbade a plain O_RDONLY open of the
+    # directory — an openat anchor, which is the descriptor-anchored direction this code should
+    # be free to move in. An arm that penalises the improvement it wants is worse than no arm.
+    named = [(p, f) for p, f in opens if os.path.dirname(p) == str(reports_dir)]
+    assert not named, (
+        f"a NAMED entry was opened in the reports directory: {[(p, oct(f)) for p, f in named]}. "
         "Matching an ordinary create's mode does not establish that no name was published, and "
         "the name is the whole hazard")
+    on_dir = [(p, f) for p, f in opens if p == str(reports_dir)]
+    assert any(f & os.O_TMPFILE == os.O_TMPFILE for _, f in on_dir), (
+        f"no unnamed file was ever created: {[(p, oct(f)) for p, f in on_dir]}. The mode matching "
+        "an ordinary create is necessary and not sufficient")
 
 
 def test_a_report_with_no_acl_does_not_inherit_the_directorys_default(tmp_path: Path) -> None:
@@ -2025,6 +2029,14 @@ def test_the_access_policy_lands_before_any_group_or_other_access(tmp_path: Path
         f"the staged report ended at {final:04o} but the report it replaces is "
         f"{stat.S_IMODE(rp.stat().st_mode):04o}: an exposure after the ACL lands is still an "
         "exposure, and checking only the prefix cannot see it")
+    # Nothing ANYWHERE in the timeline may grant more than the policy being installed. The prefix
+    # rule below is stricter before the ACL lands; this one covers the gap between the install and
+    # the end, where a transient chmod 0666 was previously invisible to both checks.
+    target = stat.S_IMODE(rp.stat().st_mode)
+    wider = [(op, oct(mode)) for op, mode, _ in timeline if mode & ~target]
+    assert not wider, (
+        f"the staged report was wider than the policy being installed ({target:04o}) at: {wider}. "
+        "An exposure that a later call narrows again is still an exposure while it lasts")
     before = [mode for op, mode, _ in timeline[:installs[0] + 1]]
     assert all(mode & 0o077 == 0 for mode in before), (
         f"the staged report granted group/other access before its ACL landed: {timeline!r}. Until "
@@ -2211,7 +2223,7 @@ def test_a_second_refusal_does_not_overwrite_the_preserved_findings(tmp_path: Pa
         "failure clears preserves nothing that outlives a repeat")
 
 
-def test_a_group_that_cannot_be_repaired_refuses_rather_than_publishing(tmp_path: Path,
+def test_a_group_that_cannot_be_repaired_raises_rather_than_publishing(tmp_path: Path,
                                                                         monkeypatch) -> None:
     """The failure half of the repair, which no arm covered.
 
@@ -2252,3 +2264,94 @@ def test_a_group_that_cannot_be_repaired_refuses_rather_than_publishing(tmp_path
     assert stat.S_IMODE(staged.stat().st_mode) & 0o077 == 0, (
         "and the staged file must not have been opened up on the way out: a refusal that leaves "
         "a group-readable temporary behind has published the thing it refused to publish")
+
+
+def test_a_status_report_does_not_squat_the_preservation_slot(tmp_path: Path) -> None:
+    """The "oldest wins" rule eating what it was added to protect.
+
+    Refusing to overwrite the sibling stopped a second refusal destroying preserved findings. It
+    also meant a CLEAN report, saved by some earlier refusal, occupied the only slot permanently —
+    so the next genuine findings report could not be kept at all. Measured before the fix: the
+    sibling still held "scan_gate: CLEAN" after a refusal replaced a report full of hits.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "slot_squatting")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    superseded = reports_dir / "scan_report.superseded.txt"
+
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'a'"))
+    assert rp.read_text(encoding="utf-8").startswith("scan_gate: REFUSED"), (
+        "CONTROL: the first refusal really did replace the clean report")
+    assert not superseded.exists(), (
+        "a CLEAN report was parked in the preservation slot. It carries nothing a reader would "
+        "mourn, and the slot is refused to later writers, so keeping it costs the findings that "
+        "come next")
+
+    findings = "SECRET\tgeneric_key_assignment\tcontents\tdocs/example.md:12\n"
+    rp.write_text(findings, encoding="utf-8")
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'b'"))
+
+    assert superseded.is_file() and superseded.read_text(encoding="utf-8") == findings, (
+        "the findings were lost because an earlier status report held the slot")
+
+
+def test_a_stale_sibling_does_not_block_preserving_the_current_findings(tmp_path: Path) -> None:
+    """Occupancy is not evidence that the occupant is worth more.
+
+    Refusing to overwrite the slot stopped a second refusal destroying kept findings. It also
+    meant an EARLIER generation's copy — or a file someone simply created at that name — held the
+    slot against every later writer, so the findings a fresh scan produced could not be kept at
+    all. Measured before the fix: after a new scan published new hits, a refusal left the sibling
+    still holding the OLD ones.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "stale_sibling")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    superseded = reports_dir / "scan_report.superseded.txt"
+    old = "SECRET\tgeneric_key_assignment\tcontents\tdocs/old.md:1\n"
+    rp.write_text(old, encoding="utf-8")
+
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'a'"))
+    assert superseded.read_text(encoding="utf-8") == old, (
+        "CONTROL: the first refusal preserved the old findings, so there is a stale occupant")
+
+    module.write_report(str(staging), [("docs/new.md", 2, "SECRET", "generic_key_assignment",
+                                        "contents")])
+    assert "docs/new.md" in rp.read_text(encoding="utf-8"), (
+        "CONTROL: a fresh scan really did publish a new findings report")
+
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'b'"))
+
+    body = superseded.read_text(encoding="utf-8")
+    assert "docs/new.md" in body, (
+        f"the refusal could not keep the CURRENT findings because an earlier generation held the "
+        f"slot; the sibling still reads {body!r}. A file planted at that name does the same thing "
+        "permanently, turning a refusal-to-overwrite into a denial of preservation")
+
+
+def test_a_planted_sibling_does_not_deny_preservation_forever(tmp_path: Path) -> None:
+    """The same hole reached without any earlier refusal: someone just creates the name."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "planted_sibling")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    superseded = reports_dir / "scan_report.superseded.txt"
+    superseded.write_text("not a report at all\n", encoding="utf-8")
+
+    module.write_report(str(staging), [("docs/x.md", 3, "SECRET", "generic_key_assignment",
+                                        "contents")])
+    assert not superseded.exists(), (
+        "a planted file at the sibling name survived a successful scan, so it goes on blocking "
+        "every later preservation; the slot belongs to one report generation")
+
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'c'"))
+    assert "docs/x.md" in superseded.read_text(encoding="utf-8"), (
+        "and after the plant is cleared the refusal must be able to keep the real findings")

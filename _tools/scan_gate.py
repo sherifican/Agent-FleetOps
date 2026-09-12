@@ -435,12 +435,26 @@ def write_report(staging, hits):
         # so no reader ever observes the directory's inherited one.
         _install_posix_acl_policy(report_path, tmp_path)
         os.replace(tmp_path, report_path)
+        # A fresh scan has just published a report, so anything preserved from an EARLIER
+        # generation is stale. Leaving it meant the sibling slot stayed occupied and the next
+        # refusal could not keep the findings this run produced — measured: an old report's hits
+        # held the slot while the current ones were destroyed. A planted name had the same effect
+        # permanently, which made refusing to overwrite into a denial-of-preservation. The slot
+        # belongs to one report generation, and this is where that generation ends.
+        try:
+            os.unlink(os.path.join(reports_dir, "scan_report.superseded.txt"))
+        except OSError:
+            pass
     except BaseException:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
         raise
+
+
+# Every status report this tool writes begins with these bytes; a findings report never does.
+_STATUS_LINE_PREFIX = b"scan_gate: "
 
 
 def _preserve_superseded(reports_dir, report_path):
@@ -451,9 +465,11 @@ def _preserve_superseded(reports_dir, report_path):
     INODE alive, which means the original content, mode, owner and ACL rather than something that
     merely resembles them.
 
-    Never overwrites an existing preserved copy. The first artifact superseded is the findings
-    report; everything after it is a refusal, so os.link refusing an existing destination is
-    exactly the wanted behaviour and the oldest surviving evidence wins.
+    Never overwrites an existing preserved copy, so two refusals in a row cannot replace kept
+    findings with a copy of the refusal. That rule only holds because the slot is emptied by the
+    next successful scan: without that, an old generation's copy — or a planted file at the same
+    name — would block preservation forever, which is the opposite of the intent. Occupancy is
+    not by itself evidence that what occupies it is worth more than what is being replaced.
 
     Called before EITHER replace in the refusal writer. An earlier revision guarded only the
     fallback, so the ordinary path — the common one — went on destroying the findings while the
@@ -465,6 +481,14 @@ def _preserve_superseded(reports_dir, report_path):
         previous = os.lstat(report_path)
         if not stat.S_ISREG(previous.st_mode):
             return
+        # Only a FINDINGS report earns the slot. A CLEAN or a REFUSED report is a status line
+        # carrying nothing a reader would mourn, and parking one here occupies the single slot
+        # forever: measured, a CLEAN report saved by an earlier refusal then blocked a real
+        # findings report from being kept at all. That is the "oldest wins" rule eating precisely
+        # what it was added to protect, so the rule is now "oldest FINDINGS wins".
+        with open(report_path, "rb") as handle:
+            if handle.read(len(_STATUS_LINE_PREFIX)) == _STATUS_LINE_PREFIX:
+                return
         os.link(report_path, os.path.join(reports_dir, "scan_report.superseded.txt"))
     except OSError:
         pass
