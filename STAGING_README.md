@@ -6,6 +6,42 @@ OWNER GATE per batch → push to the NEW public repo → fresh-clone verify + pu
 Rules: no .git is ever copied in; this tree's history begins at its own init; the private backup repo is
 never a remote here. Reports land in _reports/.
 
+## What the scan report is, and what it is not
+
+**The EXIT STATUS is the authorization. The report is a diagnostic.** `_tools/scan_gate.py` exits
+`0` clean, `1` findings, `2` refused — and `2` says the scan did not complete, so it says nothing
+about whether the tree is safe. The shipped `guard/hooks/pre-push` gates on that exit status,
+which is the correct channel.
+
+`_reports/scan_report.txt` is written INSIDE the tree being scanned, and that tree is the
+untrusted subject of the scan. A publication gate review demonstrated the consequences, from the
+CLI and with no race:
+
+  - A tree can ship `_reports` as a SYMLINK with a prewritten `scan_gate: CLEAN` behind it. The
+    scanner correctly refuses to publish through the link, and the planted CLEAN stays readable
+    at the canonical path beside an exit status of 2.
+  - If the report directory is unwritable, or the previous report cannot be read AND cannot be
+    preserved, the old report is left standing — which may be a stale CLEAN.
+
+So: **never treat `scan_report.txt` as authorization on its own.** It may be planted, and it may
+be stale after a failed run. Authorize on a successful scan of the snapshot you intend to publish,
+read from that run's exit status. A guard arm pins this limitation so it stays visible; a passing
+arm is evidence of awareness, not of mitigation.
+
+## Reserved filenames in `_reports/`
+
+These names belong to the scanner, which DELETES them after any successful publication regardless
+of who wrote them:
+
+    scan_report.txt
+    scan_report.superseded.txt
+    scan_report.superseded.1.txt  …  scan_report.superseded.7.txt
+
+The numbered names became scanner-owned when the preservation slot was widened from one name to
+eight. Gate review measured an ordinary pre-existing file at `scan_report.superseded.1.txt` being
+destroyed by a clean scan. A filename does not establish provenance, so the reservation is stated
+here rather than assumed — do not keep anything you care about at these names.
+
 **These gates are STAGING-side, not CI.** Public CI runs the hermetic suite, the guard layer,
 `ref_gate.py` and `readme_guard.sh` only. `wall_check.py` and `scan_gate.py` run here, before a
 batch is pushed — that is the point: a secret is caught before it lands, not after. `wall_check.py`

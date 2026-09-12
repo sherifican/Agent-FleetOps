@@ -1409,7 +1409,10 @@ def test_the_report_is_left_readable_like_an_ordinary_file(tmp_path: Path) -> No
     # reference taken elsewhere would agree with a umask formula and miss it.
     reference = staging / "_reports" / "umask_reference.txt"
     reference.write_text("what an ordinary create produces here\n", encoding="utf-8")
-    expected = stat.S_IMODE(reference.stat().st_mode)
+    # & ~0o007: a new report is published at an ordinary create MINUS every bit for "other".
+    # Review measured a findings report at 0644 under the ordinary login umask and 0666 under
+    # umask 0; the report carries the class, path and line of every secret found.
+    expected = stat.S_IMODE(reference.stat().st_mode) & ~0o007
     reference.unlink()
 
     actual = stat.S_IMODE((staging / REPORT_REL).stat().st_mode)
@@ -1419,7 +1422,15 @@ def test_the_report_is_left_readable_like_an_ordinary_file(tmp_path: Path) -> No
 
 
 def test_a_refusal_report_is_readable_too(tmp_path: Path) -> None:
-    """The refusal path is the one a reader needs MOST, and it has its own mkstemp call."""
+    """The refusal path is the one a reader needs MOST, and it has its own mkstemp call.
+
+    An ordinary create is the right answer for the DIRECTORY's explicit policy and the wrong one
+    as a bare fallback: with no default ACL the mode comes from the umask, and review measured a
+    findings report published 0644 at the ordinary login umask and 0666 at umask 0. The report
+    lists the class, path and line of every secret found, so "other" is capped off. This arm
+    therefore compares against an ordinary create MINUS other access; the default-ACL sibling
+    still measures real inheritance, because a policy that already denies other is untouched.
+    """
     driver = make_tool(tmp_path)
     staging = make_staging(tmp_path)
     write(staging / "docs" / "readme.md", "nothing private here\n")
@@ -1431,7 +1442,7 @@ def test_a_refusal_report_is_readable_too(tmp_path: Path) -> None:
 
     reference = staging / "_reports" / "umask_reference_refusal.txt"
     reference.write_text("what an ordinary create produces here\n", encoding="utf-8")
-    expected = stat.S_IMODE(reference.stat().st_mode)
+    expected = stat.S_IMODE(reference.stat().st_mode) & ~0o007   # other capped off, as above
     reference.unlink()
 
     rp = staging / REPORT_REL
@@ -1491,7 +1502,15 @@ def test_replacing_a_report_preserves_the_mode_it_already_had(tmp_path: Path, pr
 
 
 def test_a_new_report_lands_where_an_ordinary_create_in_that_directory_lands(tmp_path: Path) -> None:
-    """Covers the default-ACL case without needing to know whether one is present."""
+    """Covers the default-ACL case without needing to know whether one is present.
+
+    An ordinary create is the right answer for the DIRECTORY's explicit policy and the wrong one
+    as a bare fallback: with no default ACL the mode comes from the umask, and review measured a
+    findings report published 0644 at the ordinary login umask and 0666 at umask 0. The report
+    lists the class, path and line of every secret found, so "other" is capped off. This arm
+    therefore compares against an ordinary create MINUS other access; the default-ACL sibling
+    still measures real inheritance, because a policy that already denies other is untouched.
+    """
     if os.geteuid() == 0:
         pytest.skip("root ignores mode bits; this needs an unprivileged writer")
     driver = make_tool(tmp_path)
@@ -1499,7 +1518,7 @@ def test_a_new_report_lands_where_an_ordinary_create_in_that_directory_lands(tmp
     write(staging / "docs" / "readme.md", "nothing private here\n")
     reports_dir = staging / "_reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
-    expected = _ordinary_create_mode(reports_dir)
+    expected = _ordinary_create_mode(reports_dir) & ~0o007   # other is capped off
 
     proc = scan(tmp_path, driver, staging)
     assert proc.returncode == 0, "CONTROL: a clean run"
@@ -1524,7 +1543,7 @@ def test_a_new_report_inherits_a_default_acl_the_way_an_ordinary_file_does(tmp_p
     if applied.returncode != 0:
         pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
 
-    expected = _ordinary_create_mode(reports_dir)
+    expected = _ordinary_create_mode(reports_dir) & ~0o007   # other is capped off
     # The control must compare against the REAL umask, not a hard-coded one. Written as 0o022 it
     # passed under `umask 027` even with the broken formula restored — measured in review — because
     # 0o666 & ~0o027 and the ACL answer are both 0640 there, so the arm could not fail.
@@ -1633,7 +1652,7 @@ def test_a_file_at_the_probe_name_does_not_downgrade_the_mode_contract(tmp_path:
     if applied.returncode != 0:
         pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
 
-    expected = _ordinary_create_mode(reports_dir)
+    expected = _ordinary_create_mode(reports_dir) & ~0o007   # other is capped off
     mask = os.umask(0o022)
     os.umask(mask)
     assert expected != 0o666 & ~mask, (
@@ -1845,6 +1864,9 @@ def test_the_mode_probe_cannot_be_raced_onto_a_name(tmp_path: Path, monkeypatch)
     except OSError as exc:
         pytest.skip(f"this filesystem rejects O_TMPFILE ({exc.strerror}); the unnamed-probe "
                     "property is not measurable here")
+    # NOT capped: _report_mode returns what an ordinary create produces. The "other" cap belongs
+    # to _install_posix_acl_policy, which is the caller; asserting it here would pin the cap to
+    # the wrong function and let the real one drop it silently.
     expected = _ordinary_create_mode(reports_dir)
 
     monkeypatch.setattr(module.os, "open", racing_open)
@@ -2638,5 +2660,133 @@ def test_a_platform_without_xattrs_does_not_break_the_refusal_writer(tmp_path: P
         module.os = real_os
 
     assert rp.read_text(encoding="utf-8").startswith("scan_gate: REFUSED"), (
-        "on a platform without POSIX-ACL xattrs the refusal was not published. The mode is the "
-        "whole access policy there, and carrying it over is the complete job")
+        "on a platform without POSIX-ACL xattrs the refusal was not published. There is no ACL "
+        "for this code to carry there, so it carries the mode instead — a mode-only fallback "
+        "outside the POSIX-ACL domain, NOT a claim that the mode is the whole access policy on "
+        "that platform")
+
+
+def test_the_classification_reads_the_inode_it_preserved_not_the_name(tmp_path: Path) -> None:
+    """A review leg's interleaving: link by name, then classify by name, is two different inodes.
+
+    os.link and open both resolve a NAME. Between them, an os.replace onto scan_report.txt — a
+    second scanner, or any mutator; there is no lock — swaps that name to a new inode while the
+    link still holds the old one. The classification then describes the NEW bytes. If those are a
+    status line, the code gives the slot back by unlinking the link, destroying the findings it
+    had just successfully preserved.
+
+    Classifying through the link removes the second resolution: it is our own name for the inode
+    we kept, and nobody else is replacing it.
+
+    The swap is injected at the link itself, so it lands exactly in the window and needs no
+    concurrency to be deterministic.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "classify_through_link")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    findings = "SECRET\tgeneric_key_assignment\tcontents\tdocs/example.md:12\n"
+    rp.write_text(findings, encoding="utf-8")
+
+    real_os = module.os
+
+    class _SwapAtLink:
+        """Proxies os, but after a successful link swaps report_path to a CLEAN inode."""
+
+        def link(self, src, dst, *a, **kw):
+            real_os.link(src, dst, *a, **kw)
+            intruder = reports_dir / ".intruder"
+            intruder.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+            real_os.replace(str(intruder), str(rp))
+
+        def __getattr__(self, name):
+            return getattr(real_os, name)
+
+    module.os = _SwapAtLink()
+    try:
+        kept = module._preserve_superseded(str(reports_dir), str(rp))
+    finally:
+        module.os = real_os
+
+    preserved = [reports_dir / n for n in _superseded_names()]
+    surviving = [p for p in preserved if p.exists() and p.read_text(encoding="utf-8") == findings]
+    assert surviving, (
+        "the findings were preserved and then destroyed: the classification read the name, which "
+        "another writer had swapped to a status line, so the slot was given back and the only "
+        "remaining link to the findings inode was unlinked. Classify through the link instead")
+    assert kept is True, (
+        "and with the evidence genuinely preserved the caller may still replace the report")
+
+
+def test_the_numbered_preservation_slots_are_a_reserved_namespace(tmp_path: Path) -> None:
+    """PINS A DELETION THAT IS INTENDED, because it was not intended until it was documented.
+
+    Widening the preservation slot from one name to eight turned seven ordinary filenames into
+    scanner-owned ones. Gate review measured a pre-existing file at scan_report.superseded.1.txt
+    destroyed by an ordinary clean scan — no race, no permission failure, nothing injected.
+
+    A filename does not establish provenance, so the scanner cannot tell a user's archive from its
+    own. The resolution is a stated reservation rather than a guess: STAGING_README.md lists the
+    eight names as scanner-owned and says not to keep anything there. This arm holds the code and
+    that promise together — if the cleanup is ever narrowed to establish ownership, this arm
+    should fail and the documentation should change with it.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "reserved_namespace")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    foreign = reports_dir / "scan_report.superseded.1.txt"
+    foreign.write_text("an adopter's own archive\n", encoding="utf-8")
+
+    module.write_report(str(staging), [])
+
+    assert (reports_dir / "scan_report.txt").read_text(encoding="utf-8") == "scan_gate: CLEAN\n", (
+        "the clean publication itself must still succeed")
+    assert not foreign.exists(), (
+        "the reserved-namespace contract changed: a file at a numbered slot survived a successful "
+        "publication. If cleanup now establishes ownership, that is an improvement — update "
+        "STAGING_README.md's reserved-filename list to match, then retire this arm")
+
+
+def test_a_new_findings_report_is_never_other_readable(tmp_path: Path) -> None:
+    """An independent review leg found this; the gate did not.
+
+    A new report took its mode from what an ordinary create in that directory produces. That is
+    correct when the directory carries a default ACL — an explicit statement about who may read
+    here — and wrong as a bare fallback, because then the answer comes from the umask. Measured
+    against the real scanner: 0644 at the ordinary login umask 0022, and 0666 inside a 0777
+    directory at umask 0. Not an exotic configuration; the first one is the default.
+
+    The report lists the CLASS, PATH and LINE of every secret found, so a world-readable one hands
+    any local account a map to them. "Other" is therefore capped off unconditionally. Group access
+    still follows the directory, because a shared group directory is a choice somebody made.
+
+    The umask is set explicitly here: at the suite's own umask the bit may already be clear, and an
+    arm that cannot observe the failure is not measuring the property.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "other_cap")
+    previous = os.umask(0o000)            # the most permissive case, so the bit CAN appear
+    try:
+        staging = tmp_path / "staging"
+        os.makedirs(staging)
+        hits = [("docs/example.md", 12, "SECRET", "generic_key_assignment", "contents")]
+        module.write_report(str(staging), hits)
+        rp = staging / "_reports" / "scan_report.txt"
+        mode = stat.S_IMODE(rp.stat().st_mode)
+    finally:
+        os.umask(previous)
+
+    assert not mode & stat.S_IROTH, (
+        f"a findings report was published mode {mode:04o}: readable by every account on the box, "
+        "and it names the path and line of each secret found")
+    assert not mode & stat.S_IWOTH, (
+        f"a findings report was published mode {mode:04o}: writable by every account on the box, "
+        "so anyone could replace it with a CLEAN line")
+    assert mode & stat.S_IRUSR, (
+        f"and it must still be readable by its owner, not merely locked down to {mode:04o}")

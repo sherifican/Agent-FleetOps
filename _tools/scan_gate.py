@@ -354,9 +354,23 @@ def _install_posix_acl_policy(src, dst):
         try:
             old = os.stat(src, follow_symlinks=False)
         except FileNotFoundError:
-            # A new report: whatever an ordinary create in this directory produces is the answer,
-            # and the ACL it inherited is the correct one to keep.
-            os.chmod(dst, _report_mode(src, os.path.dirname(dst)))
+            # A new report: whatever an ordinary create in this directory produces, MINUS every
+            # bit for "other".
+            #
+            # Ordinary-create semantics are right for the DIRECTORY's explicit policy — a default
+            # ACL is a deliberate statement about who may read files here, and inheriting it is
+            # the correct behaviour. They are wrong as a fallback when no such policy exists,
+            # because then the answer comes from the umask, and review measured what that means:
+            # at the ordinary login umask 0022 a findings report was published 0644, and at
+            # umask 0 it was 0666 in a 0777 directory. This report lists the CLASS, PATH and LINE
+            # of every secret found. An ordinary file it is not.
+            #
+            # So "other" is capped off unconditionally. Group access still follows the directory,
+            # because a shared group directory is an explicit choice somebody made; "other" is
+            # what you get by default without choosing anything. This only ever narrows: a policy
+            # that already denies other is unchanged, which is why the default-ACL arm still
+            # measures inheritance rather than this cap.
+            os.chmod(dst, _report_mode(src, os.path.dirname(dst)) & ~0o007)
             return
 
         current = os.stat(dst, follow_symlinks=False)
@@ -387,8 +401,12 @@ def _install_posix_acl_policy(src, dst):
 
         mode = stat.S_IMODE(old.st_mode)
         if not _XATTR_SUPPORTED:
-            # No ACLs on this platform, so the mode IS the whole access policy and carrying it
-            # over is the complete job. Narrower than the Linux path and honest about it.
+            # No POSIX-ACL xattr API here, so there is no ACL for THIS code to carry, and the
+            # mode is carried over instead. That is a mode-only fallback outside the implemented
+            # POSIX-ACL domain — NOT a claim that the mode is the whole access policy on such a
+            # platform. Absence of the API does not establish absence of a policy: Windows chmod
+            # only controls the read-only attribute and ignores the rest, and native ACLs there
+            # and on macOS are untouched and unmeasured by this tool.
             os.chmod(dst, mode)
             return
         try:
@@ -427,6 +445,13 @@ def _install_posix_acl_policy(src, dst):
 # CLEAN survived beside an rc 2 because the one slot was taken, so the scanner declined to
 # invalidate a report that falsely said this tree had passed. Occupancy of one name must not be
 # able to deny preservation, so a bounded set of alternates is tried in order.
+# RESERVED NAMESPACE. These eight names in _reports/ belong to this scanner and are DELETED
+# after any successful publication, whoever wrote them. Before this became a set, seven of them
+# were ordinary filenames a user could have used; gate review measured a pre-existing file at
+# scan_report.superseded.1.txt being destroyed by an ordinary clean scan, with no race and no
+# permission failure involved. A filename does not establish provenance, so the reservation is
+# stated here and in the adopter documentation rather than inferred. Do not keep anything you
+# care about at these names.
 _SUPERSEDED_SLOTS = 8
 
 
@@ -516,8 +541,13 @@ def _preserve_superseded(reports_dir, report_path):
     on its source. Reading first made an unreadable findings report unpreservable and therefore
     destroyable — measured at mode 000.
 
-    An unreadable report is treated as findings. That is the expensive assumption in the safe
-    direction: the cost of being wrong is one preserved status line, against losing evidence.
+    An unreadable report is treated as findings. That is the assumption in the safe direction for
+    EVIDENCE, and its cost is larger than an earlier revision of this docstring claimed. That
+    revision said the cost was one preserved status line. It is not: when the report cannot be
+    read AND cannot be preserved under any slot, it is left standing, so an unreadable stale
+    CLEAN survives beside an rc 2 and keeps telling a reader this tree passed. The slots make
+    that case rarer; they do not remove it. Eight names are a finite capacity, not an
+    authorization boundary.
     """
     try:
         previous = os.lstat(report_path)
@@ -535,9 +565,15 @@ def _preserve_superseded(reports_dir, report_path):
         linked = candidate
         break
 
-    # Classify only AFTER the link, so a failed read cannot prevent preservation.
+    # Classify only AFTER the link, so a failed read cannot prevent preservation — and classify
+    # THROUGH THE LINK, not through report_path. The two names described the same inode at link
+    # time, but only the link is a name nobody else is replacing. An os.replace onto report_path
+    # between the link and this read leaves the classification describing a DIFFERENT inode from
+    # the one that was preserved, and a status line verdict then unlinks the findings just kept.
+    # An independent review leg supplied that interleaving; this reads the inode we actually hold.
+    classify_path = linked if linked is not None else report_path
     try:
-        with open(report_path, "rb") as handle:
+        with open(classify_path, "rb") as handle:
             is_status_line = handle.read(len(_STATUS_LINE_PREFIX)) == _STATUS_LINE_PREFIX
     except OSError:
         is_status_line = False            # cannot tell: assume findings, the costly case
@@ -593,13 +629,15 @@ def _write_refusal_report(staging, refusal):
         as findings and left standing, because destroying unknown evidence is the worse error.
         If it was in fact a stale CLEAN, it survives. The preservation slots exist to make this
         case rare; they do not make it impossible.
-      - Anything a reader reaches by a path this function refused to follow. A symlinked _reports
-        is now REMOVED rather than left in place, which turns a planted CLEAN into no report at
-        all — but the report living inside the scanned tree is a structural limitation, not a
-        closed hole.
+      - Anything a reader reaches by a path this function refused to follow. A symlinked
+        _reports directory is LEFT EXACTLY AS IT IS and nothing is published, so a CLEAN planted
+        behind it stays readable at the canonical path. Removing that link was written and then
+        reverted, because a symlinked _reports can be a deliberate setup; the gate below records
+        the limitation rather than claiming it closed.
 
-    On links: a symlinked _reports directory is unlinked (the link, never its target) and nothing
-    is published; a symlinked report FILE is unlinked before the replace. So the claim that "the
+    On links, the two branches differ and an earlier draft of THIS docstring wrongly described
+    them as one: a symlinked _reports DIRECTORY is not unlinked and nothing is written; a
+    symlinked report FILE is unlinked before the replace. So the claim that "the
     canonical name is never unlinked" — which an earlier revision made — is false on that branch,
     and there IS a window in which the report is missing: between that unlink and the replace, or
     if the publish then fails. What the function does NOT do is write through a link.
