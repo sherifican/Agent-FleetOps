@@ -443,6 +443,33 @@ def write_report(staging, hits):
         raise
 
 
+def _preserve_superseded(reports_dir, report_path):
+    """Keep the report that is about to be replaced, under a sibling name.
+
+    os.replace destroys the old bytes, so preserving the NAME is not preserving the EVIDENCE — and
+    a report carrying HITS is the artifact a reader most needs kept. A hard LINK keeps the old
+    INODE alive, which means the original content, mode, owner and ACL rather than something that
+    merely resembles them.
+
+    Never overwrites an existing preserved copy. The first artifact superseded is the findings
+    report; everything after it is a refusal, so os.link refusing an existing destination is
+    exactly the wanted behaviour and the oldest surviving evidence wins.
+
+    Called before EITHER replace in the refusal writer. An earlier revision guarded only the
+    fallback, so the ordinary path — the common one — went on destroying the findings while the
+    commit message said otherwise.
+
+    Best effort, and silent: publishing an accurate current report outranks keeping history.
+    """
+    try:
+        previous = os.lstat(report_path)
+        if not stat.S_ISREG(previous.st_mode):
+            return
+        os.link(report_path, os.path.join(reports_dir, "scan_report.superseded.txt"))
+    except OSError:
+        pass
+
+
 def _write_refusal_report(staging, refusal):
     """Best-effort: replace an EXISTING report with a single REFUSED line so a stale CLEAN cannot
     survive beside an rc 2. Never raises; the original refusal still propagates. Anchors on the
@@ -483,6 +510,8 @@ def _write_refusal_report(staging, refusal):
                 reason_class = "unclassified"
         if os.path.islink(report_path):
             os.unlink(report_path)
+        # Before EITHER publish attempt, so the ordinary path is covered and not just the fallback.
+        _preserve_superseded(reports_dir, report_path)
         fd, tmp_path = tempfile.mkstemp(dir=reports_dir, prefix=".scan_report_")
         try:
             with os.fdopen(fd, "w") as f:
@@ -513,26 +542,6 @@ def _write_refusal_report(staging, refusal):
         # cannot promise a write on a filesystem refusing writes, and it is the EXIT CODE, not the
         # report, that says this scan refused.
         try:
-            # Keeping the NAME is not keeping the EVIDENCE. os.replace destroys the old report's
-            # bytes exactly as surely as the unlink did, so a report carrying HITS was still lost
-            # — both round-6 reviewers made this point independently, and the previous commit
-            # message claimed a preservation it had not implemented.
-            #
-            # A hard link keeps the old inode alive — content, mode and ACL — under a sibling
-            # name, before the replace drops its original directory entry. Best effort in the
-            # strict sense: if the link cannot be made, publishing an accurate refusal still
-            # matters more than keeping the history, and the refusal goes out either way.
-            superseded = os.path.join(reports_dir, "scan_report.superseded.txt")
-            try:
-                previous = os.lstat(report_path)
-                if stat.S_ISREG(previous.st_mode):
-                    try:
-                        os.unlink(superseded)
-                    except FileNotFoundError:
-                        pass
-                    os.link(report_path, superseded)
-            except OSError:
-                pass
             fd, tmp_path = tempfile.mkstemp(dir=reports_dir, prefix=".scan_report_")
             try:
                 with os.fdopen(fd, "w") as f:

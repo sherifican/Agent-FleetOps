@@ -1865,10 +1865,17 @@ def test_the_mode_probe_cannot_be_raced_onto_a_name(tmp_path: Path, monkeypatch)
     # number on a directory with NO default ACL, publishes a pathname, and would sail past the
     # assertion above. The property is that no directory entry is ever created, so pin the flag
     # that makes that true.
-    assert any(flags & os.O_TMPFILE == os.O_TMPFILE for _, flags in opens), (
-        "the probe opened no unnamed file: "
-        f"{[(p, oct(f)) for p, f in opens]}. Matching an ordinary create's MODE does not establish "
-        "that no name was published, and the name is the whole hazard")
+    # An O_TMPFILE open names the DIRECTORY, not a file in it, so both shapes count: the
+    # directory itself (the unnamed case) and any entry within it (the named case this forbids).
+    inside = [(p, f) for p, f in opens
+              if p == str(reports_dir) or os.path.dirname(p) == str(reports_dir)]
+    assert inside, "CONTROL: nothing was opened in or on the reports directory at all"
+    # EVERY open inside the reports directory, not merely SOME open anywhere: an implementation
+    # could open a decoy unnamed file, discard it, and still publish a named one.
+    assert all(f & os.O_TMPFILE == os.O_TMPFILE for _, f in inside), (
+        f"a NAMED entry was opened in the reports directory: {[(p, oct(f)) for p, f in inside]}. "
+        "Matching an ordinary create's mode does not establish that no name was published, and "
+        "the name is the whole hazard")
 
 
 def test_a_report_with_no_acl_does_not_inherit_the_directorys_default(tmp_path: Path) -> None:
@@ -1968,7 +1975,7 @@ def test_the_access_policy_lands_before_any_group_or_other_access(tmp_path: Path
 
     real_setxattr = module.os.setxattr
     real_chmod = module.os.chmod
-    timeline: list[tuple[str, int]] = []
+    timeline: list[tuple] = []
 
     # Sampling ONLY at setxattr proved too late: a mutant that chmods to the full mode, then back
     # to private, then installs the ACL passed the earlier version of this arm. The exposure is
@@ -1976,7 +1983,7 @@ def test_the_access_policy_lands_before_any_group_or_other_access(tmp_path: Path
     def watching_chmod(path, mode, *args, **kwargs):
         result = real_chmod(path, mode, *args, **kwargs)
         if str(path) == str(staged):
-            timeline.append(("chmod", stat.S_IMODE(os.stat(path).st_mode)))
+            timeline.append(("chmod", stat.S_IMODE(os.stat(path).st_mode), None))
         return result
 
     def watching_setxattr(path, name, value, *args, **kwargs):
@@ -1988,7 +1995,9 @@ def test_the_access_policy_lands_before_any_group_or_other_access(tmp_path: Path
             # install, which ends the checked prefix early and hides every exposure after it.
             before = stat.S_IMODE(os.stat(path).st_mode)
             result = real_setxattr(path, name, value, *args, **kwargs)
-            timeline.append((f"setxattr:{name}", before))
+            # The VALUE matters, not just the name: setxattr(ACL_XATTR, <dummy>) then chmod 0666
+            # then the real ACL ends the window at the dummy and hides the 0666.
+            timeline.append((f"setxattr:{name}", before, bytes(value)))
             return result
         return real_setxattr(path, name, value, *args, **kwargs)
 
@@ -1997,7 +2006,7 @@ def test_the_access_policy_lands_before_any_group_or_other_access(tmp_path: Path
     def watching_chown(path, uid, gid, *args, **kwargs):
         result = real_chown(path, uid, gid, *args, **kwargs)
         if str(path) == str(staged):
-            timeline.append(("chown", stat.S_IMODE(os.stat(path).st_mode)))
+            timeline.append(("chown", stat.S_IMODE(os.stat(path).st_mode), None))
         return result
 
     monkeypatch.setattr(module.os, "chmod", watching_chmod)
@@ -2005,9 +2014,18 @@ def test_the_access_policy_lands_before_any_group_or_other_access(tmp_path: Path
     monkeypatch.setattr(module.os, "chown", watching_chown)
     module._install_posix_acl_policy(str(rp), str(staged))
 
-    installs = [i for i, (op, _) in enumerate(timeline) if op == f"setxattr:{ACL_XATTR}"]
+    source_acl = os.getxattr(str(rp), ACL_XATTR)
+    installs = [i for i, (op, _, val) in enumerate(timeline)
+                if op == f"setxattr:{ACL_XATTR}" and val == source_acl]
     assert installs, "CONTROL: no ACL was ever installed, so the ordering was not exercised"
-    before = [mode for op, mode in timeline[:installs[0] + 1]]
+    # The prefix is the temporal half. The TAIL matters too: correctly installing the ACL and
+    # then chmod 0666 satisfies every prefix assertion, so the final state is asserted as well.
+    final = stat.S_IMODE(os.stat(staged).st_mode)
+    assert final == stat.S_IMODE(rp.stat().st_mode), (
+        f"the staged report ended at {final:04o} but the report it replaces is "
+        f"{stat.S_IMODE(rp.stat().st_mode):04o}: an exposure after the ACL lands is still an "
+        "exposure, and checking only the prefix cannot see it")
+    before = [mode for op, mode, _ in timeline[:installs[0] + 1]]
     assert all(mode & 0o077 == 0 for mode in before), (
         f"the staged report granted group/other access before its ACL landed: {timeline!r}. Until "
         "the intended policy is installed those bits belong to the DIRECTORY's inherited one, and "
@@ -2139,10 +2157,11 @@ def test_a_refusal_preserves_the_findings_it_supersedes(tmp_path: Path, monkeypa
     findings = "SECRET\tgeneric_key_assignment\tcontents\tdocs/example.md:12\n"
     rp.write_text(findings, encoding="utf-8")
 
-    def refuses(src, dst):
-        raise OSError("report-permission-preservation-failed")
+    original_inode = rp.stat().st_ino
 
-    monkeypatch.setattr(module, "_install_posix_acl_policy", refuses)
+    # NO monkeypatch: this is the ORDINARY refusal, the one that publishes successfully. An
+    # earlier revision preserved only on the failure branch, so the common path went on
+    # destroying the findings while the commit message said it did not.
     module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe '_reports'"))
 
     assert rp.read_text(encoding="utf-8").startswith("scan_gate: REFUSED"), (
@@ -2153,5 +2172,83 @@ def test_a_refusal_preserves_the_findings_it_supersedes(tmp_path: Path, monkeypa
         "the findings this refusal replaced are gone. Preserving the NAME is not preserving the "
         "EVIDENCE: a report carrying HITS is what a reader most needs kept, and os.replace "
         "destroys it as surely as an unlink would have")
+    assert superseded.stat().st_ino == original_inode, (
+        "the preserved artifact is a COPY, not the original inode. A copy is written by this "
+        "process with this process's idea of the mode, so it can differ in permissions, owner "
+        "and ACL from the report it claims to have preserved; a hard link cannot")
     assert superseded.read_text(encoding="utf-8") == findings, (
-        "the preserved copy must carry the ORIGINAL findings, not a copy of the refusal")
+        "and it must carry the ORIGINAL findings, not a copy of the refusal")
+
+
+def test_a_second_refusal_does_not_overwrite_the_preserved_findings(tmp_path: Path,
+                                                                    monkeypatch) -> None:
+    """The preservation mechanism destroying the thing it preserves.
+
+    The first refusal links the findings report to the sibling. The second one found the sibling
+    occupied and cleared it first — so two refusals in a row replaced the evidence with a copy of
+    the refusal, and the mechanism read as working the whole time. A single-call arm cannot see
+    this; only the second call can.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "refusal_preserves_twice")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    findings = "SECRET\tgeneric_key_assignment\tcontents\tdocs/example.md:12\n"
+    rp.write_text(findings, encoding="utf-8")
+
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'a'"))
+    superseded = reports_dir / "scan_report.superseded.txt"
+    assert superseded.read_text(encoding="utf-8") == findings, (
+        "CONTROL: the first refusal must preserve the findings, or the second call proves nothing")
+
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'b'"))
+
+    assert superseded.read_text(encoding="utf-8") == findings, (
+        "the second refusal overwrote the preserved findings with a copy of the refusal. The "
+        "oldest surviving evidence is the one worth keeping; a preservation slot that the next "
+        "failure clears preserves nothing that outlives a repeat")
+
+
+def test_a_group_that_cannot_be_repaired_refuses_rather_than_publishing(tmp_path: Path,
+                                                                        monkeypatch) -> None:
+    """The failure half of the repair, which no arm covered.
+
+    The happy path was pinned as soon as the repair was written. What was not pinned is what the
+    repair does when it FAILS — and "publish anyway under the wrong group" is the outcome that
+    would have made the whole ownership guard decorative.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "gid_unrepairable")
+    reports_dir = tmp_path / "_reports"
+    reports_dir.mkdir()
+    rp = reports_dir / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    rp.chmod(0o640)
+    staged = reports_dir / ".scan_report_staged"
+    staged.write_text("scan_gate: REFUSED input-error\n", encoding="utf-8")
+    staged.chmod(0o600)
+
+    real_stat = module.os.stat
+    other_gid = os.getgid() + 1
+
+    def stat_with_a_different_group(path, *args, **kwargs):
+        st = real_stat(path, *args, **kwargs)
+        if str(path) == str(rp):
+            return os.stat_result(tuple(st)[:5] + (other_gid,) + tuple(st)[6:])
+        return st
+
+    def failing_chown(path, uid, gid, *args, **kwargs):
+        raise PermissionError(1, "not a member of that group")
+
+    monkeypatch.setattr(module.os, "stat", stat_with_a_different_group)
+    monkeypatch.setattr(module.os, "chown", failing_chown)
+
+    with pytest.raises(OSError) as caught:
+        module._install_posix_acl_policy(str(rp), str(staged))
+    assert "report-permission-preservation-failed" in str(caught.value), (
+        f"an unrepairable group must refuse, got {caught.value!r}")
+    assert stat.S_IMODE(staged.stat().st_mode) & 0o077 == 0, (
+        "and the staged file must not have been opened up on the way out: a refusal that leaves "
+        "a group-readable temporary behind has published the thing it refused to publish")
