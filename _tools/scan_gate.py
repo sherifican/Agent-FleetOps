@@ -340,8 +340,15 @@ def _install_posix_acl_policy(src, dst):
     Installing both here, with dst still at mkstemp's 0600, means that window never opens.
 
     Replacing an existing report preserves its mode AND its ACL, including the ABSENCE of one: an
-    inherited entry is removed rather than left to widen access silently. A genuinely new report
-    keeps what the directory gave it.
+    inherited entry is removed rather than left to widen access silently — NARROWED so that
+    "other" never gains access, because the report being replaced lives in the untrusted tree and
+    a committed one checks out 0644.
+
+    A genuinely new report is OWNER-ONLY. It does not keep what the directory gave it: that rule
+    published findings at 0644 under an ordinary umask, and the earlier promise of exact
+    ordinary-create inheritance is deliberately broken here rather than quietly preserved. A
+    directory policy STRICTER than 0600 still applies, since the mode is intersected and an
+    intersection cannot widen.
 
     Failure raises. A report whose access policy could not be established must not be published
     under a guess about who may read it — which is also why the mode probe answers 0600 rather
@@ -370,7 +377,20 @@ def _install_posix_acl_policy(src, dst):
             # what you get by default without choosing anything. This only ever narrows: a policy
             # that already denies other is unchanged, which is why the default-ACL arm still
             # measures inheritance rather than this cap.
-            os.chmod(dst, _report_mode(src, os.path.dirname(dst)) & ~0o007)
+            # & 0o600: never WIDER than owner-only, and narrower where the directory says so.
+            #
+            # The gate rejected the weaker rule this replaced. Capping only "other" assumed group
+            # access implied a sharing decision; it does not — an ordinary create grants the
+            # process's primary group access with no setgid directory, no default ACL and nobody
+            # having decided anything. A report naming the class, path and line of every secret
+            # found does not get a default audience by accident.
+            #
+            # Intersecting rather than assigning keeps the inheritance machinery meaningful in the
+            # direction that is always safe: a directory whose default ACL is STRICTER than 0600
+            # still wins, because the probe returns that stricter mode and the mask cannot widen
+            # it. What is gone is the old promise of EXACT ordinary-create inheritance, which the
+            # gate correctly called a contract this commit breaks rather than preserves.
+            os.chmod(dst, _report_mode(src, os.path.dirname(dst)) & 0o600)
             return
 
         current = os.stat(dst, follow_symlinks=False)
@@ -399,7 +419,24 @@ def _install_posix_acl_policy(src, dst):
             if current.st_gid != old.st_gid:
                 raise OSError(errno.EPERM, "report-policy-group-not-preservable")
 
-        mode = stat.S_IMODE(old.st_mode)
+        # The same "other" cap as a new report, and for a sharper reason. Preserving the old mode
+        # was added because forcing a umask-derived one WIDENED an existing private report — but
+        # in this product the "existing report" lives inside the tree being scanned, and that tree
+        # is untrusted. A committed _reports/scan_report.txt checks out 0644 at an ordinary umask,
+        # and preserving it faithfully republished the findings at 0644: review measured planted
+        # 0644 -> published 0644, and planted 0666 -> published 0666. The new-report cap never ran,
+        # because this is the existing-report arm.
+        #
+        # Honouring the old policy must not mean honouring a PLANTED one, so preservation is
+        # narrow-only. The property the earlier round protected is untouched: a 0600 report stays
+        # 0600, a 0660 keeps group write, a 0640 keeps group read. Only "other" is refused, and
+        # only ever downward.
+        #
+        # Fail-closed consequence, stated rather than discovered: if the old report carries a
+        # POSIX ACL that grants "other", installing that ACL restores the bits this cap removed,
+        # the mode verification below then fails, and the publish is refused instead of going out
+        # wide. A refusal is the safe direction for a secrets report; it is not silent.
+        mode = stat.S_IMODE(old.st_mode) & ~0o007
         if not _XATTR_SUPPORTED:
             # No POSIX-ACL xattr API here, so there is no ACL for THIS code to carry, and the
             # mode is carried over instead. That is a mode-only fallback outside the implemented
@@ -415,6 +452,22 @@ def _install_posix_acl_policy(src, dst):
             if exc.errno not in _ACL_ABSENT:
                 raise
             acl = None
+
+        if acl is not None and stat.S_IMODE(old.st_mode) & 0o007:
+            # Decided BEFORE anything is written to dst, which is the whole point of putting it
+            # here. The cap above removes "other" from the MODE, but an ACL carries its own
+            # other:: entry, so installing it puts those bits straight back — and the mode
+            # verification at the end would then catch it only AFTER the staged report had been
+            # made other-readable. A guard arm measured exactly that: the publish refused, and the
+            # staged file was left readable on the way out. An exposure a later unlink cleans up
+            # is still an exposure while it lasts, which is the rule this file already applies to
+            # its own ordering.
+            #
+            # The source's mode bits already reflect its ACL's other:: entry, so no ACL parsing is
+            # needed to know the answer. Refusing is the safe direction for a report naming the
+            # location of every secret found, and the caller gets the error rather than a wide
+            # artifact.
+            raise OSError(errno.EPERM, "report-policy-other-access-refused")
 
         if acl is None:
             # Drop the inherited entry while group and other access are still switched off.

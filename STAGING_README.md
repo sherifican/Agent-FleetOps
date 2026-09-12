@@ -28,6 +28,33 @@ be stale after a failed run. Authorize on a successful scan of the snapshot you 
 read from that run's exit status. A guard arm pins this limitation so it stays visible; a passing
 arm is evidence of awareness, not of mitigation.
 
+## Who can read the report
+
+**A report this scanner CREATES is owner-only.** It names the class, path and line of every
+secret found, so it does not get a default audience. An earlier rule made a new report match
+whatever an ordinary create in that directory produces; publication review measured what that
+meant in practice — `0644` at the ordinary login umask `0022`, and `0666` inside a `0777`
+directory at umask `0`. Readable by every account on the box.
+
+A directory policy that is STRICTER than owner-only still wins: the inherited mode is intersected
+with `0600`, and an intersection cannot widen. A default ACL that grants group or other access no
+longer widens a new report.
+
+**A report this scanner REPLACES keeps the access policy it had, narrowed.** Preserving the old
+mode exists so that replacing a report does not change who could read it — but the report being
+replaced lives inside the tree being scanned, and that tree is untrusted. A committed
+`_reports/scan_report.txt` checks out `0644`, and preserving it faithfully republished the
+findings at `0644`. So preservation is narrow-only: `0600` stays `0600`, `0660` keeps group
+write, `0640` keeps group read, and "other" is refused in every case.
+
+If the old report carries a POSIX ACL granting "other", the publish is REFUSED rather than widened
+— the ACL would restore the bits the cap removes. A refusal is loud and reaches the caller; a wide
+artifact would not be.
+
+There is deliberately no sharing opt-in. If you need a report readable by another account, copy it
+out of the staging tree to a location you control, rather than asking the scanner to publish it
+wider.
+
 ## Reserved filenames in `_reports/`
 
 These names belong to the scanner, which DELETES them after any successful publication regardless

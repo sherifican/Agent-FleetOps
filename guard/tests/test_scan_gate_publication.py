@@ -1415,10 +1415,16 @@ def test_the_report_is_left_readable_like_an_ordinary_file(tmp_path: Path) -> No
     expected = stat.S_IMODE(reference.stat().st_mode) & ~0o007
     reference.unlink()
 
+    # The premise of this arm INVERTED at round eleven. It was written when mkstemp's 0600
+    # surviving into the artifact was the defect; owner-only is now the deliberate policy, because
+    # inheriting an ordinary create published findings at 0644 under an ordinary umask. What the
+    # arm still has to prove is that the OWNER can open it and that nobody else can.
     actual = stat.S_IMODE((staging / REPORT_REL).stat().st_mode)
-    assert actual == expected, (
-        f"the committed report is mode {actual:04o} where an ordinary create gives {expected:04o}; "
-        "mkstemp's 0600 must not survive into the artifact a reader has to open")
+    assert actual & stat.S_IRUSR and actual & stat.S_IWUSR, (
+        f"the committed report is mode {actual:04o}: its own owner cannot read or write it")
+    assert not actual & 0o077, (
+        f"the committed report is mode {actual:04o}, wider than owner-only. An ordinary create "
+        f"here would give {expected:04o}, and that is exactly what must NOT be inherited")
 
 
 def test_a_refusal_report_is_readable_too(tmp_path: Path) -> None:
@@ -1448,8 +1454,11 @@ def test_a_refusal_report_is_readable_too(tmp_path: Path) -> None:
     rp = staging / REPORT_REL
     assert rp.is_file() and not rp.is_symlink(), "the refusal wrote a real report"
     actual = stat.S_IMODE(rp.stat().st_mode)
-    assert actual == expected, (
-        f"the refusal report is mode {actual:04o} where an ordinary create gives {expected:04o}")
+    assert actual & stat.S_IRUSR, (
+        f"the refusal report is mode {actual:04o}: its own owner cannot read it")
+    assert not actual & 0o077, (
+        f"the refusal report is mode {actual:04o}, wider than owner-only; an ordinary create "
+        f"here would give {expected:04o}. The refusal path gets the same policy as any other")
 
 
 # =============================================================================================
@@ -1460,9 +1469,13 @@ def test_a_refusal_report_is_readable_too(tmp_path: Path) -> None:
 # group-writable report (0660) lost group write, and in a directory carrying a default ACL the
 # report no longer matched what an ordinary create there produces.
 #
-# The property is not "some particular octal". It is: replacing a report must not change who could
-# read or write it, and creating one must land exactly where an ordinary create in that same
-# directory lands — which is the only way to inherit a default ACL without knowing it exists.
+# The property is not "some particular octal", and it changed at round eleven. REPLACING a report
+# must not change who could read or write it, NARROWED so "other" never gains access — the report
+# being replaced lives in the untrusted tree, and a committed one checks out 0644. CREATING one
+# lands OWNER-ONLY: the old rule was "exactly where an ordinary create lands", which is how a
+# findings report came to be published 0644 under an ordinary umask. A directory policy stricter
+# than 0600 still wins, because the inherited mode is intersected and an intersection cannot
+# widen. The exact-inheritance promise is deliberately broken, not quietly preserved.
 # =============================================================================================
 
 
@@ -1522,13 +1535,22 @@ def test_a_new_report_lands_where_an_ordinary_create_in_that_directory_lands(tmp
 
     proc = scan(tmp_path, driver, staging)
     assert proc.returncode == 0, "CONTROL: a clean run"
-    assert _mode(staging / REPORT_REL) == expected, (
-        f"a new report is {_mode(staging / REPORT_REL):04o} where an ordinary create in the same "
-        f"directory gives {expected:04o}")
+    got = _mode(staging / REPORT_REL)
+    assert not got & 0o077, (
+        f"a new report is {got:04o}, wider than owner-only. An ordinary create in this directory "
+        f"gives {expected:04o}; inheriting that is what published findings at 0644")
+    assert got & stat.S_IRUSR, f"and its owner must still be able to read it, not {got:04o}"
 
 
-def test_a_new_report_inherits_a_default_acl_the_way_an_ordinary_file_does(tmp_path: Path) -> None:
-    """The measurement that made the umask formula insufficient, run against a real default ACL."""
+def test_a_default_acl_stricter_than_owner_only_still_wins(tmp_path: Path) -> None:
+    """The inheritance that SURVIVES the owner-only rule, because intersection cannot widen.
+
+    Round eleven stopped a new report inheriting an ordinary create, which had published findings
+    at 0644. The mode is intersected with 0600 rather than assigned, so a directory whose default
+    ACL is STRICTER than owner-only still decides. Without this arm the intersection is
+    indistinguishable from a hard-coded 0600, and the machinery that reads the directory could be
+    deleted with the suite still green.
+    """
     if os.geteuid() == 0:
         pytest.skip("root ignores mode bits; this needs an unprivileged writer")
     if shutil.which("setfacl") is None:
@@ -1538,27 +1560,57 @@ def test_a_new_report_inherits_a_default_acl_the_way_an_ordinary_file_does(tmp_p
     write(staging / "docs" / "readme.md", "nothing private here\n")
     reports_dir = staging / "_reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
-    applied = subprocess.run(["setfacl", "-d", "-m", "u::rw,g::r,o::-", str(reports_dir)],
+    applied = subprocess.run(["setfacl", "-d", "-m", "u::r,g::-,o::-", str(reports_dir)],
                              capture_output=True, text=True)
     if applied.returncode != 0:
         pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
-
-    expected = _ordinary_create_mode(reports_dir) & ~0o007   # other is capped off
-    # The control must compare against the REAL umask, not a hard-coded one. Written as 0o022 it
-    # passed under `umask 027` even with the broken formula restored — measured in review — because
-    # 0o666 & ~0o027 and the ACL answer are both 0640 there, so the arm could not fail.
-    mask = os.umask(0o022)
-    os.umask(mask)
-    if expected == 0o666 & ~mask:
-        pytest.skip(
-            f"under umask {mask:03o} the ACL answer and the umask formula are both {expected:04o}, "
-            "so this arm cannot distinguish them; the sibling ordinary-create arm still applies")
+    expected = _ordinary_create_mode(reports_dir)
+    if expected & 0o200:
+        pytest.skip(f"this filesystem gave an ordinary create {expected:04o} despite a read-only "
+                    "default ACL; the stricter-wins property is not measurable here")
 
     proc = scan(tmp_path, driver, staging)
     assert proc.returncode == 0, "CONTROL: a clean run"
-    assert _mode(staging / REPORT_REL) == expected, (
-        f"the report is {_mode(staging / REPORT_REL):04o} where an ordinary create under this "
-        f"default ACL gives {expected:04o}; a umask-derived mode cannot see the ACL")
+    got = _mode(staging / REPORT_REL)
+    assert got == expected, (
+        f"the report is {got:04o} where this directory's default ACL gives {expected:04o}. A "
+        "policy stricter than owner-only must still win: the mode is intersected with 0600, and "
+        "an intersection cannot widen — if this now reads 0600, the directory is no longer being "
+        "consulted at all")
+
+
+def test_a_default_acl_granting_other_does_not_widen_a_new_report(tmp_path: Path) -> None:
+    """The direction that must NOT be inherited, which is the whole reason the rule changed.
+
+    A default ACL granting other-read is exactly the configuration that published a findings
+    report readable by every account on the box. Inheriting a directory policy is only safe
+    downward.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    if shutil.which("setfacl") is None:
+        pytest.skip("setfacl is not installed; the default-ACL contract cannot be measured here")
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    applied = subprocess.run(["setfacl", "-d", "-m", "u::rw,g::r,o::r", str(reports_dir)],
+                             capture_output=True, text=True)
+    if applied.returncode != 0:
+        pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
+    permissive = _ordinary_create_mode(reports_dir)
+    if not permissive & stat.S_IROTH:
+        pytest.skip(f"this filesystem gave an ordinary create {permissive:04o}; the ACL did not "
+                    "grant other, so there is no widening to refuse")
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0, "CONTROL: a clean run"
+    got = _mode(staging / REPORT_REL)
+    assert not got & 0o077, (
+        f"the report is {got:04o}: an ordinary create here gives {permissive:04o}, and that "
+        "policy was inherited. A directory inside the scanned tree does not get to decide who "
+        "may read the locations of the secrets found in it")
 
 
 def test_a_refusal_report_keeps_the_mode_the_report_it_replaces_had(tmp_path: Path) -> None:
@@ -1989,7 +2041,12 @@ def test_the_access_policy_lands_before_any_group_or_other_access(tmp_path: Path
     reports_dir.mkdir()
     rp = reports_dir / "scan_report.txt"
     rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
-    rp.chmod(0o664)
+    # 0o660, not 0o664. This arm measures ORDERING — that no call grants more than the policy
+    # being installed, before the ACL lands or after. Preservation is now narrow-only and caps
+    # "other" off, so a fixture granting other would end at a different mode than its source and
+    # red this arm for a reason that is not ordering. Group access is still present, so the
+    # exposure this arm hunts is still there to find.
+    rp.chmod(0o660)
     named = subprocess.run(["setfacl", "-m", f"u:{os.geteuid()}:r", "--", str(rp)],
                            capture_output=True, text=True)
     if named.returncode != 0:
@@ -2790,3 +2847,84 @@ def test_a_new_findings_report_is_never_other_readable(tmp_path: Path) -> None:
         "so anyone could replace it with a CLEAN line")
     assert mode & stat.S_IRUSR, (
         f"and it must still be readable by its owner, not merely locked down to {mode:04o}")
+
+
+def test_an_acl_that_grants_other_refuses_rather_than_publishing_wide(tmp_path: Path) -> None:
+    """The fail-closed edge of the narrow-only preservation, pinned so it is not a surprise.
+
+    Preserving the old report's mode is narrow-only: "other" is capped off, because in this
+    product the existing report lives in the untrusted tree and a committed one checks out 0644.
+    A POSIX ACL is the case the cap cannot simply mask — installing the old report's ACL restores
+    the bits the cap removed, the mode verification then disagrees, and the publish is REFUSED.
+
+    Refusing is the safe direction for a report naming the location of every secret found, and it
+    is loud: the caller gets the error, not a wide artifact. This arm exists so that behaviour is
+    a decision on the record rather than something an adopter discovers.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores these checks; this needs an unprivileged writer")
+    if shutil.which("setfacl") is None:
+        pytest.skip("setfacl is not installed; the ACL contract cannot be measured here")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "acl_grants_other")
+    reports_dir = tmp_path / "_reports"
+    reports_dir.mkdir()
+    rp = reports_dir / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    rp.chmod(0o664)
+    applied = subprocess.run(["setfacl", "-m", f"u:{os.geteuid()}:r,o::r", "--", str(rp)],
+                             capture_output=True, text=True)
+    if applied.returncode != 0:
+        pytest.skip(f"the filesystem refused an ACL entry: {applied.stderr.strip()[:80]}")
+    if not stat.S_IMODE(rp.stat().st_mode) & stat.S_IROTH:
+        pytest.skip("this filesystem did not grant other through the ACL; nothing to measure")
+
+    staged = reports_dir / ".scan_report_staged"
+    staged.write_text("scan_gate: REFUSED input-error\n", encoding="utf-8")
+    staged.chmod(0o600)
+
+    with pytest.raises(OSError) as caught:
+        module._install_posix_acl_policy(str(rp), str(staged))
+
+    assert "report-permission-preservation-failed" in str(caught.value), (
+        "an ACL granting other must refuse the publish, not widen it silently; the caller needs "
+        f"the failure, and it got {caught.value!r}")
+    assert not stat.S_IMODE(staged.stat().st_mode) & stat.S_IROTH, (
+        "and the staged report must not have been left other-readable on the way out")
+
+
+@pytest.mark.parametrize("planted", [0o644, 0o666])
+def test_a_planted_existing_report_cannot_widen_the_findings_it_is_replaced_by(
+        tmp_path: Path, planted: int) -> None:
+    """The cap on a NEW report was half a fix, and a review leg found the other half.
+
+    Preserving the old report's mode exists because forcing a umask-derived one once widened an
+    existing private report. But the "existing report" lives inside the tree being scanned, and
+    that tree is untrusted: a committed _reports/scan_report.txt checks out 0644 at an ordinary
+    umask, and preserving it faithfully republished the findings at 0644. Measured before the fix:
+    planted 0644 -> published 0644, planted 0666 -> published 0666. The new-report cap never ran,
+    because this is the existing-report arm.
+
+    Narrow-only preservation keeps the property the earlier round protected — 0600 stays 0600,
+    0660 keeps group write — and refuses only "other", only downward.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "planted_mode_%o" % planted)
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    rp.chmod(planted)
+
+    module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                        "generic_key_assignment", "contents")])
+
+    mode = stat.S_IMODE(rp.stat().st_mode)
+    assert not mode & stat.S_IROTH, (
+        f"a report planted at {planted:04o} caused the findings to be republished at {mode:04o}: "
+        "the tree being scanned chose who may read the secrets found in it")
+    assert mode & stat.S_IRUSR and mode & stat.S_IWUSR, (
+        f"and the owner must keep read and write, not be locked out at {mode:04o}")
