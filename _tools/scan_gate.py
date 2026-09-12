@@ -320,7 +320,7 @@ _ACL_ABSENT = frozenset(
     if code is not None)
 
 
-def _install_access_policy(src, dst):
+def _install_posix_acl_policy(src, dst):
     """Install the report's whole access policy on dst, while dst is still private.
 
     st_mode is only part of the permission contract. A POSIX ACL lives in an extended attribute, so
@@ -367,7 +367,11 @@ def _install_access_policy(src, dst):
             # DELETING the report over a condition this process can simply correct, so correct it
             # — and only refuse when the correction is the thing that fails.
             try:
-                os.chown(dst, -1, old.st_gid)
+                # follow_symlinks=False like every other metadata call here. The S_ISREG check
+                # above happens once, before this point; os.chown follows by default, so a dst
+                # that was a regular file at the check and a symlink by now would have its
+                # TARGET regrouped. The function already decided not to follow.
+                os.chown(dst, -1, old.st_gid, follow_symlinks=False)
             except OSError as exc:
                 raise OSError(exc.errno, "report-policy-group-not-preservable") from exc
             current = os.stat(dst, follow_symlinks=False)
@@ -429,7 +433,7 @@ def write_report(staging, hits):
         # mkstemp creates at 0600 and os.replace preserves it, which would hand a reader a report
         # they cannot open. The whole access policy is installed while the file is still private,
         # so no reader ever observes the directory's inherited one.
-        _install_access_policy(report_path, tmp_path)
+        _install_posix_acl_policy(report_path, tmp_path)
         os.replace(tmp_path, report_path)
     except BaseException:
         try:
@@ -484,7 +488,7 @@ def _write_refusal_report(staging, refusal):
             with os.fdopen(fd, "w") as f:
                 f.write(f"scan_gate: REFUSED {reason_class}\n")
             # The refusal report is the one a reader needs most, so it gets the same contract.
-            _install_access_policy(report_path, tmp_path)
+            _install_posix_acl_policy(report_path, tmp_path)
             os.replace(tmp_path, report_path)
         except BaseException:
             try:
@@ -509,6 +513,26 @@ def _write_refusal_report(staging, refusal):
         # cannot promise a write on a filesystem refusing writes, and it is the EXIT CODE, not the
         # report, that says this scan refused.
         try:
+            # Keeping the NAME is not keeping the EVIDENCE. os.replace destroys the old report's
+            # bytes exactly as surely as the unlink did, so a report carrying HITS was still lost
+            # — both round-6 reviewers made this point independently, and the previous commit
+            # message claimed a preservation it had not implemented.
+            #
+            # A hard link keeps the old inode alive — content, mode and ACL — under a sibling
+            # name, before the replace drops its original directory entry. Best effort in the
+            # strict sense: if the link cannot be made, publishing an accurate refusal still
+            # matters more than keeping the history, and the refusal goes out either way.
+            superseded = os.path.join(reports_dir, "scan_report.superseded.txt")
+            try:
+                previous = os.lstat(report_path)
+                if stat.S_ISREG(previous.st_mode):
+                    try:
+                        os.unlink(superseded)
+                    except FileNotFoundError:
+                        pass
+                    os.link(report_path, superseded)
+            except OSError:
+                pass
             fd, tmp_path = tempfile.mkstemp(dir=reports_dir, prefix=".scan_report_")
             try:
                 with os.fdopen(fd, "w") as f:

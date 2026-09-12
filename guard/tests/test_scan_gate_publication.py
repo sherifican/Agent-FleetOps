@@ -1814,13 +1814,13 @@ def test_the_mode_probe_cannot_be_raced_onto_a_name(tmp_path: Path, monkeypatch)
     victim.chmod(0o606)
 
     real_open = module.os.open
-    opens: list[str] = []
+    opens: list[tuple[str, int]] = []
 
     probe_dir = str(reports_dir)
 
     def racing_open(path, flags, *args, **kwargs):
         fd = real_open(path, flags, *args, **kwargs)
-        opens.append(str(path))
+        opens.append((str(path), flags))
         # Keyed on a named FILE appearing, not on a flag bit, so the arm does not depend on how
         # any particular libc spells its open modes. Scoped to entries the scanner creates inside
         # the reports directory: os.open is process-wide while patched, so an unscoped hook would
@@ -1836,6 +1836,15 @@ def test_the_mode_probe_cannot_be_raced_onto_a_name(tmp_path: Path, monkeypatch)
     if not getattr(os, "O_TMPFILE", 0):
         pytest.skip("no O_TMPFILE here; the unnamed-probe property is not measurable on this "
                     "platform and the fallback it takes instead is pinned by its own arm")
+    try:
+        # The flag EXISTING is not the filesystem accepting it. Without this the scanner takes its
+        # 0600 fallback, the mode stops matching an ordinary create, and the arm reds against a
+        # correct implementation on a filesystem it was never claiming to cover.
+        _probe_fd = os.open(str(reports_dir), os.O_TMPFILE | os.O_RDWR, 0o600)
+        os.close(_probe_fd)
+    except OSError as exc:
+        pytest.skip(f"this filesystem rejects O_TMPFILE ({exc.strerror}); the unnamed-probe "
+                    "property is not measurable here")
     expected = _ordinary_create_mode(reports_dir)
 
     monkeypatch.setattr(module.os, "open", racing_open)
@@ -1852,6 +1861,14 @@ def test_the_mode_probe_cannot_be_raced_onto_a_name(tmp_path: Path, monkeypatch)
     assert got == expected, (
         f"the contract came back as {got:04o} where an ordinary create in this directory gives "
         f"{expected:04o}. A probe that stats a NAME reports whatever was standing at that name.")
+    # Necessary is not sufficient. os.open(dir, O_RDONLY) plus the umask formula returns the same
+    # number on a directory with NO default ACL, publishes a pathname, and would sail past the
+    # assertion above. The property is that no directory entry is ever created, so pin the flag
+    # that makes that true.
+    assert any(flags & os.O_TMPFILE == os.O_TMPFILE for _, flags in opens), (
+        "the probe opened no unnamed file: "
+        f"{[(p, oct(f)) for p, f in opens]}. Matching an ordinary create's MODE does not establish "
+        "that no name was published, and the name is the whole hazard")
 
 
 def test_a_report_with_no_acl_does_not_inherit_the_directorys_default(tmp_path: Path) -> None:
@@ -1875,7 +1892,10 @@ def test_a_report_with_no_acl_does_not_inherit_the_directorys_default(tmp_path: 
     rp = staging / REPORT_REL
     reports_dir = staging / "_reports"
 
-    subprocess.run(["setfacl", "-b", "--", str(rp)], capture_output=True, text=True)
+    stripped = subprocess.run(["setfacl", "-b", "--", str(rp)], capture_output=True, text=True)
+    if stripped.returncode != 0:
+        pytest.skip(f"could not strip the report's ACL: {stripped.stderr.strip()[:80]}; without a "
+                    "mode-only report this arm has nothing to distinguish")
     # A default ACL of the three BASE entries alone lives in the mode bits and creates no extended
     # attribute, so an inherited policy would be invisible here and this arm would pass against
     # any implementation at all. A NAMED entry is what forces a real xattr into existence. Caught
@@ -1961,14 +1981,31 @@ def test_the_access_policy_lands_before_any_group_or_other_access(tmp_path: Path
 
     def watching_setxattr(path, name, value, *args, **kwargs):
         if str(path) == str(staged):
-            timeline.append(("setxattr", stat.S_IMODE(os.stat(path).st_mode)))
+            # Keyed on the ACL's OWN name. Cutting the prefix at the first xattr of ANY name lets
+            # a decoy user.* setxattr end the window early, after which a chmod 0666 before the
+            # real ACL goes unseen.
+            # Recorded AFTER the call returns. Appending first counts a FAILED setxattr as the
+            # install, which ends the checked prefix early and hides every exposure after it.
+            before = stat.S_IMODE(os.stat(path).st_mode)
+            result = real_setxattr(path, name, value, *args, **kwargs)
+            timeline.append((f"setxattr:{name}", before))
+            return result
         return real_setxattr(path, name, value, *args, **kwargs)
+
+    real_chown = module.os.chown
+
+    def watching_chown(path, uid, gid, *args, **kwargs):
+        result = real_chown(path, uid, gid, *args, **kwargs)
+        if str(path) == str(staged):
+            timeline.append(("chown", stat.S_IMODE(os.stat(path).st_mode)))
+        return result
 
     monkeypatch.setattr(module.os, "chmod", watching_chmod)
     monkeypatch.setattr(module.os, "setxattr", watching_setxattr)
-    module._install_access_policy(str(rp), str(staged))
+    monkeypatch.setattr(module.os, "chown", watching_chown)
+    module._install_posix_acl_policy(str(rp), str(staged))
 
-    installs = [i for i, (op, _) in enumerate(timeline) if op == "setxattr"]
+    installs = [i for i, (op, _) in enumerate(timeline) if op == f"setxattr:{ACL_XATTR}"]
     assert installs, "CONTROL: no ACL was ever installed, so the ordering was not exercised"
     before = [mode for op, mode in timeline[:installs[0] + 1]]
     assert all(mode & 0o077 == 0 for mode in before), (
@@ -2001,7 +2038,7 @@ def test_a_refusal_that_cannot_publish_replaces_the_stale_clean(tmp_path: Path, 
     def refuses(src, dst):
         raise OSError("report-permission-preservation-failed")
 
-    monkeypatch.setattr(module, "_install_access_policy", refuses)
+    monkeypatch.setattr(module, "_install_posix_acl_policy", refuses)
     module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe '_reports'"))
 
     assert rp.exists(), (
@@ -2046,27 +2083,75 @@ def test_a_recoverable_group_difference_is_repaired_rather_than_refused(tmp_path
     real_stat = module.os.stat
     other_gid = os.getgid() + 1
 
-    chowns: list[tuple[str, int, int]] = []
+    chowns: list[dict] = []
+    # The simulated chown MOVES the simulated group, exactly where a real one would. An earlier
+    # draft made the post-repair verification succeed as soon as ANY chown was recorded, so
+    # chowning the WRONG FILE passed the arm — measured by the round-6 reviewer, which ran
+    # chown(src, ...) against these assertions and watched them go green.
+    simulated_gid: dict[str, int] = {str(rp): other_gid}
 
     def stat_with_a_different_group(path, *args, **kwargs):
         st = real_stat(path, *args, **kwargs)
-        if str(path) == str(rp):
-            return os.stat_result(tuple(st)[:5] + (other_gid,) + tuple(st)[6:])
-        # Once the repair has been attempted the staged file reports the repaired group, so the
-        # implementation's own post-repair verification sees what a real chown would have left.
-        if str(path) == str(staged) and chowns:
-            return os.stat_result(tuple(st)[:5] + (other_gid,) + tuple(st)[6:])
+        gid = simulated_gid.get(str(path))
+        if gid is not None:
+            return os.stat_result(tuple(st)[:5] + (gid,) + tuple(st)[6:])
         return st
 
-    def recording_chown(path, uid, gid, *args, **kwargs):
-        chowns.append((str(path), uid, gid))          # the real call needs privileges a test lacks
+    def recording_chown(path, uid, gid, *args, follow_symlinks=True, **kwargs):
+        chowns.append({"path": str(path), "uid": uid, "gid": gid,
+                       "follow_symlinks": follow_symlinks})
+        simulated_gid[str(path)] = gid            # a real chown needs a second group a test lacks
 
     monkeypatch.setattr(module.os, "stat", stat_with_a_different_group)
     monkeypatch.setattr(module.os, "chown", recording_chown)
-    module._install_access_policy(str(rp), str(staged))
+    module._install_posix_acl_policy(str(rp), str(staged))
 
     assert chowns, (
         "CONTROL: no chown was attempted, so the repair path was never entered and this arm "
         "would pass against an implementation that simply ignored the group")
-    assert chowns[0][1] == -1 and chowns[0][2] == other_gid, (
+    assert chowns[0]["path"] == str(staged), (
+        f"the repair chowned {chowns[0]['path']!r}, not the staged file. Repairing the OLD report "
+        "instead would satisfy every other assertion here while changing the artifact this "
+        "function was asked to leave alone")
+    assert chowns[0]["uid"] == -1 and chowns[0]["gid"] == other_gid, (
         f"the repair must set the OLD group and leave the owner alone, got {chowns[0]!r}")
+    assert chowns[0]["follow_symlinks"] is False, (
+        "the repair followed symlinks. Every other metadata call in this helper passes "
+        "follow_symlinks=False; os.chown defaults to True, so a dst that became a symlink after "
+        "the regular-file check would have its TARGET regrouped")
+
+
+def test_a_refusal_preserves_the_findings_it_supersedes(tmp_path: Path, monkeypatch) -> None:
+    """Keeping the NAME is not keeping the EVIDENCE.
+
+    Two revisions ago the refusal writer unlinked the report. One revision ago it replaced it
+    instead, and the commit message called that preserving a report carrying HITS. It is not:
+    os.replace destroys the old bytes exactly as surely as the unlink destroyed the name. Both
+    round-6 reviewers said so independently, and they were right — a findings report is the
+    artifact most worth keeping and it was the one still being lost.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "refusal_preserves")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    findings = "SECRET\tgeneric_key_assignment\tcontents\tdocs/example.md:12\n"
+    rp.write_text(findings, encoding="utf-8")
+
+    def refuses(src, dst):
+        raise OSError("report-permission-preservation-failed")
+
+    monkeypatch.setattr(module, "_install_posix_acl_policy", refuses)
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe '_reports'"))
+
+    assert rp.read_text(encoding="utf-8").startswith("scan_gate: REFUSED"), (
+        "CONTROL: the refusal really did replace the canonical report on this run, so there was "
+        "something to preserve at the moment it mattered")
+    superseded = reports_dir / "scan_report.superseded.txt"
+    assert superseded.is_file(), (
+        "the findings this refusal replaced are gone. Preserving the NAME is not preserving the "
+        "EVIDENCE: a report carrying HITS is what a reader most needs kept, and os.replace "
+        "destroys it as surely as an unlink would have")
+    assert superseded.read_text(encoding="utf-8") == findings, (
+        "the preserved copy must carry the ORIGINAL findings, not a copy of the refusal")
