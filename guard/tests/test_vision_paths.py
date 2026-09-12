@@ -365,3 +365,8 @@ def test_a_refusal_names_the_reason_it_actually_had(monkeypatch, tmp_path, capsy
     assert 'escapes the configured mount' not in refusals[0], (
         f'the refusal blamed an escape that did not happen: {refusals[0]!r}. The destination is '
         'inside the configured mount; what stopped the copy was a directory standing at the leaf')
+    # Asserting the reason that DID fire, not merely the absence of the one that did not. A test
+    # that only checks the old substring is gone passes against any replacement wording at all,
+    # including one that names no reason.
+    assert 'no usable destination' in refusals[0], (
+        f'the refusal names no cause a reader can act on: {refusals[0]!r}')

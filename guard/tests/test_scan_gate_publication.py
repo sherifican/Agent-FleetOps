@@ -31,6 +31,7 @@ HARNESS CONVENTIONS:
   only at the subprocess argv boundary.
 """
 import ast
+import errno
 import hashlib
 import importlib.util
 import os
@@ -1665,8 +1666,14 @@ def test_the_fallback_is_used_only_when_the_directory_cannot_be_probed(tmp_path:
         got = module._report_mode(str(reports_dir / "scan_report.txt"), str(reports_dir))
         mask = os.umask(0o022)
         os.umask(mask)
-        assert got == 0o666 & ~mask, (
-            f"an unprobeable directory must fall back to the umask mode, got {got:04o}")
+        assert got == 0o600, (
+            f"an unmeasurable directory must answer 0600, got {got:04o}. It used to answer the "
+            "umask formula; round-5 review measured that publishing 0664 where an ordinary create "
+            "gives 0640, granting other-read the directory's default ACL withheld. A formula "
+            "cannot see a default ACL, so when the probe cannot run there is nothing to compute "
+            "from and the only safe answer is the one that cannot widen access.")
+        assert got & 0o077 == 0, (
+            "CONTROL: whatever the unmeasurable answer is, it must grant nothing to group or other")
     finally:
         reports_dir.chmod(0o700)
 
@@ -1826,6 +1833,11 @@ def test_the_mode_probe_cannot_be_raced_onto_a_name(tmp_path: Path, monkeypatch)
                 pass
         return fd
 
+    if not getattr(os, "O_TMPFILE", 0):
+        pytest.skip("no O_TMPFILE here; the unnamed-probe property is not measurable on this "
+                    "platform and the fallback it takes instead is pinned by its own arm")
+    expected = _ordinary_create_mode(reports_dir)
+
     monkeypatch.setattr(module.os, "open", racing_open)
     got = module._report_mode(str(reports_dir / "scan_report.txt"), str(reports_dir))
 
@@ -1834,9 +1846,12 @@ def test_the_mode_probe_cannot_be_raced_onto_a_name(tmp_path: Path, monkeypatch)
         "the probe deleted a file it did not create: a rename onto the probe's name puts a "
         "stranger's inode where the unlink is aimed, and unique naming does not close that")
     assert victim.read_text(encoding="utf-8") == "SOMEONE ELSE FILE", "and must not rewrite it"
-    assert got != 0o606, (
-        f"the contract came back as {got:04o}, the substituted file's mode: a probe that stats a "
-        "NAME reports whatever was standing at that name, not what an ordinary create produces")
+    # Asserting the POSITIVE property. An earlier draft asserted `got != 0o606`, the victim's
+    # mode — which fails against a correct scanner whenever an ordinary create legitimately
+    # produces 0606 (umask 060), and blames a substitution that never happened.
+    assert got == expected, (
+        f"the contract came back as {got:04o} where an ordinary create in this directory gives "
+        f"{expected:04o}. A probe that stats a NAME reports whatever was standing at that name.")
 
 
 def test_a_report_with_no_acl_does_not_inherit_the_directorys_default(tmp_path: Path) -> None:
@@ -1872,8 +1887,20 @@ def test_a_report_with_no_acl_does_not_inherit_the_directorys_default(tmp_path: 
         pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
     canary = reports_dir / ".inheritance_canary"
     canary.write_text("x", encoding="utf-8")
-    inherited = _acl(canary)
-    canary.unlink()
+    try:
+        inherited = os.getxattr(str(canary), ACL_XATTR)
+    except OSError as exc:
+        # _acl() swallows every OSError, so an EIO here would have read as "no inheritance" and
+        # skipped — a measurement FAILURE wearing an environmental absence's clothes. Only the
+        # absence codes may skip; anything else is a broken instrument and must be loud.
+        if exc.errno not in (errno.ENODATA, getattr(errno, "ENOATTR", errno.ENODATA),
+                             errno.EOPNOTSUPP, errno.ENOTSUP):
+            raise AssertionError(
+                f"CONTROL: could not measure ACL inheritance ({exc.strerror}); this arm cannot "
+                "tell a preserved policy from an inherited one and must not report either") from exc
+        inherited = None
+    finally:
+        canary.unlink()
     if inherited is None:
         pytest.skip("CONTROL: new files here inherit no ACL xattr, so this arm cannot distinguish "
                     "a preserved policy from an inherited one")
@@ -1920,29 +1947,48 @@ def test_the_access_policy_lands_before_any_group_or_other_access(tmp_path: Path
     staged.chmod(0o600)
 
     real_setxattr = module.os.setxattr
-    at_install: list[int] = []
+    real_chmod = module.os.chmod
+    timeline: list[tuple[str, int]] = []
+
+    # Sampling ONLY at setxattr proved too late: a mutant that chmods to the full mode, then back
+    # to private, then installs the ACL passed the earlier version of this arm. The exposure is
+    # real while it lasts, so every permission-changing call is recorded in order.
+    def watching_chmod(path, mode, *args, **kwargs):
+        result = real_chmod(path, mode, *args, **kwargs)
+        if str(path) == str(staged):
+            timeline.append(("chmod", stat.S_IMODE(os.stat(path).st_mode)))
+        return result
 
     def watching_setxattr(path, name, value, *args, **kwargs):
-        at_install.append(stat.S_IMODE(os.stat(path).st_mode))
+        if str(path) == str(staged):
+            timeline.append(("setxattr", stat.S_IMODE(os.stat(path).st_mode)))
         return real_setxattr(path, name, value, *args, **kwargs)
 
+    monkeypatch.setattr(module.os, "chmod", watching_chmod)
     monkeypatch.setattr(module.os, "setxattr", watching_setxattr)
     module._install_access_policy(str(rp), str(staged))
 
-    assert at_install, "CONTROL: no ACL was ever installed, so the ordering was not exercised"
-    assert all(mode & 0o077 == 0 for mode in at_install), (
-        f"the staged report already granted group/other access ({[oct(m) for m in at_install]}) "
-        "at the moment the ACL was installed: until the ACL lands, those bits belong to the "
-        "directory's inherited policy, and publishing through that window is the whole defect")
+    installs = [i for i, (op, _) in enumerate(timeline) if op == "setxattr"]
+    assert installs, "CONTROL: no ACL was ever installed, so the ordering was not exercised"
+    before = [mode for op, mode in timeline[:installs[0] + 1]]
+    assert all(mode & 0o077 == 0 for mode in before), (
+        f"the staged report granted group/other access before its ACL landed: {timeline!r}. Until "
+        "the intended policy is installed those bits belong to the DIRECTORY's inherited one, and "
+        "every moment they are effective is a moment the report is readable by the wrong set of "
+        "people — whether or not a later call narrows them again.")
 
 
-def test_a_refusal_that_cannot_publish_removes_the_stale_clean(tmp_path: Path, monkeypatch) -> None:
+def test_a_refusal_that_cannot_publish_replaces_the_stale_clean(tmp_path: Path, monkeypatch) -> None:
     """The half of the permission change nobody had specified.
 
     Making the policy helper RAISE gave the refusal writer a failure it had no answer for: its
     outer handler swallowed it and left the previous report in place. That report can say CLEAN
-    next to an rc 2, which is the one outcome this writer exists to prevent. Removing the name
-    is worse for a reader than a correct refusal and better than a lie.
+    next to an rc 2, which is the one outcome this writer exists to prevent.
+
+    The first fix UNLINKED it, and this arm asserted the removal. Round-5 review found that wrong:
+    not every old report says CLEAN, one carrying HITS is evidence worth more than absence, and
+    anyone able to provoke a refusal was handed an erasure primitive. The name is now never
+    dropped — a private 0600 refusal replaces the old bytes atomically instead.
     """
     driver = make_tool(tmp_path)
     module = import_driver(driver, "refusal_unpublishable")
@@ -1958,8 +2004,69 @@ def test_a_refusal_that_cannot_publish_removes_the_stale_clean(tmp_path: Path, m
     monkeypatch.setattr(module, "_install_access_policy", refuses)
     module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe '_reports'"))
 
-    assert not rp.exists(), (
-        "a refusal that could not publish its replacement left the old report standing; a stale "
-        "'scan_gate: CLEAN' beside an rc 2 tells a reader the tree was scanned and passed")
+    assert rp.exists(), (
+        "the canonical report NAME was dropped. An earlier revision unlinked here; round-5 review "
+        "found that destroys an old report carrying HITS, and hands anyone who can provoke a "
+        "refusal an erasure primitive through this writer's own authority")
+    body = rp.read_text(encoding="utf-8")
+    assert body == "scan_gate: REFUSED report-path-unsafe\n", (
+        f"the stale CLEAN must be replaced by the refusal, got {body!r}")
+    mode = stat.S_IMODE(rp.stat().st_mode)
+    assert mode & 0o077 == 0, (
+        f"the fallback report published at {mode:04o}: it could not establish the old policy, so "
+        "it must not grant more than the private mode it already had")
     leftovers = sorted(p.name for p in reports_dir.iterdir() if p.name.startswith(".scan_report_"))
     assert not leftovers, f"and the temporary file must not be abandoned either: {leftovers}"
+
+
+def test_a_recoverable_group_difference_is_repaired_rather_than_refused(tmp_path: Path,
+                                                                        monkeypatch) -> None:
+    """Round-5 review: two defensible changes composed into deletion.
+
+    The ownership guard refused whenever the old report's gid differed from the staged file's, and
+    the refusal writer's fallback then removed the report. But a group difference is ordinary and
+    the process can usually just fix it: a report written under newgrp, an owner's chgrp, or a
+    setgid report directory all produce one with nobody hostile involved. Refusing there spent a
+    real artifact on a condition one chown closes.
+
+    The difference is simulated at the stat boundary because making a real one needs membership in
+    a second group, which a test cannot assume.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "gid_repair")
+    reports_dir = tmp_path / "_reports"
+    reports_dir.mkdir()
+    rp = reports_dir / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    rp.chmod(0o640)
+    staged = reports_dir / ".scan_report_staged"
+    staged.write_text("scan_gate: REFUSED input-error\n", encoding="utf-8")
+    staged.chmod(0o600)
+
+    real_stat = module.os.stat
+    other_gid = os.getgid() + 1
+
+    chowns: list[tuple[str, int, int]] = []
+
+    def stat_with_a_different_group(path, *args, **kwargs):
+        st = real_stat(path, *args, **kwargs)
+        if str(path) == str(rp):
+            return os.stat_result(tuple(st)[:5] + (other_gid,) + tuple(st)[6:])
+        # Once the repair has been attempted the staged file reports the repaired group, so the
+        # implementation's own post-repair verification sees what a real chown would have left.
+        if str(path) == str(staged) and chowns:
+            return os.stat_result(tuple(st)[:5] + (other_gid,) + tuple(st)[6:])
+        return st
+
+    def recording_chown(path, uid, gid, *args, **kwargs):
+        chowns.append((str(path), uid, gid))          # the real call needs privileges a test lacks
+
+    monkeypatch.setattr(module.os, "stat", stat_with_a_different_group)
+    monkeypatch.setattr(module.os, "chown", recording_chown)
+    module._install_access_policy(str(rp), str(staged))
+
+    assert chowns, (
+        "CONTROL: no chown was attempted, so the repair path was never entered and this arm "
+        "would pass against an implementation that simply ignored the group")
+    assert chowns[0][1] == -1 and chowns[0][2] == other_gid, (
+        f"the repair must set the OLD group and leave the owner alone, got {chowns[0]!r}")

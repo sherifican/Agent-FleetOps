@@ -18,7 +18,7 @@ staleness check could never fire. That defect is why the dry run now returns `2`
 |---|---|---|
 | Teeth-prover | `python3 guard/teeth_prover.py` | 10 planted mutations; every guard proves it can fail |
 | Contract agreement | `python3 guard/contract_agreement.py` | all four vocabulary surfaces agree (validator · addendum · rollup · preamble) |
-| Guard unit gates | `pytest guard/tests/ -q` | 693 tests, hermetic (one is environment-gated: it skips without `PASSBACK_OUTBOX`; the strict xfail that once recorded the scanner's stale-report gap was repaired in `3a9b87a` and is now a live arm) |
+| Guard unit gates | `pytest guard/tests/ -q` | 694 tests, hermetic in the sense that no arm needs a live fleet, a network or a credential. That is not the same as every arm running everywhere: a number of them are environment-gated and SKIP when their instrument is absent — no `setfacl`, no `O_TMPFILE`, running as root, a filesystem that refuses a default ACL, or no `PASSBACK_OUTBOX`. A skipped arm is not a passing one, so run with `-rs` to see which stood down. The strict xfail that once recorded the scanner's stale-report gap was repaired in `3a9b87a` and is now a live arm |
 | Documented counts | `python3 guard/doc_count_drift.py` | every count written into prose or the banner matches what it describes |
 | Rendered banner | `python3 guard/banner_render.py` | the PNG keeps its transparent corners and was rendered from the SVG in the tree |
 | Full runner | `guard/run_guards.sh` | the above in order; leg-liveness dry-run returns `2 = UNMEASURED` by design |

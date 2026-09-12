@@ -258,8 +258,10 @@ def _report_mode(report_path, reports_dir):
     same directory produces — asking the filesystem rather than computing from the umask is what
     makes a default ACL inherit correctly, since a umask formula cannot see one.
 
-    The umask formula remains only as the fallback for when the probe itself cannot be created,
-    which is the same condition under which mkstemp would already have failed.
+    When the measurement cannot be taken at all the answer is 0600, not a computed guess. A umask
+    formula cannot see a directory's default ACL: round-5 review measured it publishing 0664 where
+    an ordinary create gives 0640. Narrower than intended is a permission error somebody can see;
+    wider than intended is a disclosure nobody does.
     """
     try:
         st = os.lstat(report_path)
@@ -278,9 +280,17 @@ def _report_mode(report_path, reports_dir):
     # 0664), so asking this way costs nothing in accuracy.
     #
     # O_TMPFILE is Linux-only and not carried by every filesystem — NFS among them — while the
-    # mkstemp that precedes this call works there. So its absence falls back to the umask formula
-    # as before: a guess that cannot see a default ACL, but a report written under a slightly wrong
-    # mode beats refusing to write one at all on a filesystem where everything else works.
+    # mkstemp that precedes this call works there. The previous revision fell back to the umask
+    # formula on those, arguing availability. Round-5 review measured the cost of that: with a
+    # directory default ACL of u::rw,g::r,o::- and umask 002, an ordinary create gives 0640 and
+    # the formula gives 0664 — granting other-read and group-write the directory explicitly
+    # withheld. This report redacts matched values, but it still names paths, line numbers and
+    # finding classes, and widening who can read that is not a rounding error.
+    #
+    # So an unmeasurable mode is not guessed. 0600 is the one answer that cannot widen anything:
+    # it is what mkstemp already gave the staged file, it is never broader than whatever the
+    # directory intended, and the scanner keeps working where everything else does. A reader who
+    # loses access gets a permission error, which is visible. The alternative was not.
     tmpfile = getattr(os, "O_TMPFILE", 0)
     if tmpfile:
         try:
@@ -291,13 +301,19 @@ def _report_mode(report_path, reports_dir):
                 os.close(fd)
         except OSError:
             pass
-    return 0o666 & ~_current_umask()
+    return 0o600
 
 ACL_XATTR = "system.posix_acl_access"
 
-# A filesystem carrying no extended attributes answers every ACL question with one of these. They
-# all mean "there is no ACL here", which is not the same as failing to preserve one, and must not
-# turn an ordinary scan on such a filesystem into a refusal.
+# A filesystem carrying no POSIX extended attributes answers every ACL question with one of these,
+# and an ordinary scan there must not become a refusal. What they establish is narrower than it
+# looks, so the comment that used to say they "all mean there is no ACL here" has been corrected:
+# they mean this POSIX interface is unavailable or the attribute is unset. A filesystem can carry a
+# policy through a DIFFERENT interface — NFSv4 registers its own ACL handlers — and this helper
+# neither reads nor preserves those. Its domain is POSIX access ACLs; outside that domain it
+# preserves mode and ownership only, which is what it did before and is not a new regression.
+# ENOTSUP and EOPNOTSUPP are the same value on Linux; both names are listed for platforms where
+# they are not.
 _ACL_ABSENT = frozenset(
     code for code in (getattr(errno, name, None)
                       for name in ("ENODATA", "ENOATTR", "EOPNOTSUPP", "ENOTSUP"))
@@ -321,7 +337,11 @@ def _install_access_policy(src, dst):
     keeps what the directory gave it.
 
     Failure raises. A report whose access policy could not be established must not be published
-    under a guess about who may read it.
+    under a guess about who may read it — which is also why the mode probe answers 0600 rather
+    than a umask formula when it cannot measure.
+
+    The domain is POSIX access ACLs. On a filesystem expressing policy some other way, this
+    preserves mode and ownership and says nothing about the rest.
     """
     try:
         try:
@@ -335,10 +355,24 @@ def _install_access_policy(src, dst):
         current = os.stat(dst, follow_symlinks=False)
         if not stat.S_ISREG(old.st_mode) or not stat.S_ISREG(current.st_mode):
             raise OSError(errno.EINVAL, "report-policy-requires-regular-files")
-        if old.st_uid != current.st_uid or old.st_gid != current.st_gid:
-            # Identical mode bits and ACL bytes under a different owning identity are a different
-            # access policy. Refuse rather than guess which change was intended.
-            raise OSError(errno.EPERM, "report-policy-owner-or-group-differs")
+        if old.st_uid != current.st_uid:
+            # A different OWNER is not recoverable here: an unprivileged process cannot give a file
+            # away, so the old policy genuinely cannot be reinstated. Refuse rather than publish
+            # under an identity the old report did not have.
+            raise OSError(errno.EPERM, "report-policy-owner-differs")
+        if old.st_gid != current.st_gid:
+            # A different GROUP is ordinary and usually fixable: a report written under newgrp, an
+            # owner's chgrp, or a setgid report directory all produce one with nobody hostile
+            # involved. Refusing outright used to compose with the refusal writer's fallback into
+            # DELETING the report over a condition this process can simply correct, so correct it
+            # — and only refuse when the correction is the thing that fails.
+            try:
+                os.chown(dst, -1, old.st_gid)
+            except OSError as exc:
+                raise OSError(exc.errno, "report-policy-group-not-preservable") from exc
+            current = os.stat(dst, follow_symlinks=False)
+            if current.st_gid != old.st_gid:
+                raise OSError(errno.EPERM, "report-policy-group-not-preservable")
 
         mode = stat.S_IMODE(old.st_mode)
         try:
@@ -414,15 +448,24 @@ def _write_refusal_report(staging, refusal):
     Creates nothing when no report exists.
 
     "Never raises" is scoped to the errors this can expect — OSError and UnicodeError. An
-    unexpected exception type still propagates; claiming otherwise would need a bare except, which
-    would swallow the defects this file is supposed to surface. When the replacement cannot be
-    published the stale report is REMOVED rather than left: see the fallback at the bottom."""
+    unexpected type still propagates: a refusal whose __str__ raises ValueError will replace the
+    refusal being reported, which `except Exception` would close at the cost of swallowing the
+    defects this file exists to surface. That trade has not been made, so the narrower claim is
+    the true one.
+
+    When the replacement cannot be published under the old policy, a private 0600 refusal replaces
+    it instead; the canonical name is never unlinked. If THAT write also fails — a read-only or
+    unwritable report directory — the old report survives unchanged. Removal was never promised
+    and cannot be: only the exit code is guaranteed."""
     reports_dir = os.path.join(staging, "_reports")
     if os.path.islink(reports_dir) or not os.path.isdir(reports_dir):
         return
     report_path = os.path.join(reports_dir, "scan_report.txt")
     if not os.path.lexists(report_path):
         return
+    # Bound before the guarded block so the fallback below always has a class to write, even when
+    # classification itself is what failed.
+    reason_class = "unclassified"
     try:
         # Classified INSIDE the guarded block. str() on a refusal is not guaranteed to succeed,
         # and out here a failure would propagate from a function whose whole job is to not let the
@@ -450,19 +493,35 @@ def _write_refusal_report(staging, refusal):
                 pass
             raise
     except (OSError, UnicodeError):
-        # The replacement could not be published. Most often that is _install_access_policy
-        # refusing to publish under a guessed access policy — a refusal, not a reason to leave the
-        # old bytes standing. What must not survive an rc 2 is a stale "scan_gate: CLEAN" telling a
-        # reader this tree was scanned and passed, so remove the canonical name instead.
+        # The replacement could not be published under the old report's access policy. The previous
+        # revision UNLINKED the canonical report here, reasoning that a stale "CLEAN" beside an
+        # rc 2 is the worst outcome. Round-5 review found that wrong in two directions at once.
         #
-        # Absent is not success. A reader that treats a missing report as a pass reproduces one
-        # level up the exact defect this function exists to prevent; the contract is that only
-        # rc 0 WITH a report authorizes anything. Removal also loses the report's history, which
-        # is the price of not leaving a lie in place, and is why it is the fallback and not the
-        # first move.
+        # Not every old report says CLEAN. One carrying HITS is evidence, and deleting it is a loss
+        # no refusal justifies. And an attacker able to provoke both a refusal and a policy failure
+        # was handed a way to erase the report through this writer's own authority — a capability
+        # they did not otherwise have if they could not write this directory.
+        #
+        # So the name is never dropped. The refusal is published at the private mode mkstemp
+        # already gave the staged file: 0600 can be narrower than the old policy but never wider,
+        # and it replaces the old bytes atomically, so no window exists in which the report is
+        # missing. If even that fails, the old report is left exactly as it was — this function
+        # cannot promise a write on a filesystem refusing writes, and it is the EXIT CODE, not the
+        # report, that says this scan refused.
         try:
-            os.unlink(report_path)
-        except OSError:
+            fd, tmp_path = tempfile.mkstemp(dir=reports_dir, prefix=".scan_report_")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(f"scan_gate: REFUSED {reason_class}\n")
+                os.chmod(tmp_path, 0o600)
+                os.replace(tmp_path, report_path)
+            except BaseException:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        except (OSError, UnicodeError):
             pass
 
 def self_test():
