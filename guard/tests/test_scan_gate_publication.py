@@ -4080,3 +4080,139 @@ def test_creating_an_ancestor_cannot_change_the_mode_of_a_substituted_directory(
         "REPAIRED: the report directory was created outside the supplied tree entirely")
     assert (outside / "sentinel").read_text(encoding="utf-8") == "OUTSIDE DATA\n", (
         "CONTROL: the outside directory's contents were never in play")
+
+
+# =============================================================================================
+# GROUP 29 — the twentieth round, from the cold leg's review of the nineteenth state.
+#
+#   #2 The symlink refusal fires ABOVE _stage_report, so the hits are never written anywhere and
+#      the quarantine added for the FIFO case cannot see them. The leg put it exactly: "this is
+#      the FIFO bug's sibling" — a FIFO is admitted, staged, failed and quarantined; a symlink is
+#      refused earlier, and the evidence dies with the raise.
+#
+#   #5 `_narrow_kept_copy` did `_kept & 0o600` on a preserved copy. At a planted 0044 — other
+#      readable, owner bits clear, and the owner is not "other" — that maps to 0000, so the only
+#      copy of the findings becomes unreadable to its owner. Setting the report mode on the held
+#      descriptor is both narrower for group and other AND readable by the owner.
+#
+#   #9 The classify and narrow opens have no O_NONBLOCK. Opening a FIFO for read blocks until a
+#      writer appears, so a name that becomes a FIFO hangs the one function that must always
+#      return. Hanging is worse than raising.
+#
+#   #3 The refusal writer's FALLBACK replaces without the staged-inode check the ordinary path
+#      twelve lines above performs, under a comment explaining why that check exists.
+# =============================================================================================
+
+
+def test_a_symlinked_report_name_does_not_cost_this_scan_its_findings(tmp_path: Path) -> None:
+    """REPAIRED: refusing the canonical name must not happen before the evidence is on disk."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "symlink_before_stage")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    (reports / "scan_report.txt").symlink_to(outside)
+
+    with pytest.raises(Exception):
+        module.write_report(str(staging), NEW_HIT)
+
+    assert _findings_anywhere(reports, "docs/example.md:12"), (
+        "REPAIRED: a symlink at the report name was refused before the findings were staged, so "
+        "this scan's hits existed only in the argument list and died with the raise. The refusal "
+        "writer never receives them")
+    assert outside.read_text(encoding="utf-8") == "scan_gate: CLEAN\n", (
+        "CONTROL: the symlink's target must not have been written through")
+
+
+@pytest.mark.parametrize("planted", [0o044, 0o004, 0o040, 0o000])
+def test_a_preserved_copy_stays_readable_by_its_owner(tmp_path: Path, planted: int) -> None:
+    """REPAIRED: narrowing must not map a planted mode onto one nobody can read.
+
+    0o044 is the case that names the defect: `_kept & 0o600` is 0o000 because the owner is not
+    "other". The only copy of the findings then needs an extra chmod before anyone can read it.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path, name="tool_%o" % planted)
+    module = import_driver(driver, "narrow_readable_%o" % planted)
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    rp = reports / "scan_report.txt"
+    rp.write_text("aws\tkey\tassignment\tdocs/kept.md:9\n", encoding="utf-8")
+    rp.chmod(planted)
+
+    try:
+        assert preserve_superseded(module, reports) is True, (
+            "CONTROL: preservation must succeed here, or there is no kept copy to inspect")
+        kept = [p for p in reports.iterdir() if p.name.startswith("scan_report.superseded")]
+        assert kept, "CONTROL: nothing was preserved"
+        mode = stat.S_IMODE(kept[0].stat().st_mode)
+    finally:
+        for p in reports.iterdir():
+            try:
+                p.chmod(0o600)
+            except OSError:
+                pass
+
+    assert not mode & 0o077, (
+        f"a copy planted at {planted:04o} was preserved at {mode:04o}, still open to group or other")
+    assert mode & stat.S_IRUSR, (
+        f"a copy planted at {planted:04o} was preserved at {mode:04o} — its OWNER cannot read the "
+        "only surviving copy of the findings. Narrowing must not produce an unreadable artifact")
+
+
+def test_narrowing_a_fifo_does_not_hang(tmp_path: Path) -> None:
+    """REPAIRED: the one function that must always return must not block on a FIFO open.
+
+    open(2): opening the read end of a FIFO blocks until the other end is opened. Without
+    O_NONBLOCK a name that has become a FIFO stops the refusal writer forever, and a refusal that
+    never returns is worse than one that raises.
+    """
+    import threading
+
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "fifo_no_hang")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    try:
+        os.mkfifo(str(reports / "scan_report.superseded.txt"))
+    except (OSError, AttributeError):
+        pytest.skip("this platform cannot create a FIFO")
+
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    done = threading.Event()
+
+    def run():
+        try:
+            module._narrow_kept_copy(dirfd, "scan_report.superseded.txt")
+        finally:
+            done.set()
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    finished = done.wait(timeout=5.0)
+    os.close(dirfd)
+    assert finished, (
+        "REPAIRED: narrowing blocked on a FIFO open with no writer. O_NONBLOCK does not appear in "
+        "the publication path, so any name that becomes a FIFO hangs the refusal writer")
+
+
+def test_the_refusal_fallback_checks_the_staged_inode_before_replacing(tmp_path: Path) -> None:
+    """REPAIRED: the fallback publishes under the same identity rule as the ordinary path.
+
+    The ordinary path checks the staged name is still the held inode and says why: renameat would
+    otherwise publish a planted symlink under the canonical name. The fallback, twelve lines
+    below, replaced without that check — and the fallback is the path that runs when something has
+    already gone wrong.
+    """
+    source = SCANNER.read_text(encoding="utf-8")
+    body = source[source.index("def _write_refusal_report"):]
+    fallback = body[body.index("except (OSError, UnicodeError):"):]
+    assert "st_ino" in fallback, (
+        "the refusal writer's fallback replaces the canonical name without checking that the "
+        "staged name is still the descriptor's inode")
+    assert fallback.count("os.replace(") == 1, (
+        "CONTROL: the fallback should contain exactly one publish; if this changed, the arm above "
+        "may be inspecting the wrong region")

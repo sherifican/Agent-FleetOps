@@ -861,16 +861,6 @@ def write_report(staging, hits):
         # that: a substitution immediately after the hardening published the findings OVER a file
         # outside the scanned tree and deleted an outside preservation slot on the way past, with
         # every in-function check still passing because each one re-resolved the same swapped name.
-        try:
-            _existing = os.lstat(_REPORT_NAME, dir_fd=dirfd)
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'") from exc
-        else:
-            if stat.S_ISLNK(_existing.st_mode):
-                raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
-
         if not hits:
             body = "scan_gate: CLEAN\n"
         else:
@@ -879,6 +869,24 @@ def write_report(staging, hits):
 
         fd, tmp_name = _stage_report(dirfd, body)
         try:
+            # THE CANONICAL NAME IS JUDGED AFTER THE FINDINGS ARE ON DISK, and the order is the
+            # finding. This check used to sit above _stage_report, so a symlink planted at the
+            # report name raised before anything was staged: the hits existed only in the argument
+            # list, the raise took them with it, and `_write_refusal_report` — which receives the
+            # exception and never the hits — published a refusal over the top. The cold leg named
+            # it the FIFO bug's sibling, and it is exactly that: a FIFO is admitted, staged,
+            # refused by the policy installer and then QUARANTINED, while a symlink was refused
+            # one step earlier where the quarantine could not see it. Staged first, every refusal
+            # from here on reaches the handler with the evidence already written.
+            try:
+                _existing = os.lstat(_REPORT_NAME, dir_fd=dirfd)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'") from exc
+            else:
+                if stat.S_ISLNK(_existing.st_mode):
+                    raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
             # THE STAGED DESCRIPTOR STAYS OPEN ACROSS THE POLICY INSTALL. Writing the body and
             # then naming the file again to set its metadata is what let a swapped name receive
             # the mode call; the policy installer carries that measurement.
@@ -973,32 +981,50 @@ def _narrow_kept_copy(dirfd, name):
     publish still lands owner-only, and a preserved copy that could not be narrowed is strictly
     better than no preserved copy at all.
     """
+    # AN O_PATH HANDLE, WHICH ANSWERS THREE FINDINGS AT ONCE.
+    #
+    # It needs no read permission, so a copy planted at 0044 — other-readable with the owner's own
+    # bits clear, and the owner is not "other" — can still be reached. An O_RDONLY open of that
+    # file fails EACCES for its own owner.
+    #
+    # It never blocks. open(2): opening the read end of a FIFO waits for a writer, so a name that
+    # has become a FIFO stopped the one function that must always return. O_PATH does not open the
+    # file description at all, so there is nothing to wait for.
+    #
+    # And it is O_NOFOLLOW and descriptor-relative, so the mode lands on the inode that was
+    # preserved rather than on whatever a symlink at the name points at — the previous form did
+    # os.chmod(name, ..., dir_fd=dirfd), which follows a symlink at the final component.
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    opath = getattr(os, "O_PATH", 0)
+    via_proc = bool(opath) and _PROC_FD_DIR is not None
+    flags = (opath if via_proc else (os.O_RDONLY | nonblock)) | nofollow
     try:
-        _kept = stat.S_IMODE(os.lstat(name, dir_fd=dirfd).st_mode)
+        fd = os.open(name, flags, dir_fd=dirfd)
     except OSError:
         return
-    if _XATTR_SUPPORTED:
-        # Opened relative to the held directory and O_NOFOLLOW, so the strip reaches the inode
-        # that was preserved rather than whatever the name resolves to now. Opening can fail on a
-        # copy whose own owner bits are clear; that is a best-effort loss of the strip and must
-        # not cost the cap below, which is the half that always applies.
-        _nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
         try:
-            _fd = os.open(name, os.O_RDONLY | _nofollow, dir_fd=dirfd)
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return                    # not a preserved report; not ours to re-mode
         except OSError:
-            _fd = None
-        if _fd is not None:
+            return
+        target = "%s/%d" % (_PROC_FD_DIR, fd) if via_proc else fd
+        if _XATTR_SUPPORTED:
             try:
-                _strip_acl_by_fd(_fd)
+                _strip_acl_by_fd(fd)
             except OSError:
                 pass                      # best effort, and INDEPENDENT of the cap below
-            finally:
-                _close_quietly(_fd)
-    if _kept & 0o077:
         try:
-            os.chmod(name, _kept & 0o600, dir_fd=dirfd)
+            # THE REPORT MODE, not the planted mode narrowed. `_kept & 0o600` mapped 0044 to 0000
+            # and left the only surviving copy of the findings unreadable by its owner. 0600 is
+            # narrower than a planted mode for group and other in every case AND readable, which
+            # is what an evidence copy has to be.
+            os.chmod(target, _REPORT_MODE)
         except OSError:
             pass
+    finally:
+        _close_quietly(fd)
 
 
 def _preserve_superseded(dirfd, report_name):
@@ -1052,7 +1078,8 @@ def _preserve_superseded(dirfd, report_name):
     linked = None
     for candidate in _superseded_slot_names():
         try:
-            os.link(report_name, candidate, src_dir_fd=dirfd, dst_dir_fd=dirfd)
+            os.link(report_name, candidate, src_dir_fd=dirfd, dst_dir_fd=dirfd,
+                    follow_symlinks=False)
         except OSError:
             continue                      # occupied, unusable, or unsupported — try the next
         linked = candidate
@@ -1082,7 +1109,11 @@ def _preserve_superseded(dirfd, report_name):
     classify_name = linked if linked is not None else report_name
     try:
         _nofollow = getattr(os, "O_NOFOLLOW", 0)
-        _cfd = os.open(classify_name, os.O_RDONLY | _nofollow, dir_fd=dirfd)
+        # O_NONBLOCK so a name that has become a FIFO cannot stop this. A non-blocking FIFO read
+        # returns nothing, the report is then classified as findings, and treating an unreadable
+        # report as findings is already this function's documented safe direction.
+        _nonblock = getattr(os, "O_NONBLOCK", 0)
+        _cfd = os.open(classify_name, os.O_RDONLY | _nofollow | _nonblock, dir_fd=dirfd)
         try:
             is_status_line = os.read(_cfd, len(_STATUS_LINE_PREFIX)) == _STATUS_LINE_PREFIX
         finally:
@@ -1346,6 +1377,14 @@ def _publish_refusal(dirfd, refusal):
                         if exc.errno not in _ACL_ABSENT:
                             raise
                 os.fchmod(fd, _REPORT_MODE)
+                # THE SAME CHECK THE ORDINARY PATH MAKES, twelve lines above, for the reason
+                # stated there: renameat would otherwise publish a planted symlink under the
+                # canonical name. This is the path that runs when something has already gone
+                # wrong, which is the worse place to omit it.
+                _fnamed = os.lstat(tmp_name, dir_fd=dirfd)
+                _fheld = os.fstat(fd)
+                if (_fnamed.st_dev, _fnamed.st_ino) != (_fheld.st_dev, _fheld.st_ino):
+                    raise OSError(errno.EIO, "report-staged-name-diverged")
                 os.replace(tmp_name, _REPORT_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
             except BaseException:
                 try:
