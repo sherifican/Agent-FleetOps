@@ -94,6 +94,15 @@ eight. Gate review measured an ordinary pre-existing file at `scan_report.supers
 destroyed by a clean scan. A filename does not establish provenance, so the reservation is stated
 here rather than assumed — do not keep anything you care about at these names.
 
+A preserved copy is a HARD LINK to the report being replaced, not a duplicate of it, and the
+scanner narrows that inode to owner-only — otherwise preservation would keep exactly the exposure
+the owner-only publish was closing. Narrowing an inode narrows EVERY name for it. Two of those
+names are the scanner's own and deliberate, but if you have hard-linked a findings report to
+somewhere outside `_reports/`, that alias is narrowed too. So: this tool will restrict the
+permissions of a file it did not create, if that file shares an inode with a findings report
+inside the tree you asked it to scan. It only ever moves in the narrowing direction, one `chmod`
+undoes it, and the alternative is republishing the findings to whoever holds the other name.
+
 **These gates are STAGING-side, not CI.** Public CI runs the hermetic suite, the guard layer,
 `ref_gate.py` and `readme_guard.sh` only. `wall_check.py` and `scan_gate.py` run here, before a
 batch is pushed — that is the point: a secret is caught before it lands, not after. `wall_check.py`

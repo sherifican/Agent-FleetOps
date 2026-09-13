@@ -341,9 +341,12 @@ def _install_posix_acl_policy(src, dst_fd, dst):
                     claiming both branches implemented one rule.
 
     NO ACL IS CARRIED ONTO THE PUBLISHED REPORT, and any inherited one is removed. Copying the old
-    report's ACL was the same defect in a channel the mode cap could not see: a named-user entry on
-    a planted report was copied verbatim onto the findings inode, and an inherited default ACL made
-    "owner-only" true of the mode bits and false of the actual access. Removing is always narrowing,
+    report's ACL carried a policy the mode alone does not express: a named-user entry on a planted
+    report was copied verbatim onto the findings inode, and an inherited default ACL arrived with
+    its own mask. The precise claim — the gate corrected a looser one — is that effective access
+    through such an entry is whatever the ACL MASK allows, and the mask tracks the group bits of
+    the last chmod. So an entry is harmless at 0600 and live again at 0640, and the mode a reader
+    inspects says nothing about which of those the file is one chmod away from. Removing is always narrowing,
     so it cannot introduce the failure it prevents.
 
     ANCHORED ON THE STAGED DESCRIPTOR. Every metadata call here operates on the descriptor
@@ -609,6 +612,52 @@ def write_report(staging, hits):
 _STATUS_LINE_PREFIX = b"scan_gate: "
 
 
+def _narrow_kept_copy(linked):
+    """Narrow a preserved findings report to owner-only, and strip any ACL it carries.
+
+    A hard link keeps the old inode's mode and ACL by definition — which is the point when
+    preserving evidence and the problem when that evidence was published wide. Review put it
+    exactly: preservation keeps the leak the owner-only publish was about to close. A findings
+    report sitting at a planted 0644 is replaced owner-only at the canonical name while the
+    preserved copy stays group- and other-readable beside it.
+
+    THE STRIP AND THE CAP ARE INDEPENDENT, which they were not until round seventeen. They shared
+    one try block, so an ACL removal that failed for any reason other than "there is no ACL here"
+    skipped the chmod entirely and left the preserved copy at the mode it was planted with. Both
+    review legs reached that independently — one ruled it blocking, the other ranked it MED — and
+    an independent convergence is the strongest signal a paired review produces. The two are not
+    alternatives and neither substitutes for the other: the strip closes a channel the mode cannot
+    express, and the cap closes the one it can.
+
+    THIS NARROWS EVERY NAME FOR THE INODE, not just this one. Two of them are ours and deliberate
+    — the canonical report is about to be replaced anyway, and a preserved copy nobody should have
+    been able to read is safe to narrow in the interim. But an inode can also carry a hard link
+    the scanner never made, OUTSIDE the report directory, and that alias is narrowed too. The gate
+    asked for the tradeoff to be stated rather than discovered: this tool will restrict a file it
+    did not create if that file shares an inode with a findings report inside the tree it was
+    asked to scan. Narrowing is the only direction it moves, an owner can undo it with one chmod,
+    and the alternative is publishing the findings to whoever holds the other name.
+
+    Every step is best effort. Failing to narrow the kept copy must not destroy it: the canonical
+    publish still lands owner-only, and a preserved copy that could not be narrowed is strictly
+    better than no preserved copy at all.
+    """
+    try:
+        _kept = stat.S_IMODE(os.lstat(linked).st_mode)
+    except OSError:
+        return
+    if _XATTR_SUPPORTED:
+        try:
+            os.removexattr(linked, ACL_XATTR, follow_symlinks=False)
+        except OSError:
+            pass                          # best effort, and INDEPENDENT of the cap below
+    if _kept & 0o077:
+        try:
+            os.chmod(linked, _kept & 0o600)
+        except OSError:
+            pass
+
+
 def _preserve_superseded(reports_dir, report_path):
     """Keep the report about to be replaced, and say whether replacing it is now safe.
 
@@ -666,21 +715,7 @@ def _preserve_superseded(reports_dir, report_path):
         # about to be replaced, and narrowing a report nobody should have been able to read is
         # safe in the interim. If preservation is refused and the report stays, it stays narrower
         # than it was, which is the direction that cannot hurt.
-        try:
-            _kept = stat.S_IMODE(os.lstat(linked).st_mode)
-            if _XATTR_SUPPORTED:
-                try:
-                    os.removexattr(linked, ACL_XATTR, follow_symlinks=False)
-                except OSError as exc:
-                    if exc.errno not in _ACL_ABSENT:
-                        raise
-            if _kept & 0o077:
-                os.chmod(linked, _kept & 0o600)
-        except OSError:
-            # Best effort: failing to narrow the kept copy must not destroy it. The canonical
-            # publish still lands owner-only, and a preserved copy that could not be narrowed is
-            # strictly better than no preserved copy at all.
-            pass
+        _narrow_kept_copy(linked)
 
     # Classify only AFTER the link, so a failed read cannot prevent preservation — and classify
     # THROUGH THE LINK, not through report_path. The two names described the same inode at link
@@ -725,6 +760,12 @@ def _preserve_superseded(reports_dir, report_path):
             continue
         if (stat.S_ISREG(kept.st_mode)
                 and (kept.st_dev, kept.st_ino) == (previous.st_dev, previous.st_ino)):
+            # NARROWED HERE TOO. This branch answered "already preserved" and returned without
+            # touching the mode, so a copy an earlier call left wide — or one whose narrowing
+            # failed that time — stayed wide for every run afterwards. The gate ruled it blocking,
+            # and it is the same defect as the one below in a place the eye skips: the publish
+            # about to happen is owner-only, and the second name beside it was not.
+            _narrow_kept_copy(candidate)
             return True                   # already preserved by an earlier call; oldest wins
     return False                          # findings, and no slot would take them
 
@@ -884,11 +925,24 @@ def _write_refusal_report(staging, refusal):
                 with os.fdopen(fd, "w") as f:
                     f.write(f"scan_gate: REFUSED {reason_class}\n")
                 # Strip any inherited ACL here too. This fallback runs when the ordinary policy
-                # install failed, and it used to ASSIGN 0600 and stop — which is owner-only in the
-                # mode bits and says nothing about an ACL the directory handed the staged file at
-                # creation. A report whose mode reads 0600 while an inherited entry still grants a
-                # named user is exactly the channel the mode cap cannot see, and the fallback is
-                # the path that runs when something has already gone wrong.
+                # install failed, and it used to ASSIGN 0600 and stop.
+                #
+                # THE REASON THIS COMMENT USED TO GIVE WAS WRONG, and the gate corrected it. It
+                # said a report at 0600 carrying an inherited named-user entry is "the channel the
+                # mode cap cannot see". On a POSIX-ACL filesystem a chmod writes the group bits
+                # into the ACL MASK, so chmod 0600 sets mask::--- and every named-user and
+                # named-group entry is masked to nothing. Measured here: a file at 0644 with
+                # user:<name>:r-- and mask::r-- becomes mask::--- with that entry marked
+                # "#effective:---" the moment it is chmod 0600. At that instant the retained entry
+                # grants nothing, and claiming otherwise overstated the finding.
+                #
+                # The strip is still right, for the reason that survives the correction: the mask
+                # is what suppresses those entries, and the mask is one chmod from coming back.
+                # The same measurement, continued — chmod 0640 restored mask::r-- and the entry
+                # went back to effective read. An owner widening their own report, or a backup
+                # tool restoring modes, re-arms every entry the strip would have removed, and no
+                # ACL is visible in anything a reader is likely to inspect. Removing the entries
+                # makes that impossible rather than merely currently harmless.
                 if _XATTR_SUPPORTED:
                     try:
                         os.removexattr(tmp_path, ACL_XATTR, follow_symlinks=False)

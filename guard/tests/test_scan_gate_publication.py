@@ -3354,3 +3354,111 @@ def test_a_replacement_and_a_new_report_publish_the_same_mode(
     assert modes["new"] == 0o600, (
         f"REPAIRED: the one rule is 0600 and both branches published {modes['new']:04o}"
     )
+
+
+# =============================================================================================
+# GROUP 23 — the seventeenth round, second half. Preservation narrows the evidence it keeps,
+# and it narrows it on BOTH the branch that links and the branch that finds it already linked.
+#
+# The gate leg ruled the second branch blocking and the cold leg ranked the ACL/chmod coupling
+# MED; those are the two arms here, and they converged independently on the second one, which is
+# the strongest signal this round's pairing produced.
+#
+#   A. The "already preserved by an earlier call" branch returned True without touching the
+#      mode. A copy an earlier run left wide — or one whose narrowing failed that time — stayed
+#      wide for every run afterwards, beside an owner-only publish, forever.
+#
+#   B. The ACL strip and the mode cap shared one try block, so a removexattr that failed for any
+#      reason other than "there is no ACL here" skipped the chmod entirely and left the preserved
+#      copy at exactly the mode it was planted with. The two are not alternatives: the strip
+#      closes a channel the mode cannot express, the cap closes the one it can.
+# =============================================================================================
+
+
+def _fill_every_slot_but_the_first(module, reports_dir: Path, report_path: Path) -> Path:
+    """Preserve the report into slot 0 and OCCUPY the rest, so the next call cannot link.
+
+    Reaching the already-preserved branch needs every slot to refuse a link: slot 0 because it is
+    already this inode (EEXIST), the rest because something else is sitting there. Without this
+    the loop simply links into slot 1 and the branch under test never runs.
+    """
+    slots = list(module._superseded_slots(str(reports_dir)))
+    os.link(str(report_path), slots[0])
+    for other in slots[1:]:
+        Path(other).write_text("occupied by something else\n", encoding="utf-8")
+    return Path(slots[0])
+
+
+def test_a_copy_found_already_preserved_is_narrowed_rather_than_left_wide(tmp_path: Path) -> None:
+    """REPAIRED: the branch that finds the findings already kept must still narrow them.
+
+    A hard link keeps the old inode's mode by definition, so a report preserved while it was wide
+    stays wide — and this branch answered "already preserved, oldest wins" and returned without
+    looking at the mode. The publish that follows is owner-only; the second name beside it was not.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "already_preserved_narrow")
+    reports_dir = tmp_path / "_reports"
+    reports_dir.mkdir()
+    report_path = reports_dir / "scan_report.txt"
+    report_path.write_text("aws\tkey\tassignment\tdocs/x.md:3\n", encoding="utf-8")
+    report_path.chmod(0o644)
+
+    kept = _fill_every_slot_but_the_first(module, reports_dir, report_path)
+    assert stat.S_IMODE(kept.stat().st_mode) == 0o644, (
+        "CONTROL: the preserved copy starts wide — it is one inode with the report, so if this "
+        "is not 0644 the fixture never built the state the arm is about")
+
+    assert module._preserve_superseded(str(reports_dir), str(report_path)) is True, (
+        "CONTROL: with the findings already preserved this must answer True; a False here means "
+        "the arm measured a refusal path instead of the already-preserved branch")
+
+    got = stat.S_IMODE(kept.stat().st_mode)
+    assert not got & 0o077, (
+        f"REPAIRED: the already-preserved copy is still {got:04o}. Preservation keeps the leak "
+        "the owner-only publish was about to close, and this branch never narrowed it")
+
+
+def test_a_failed_acl_strip_does_not_skip_the_mode_cap(tmp_path: Path, monkeypatch) -> None:
+    """REPAIRED: the strip and the cap are independent, and a failed strip must not skip the cap.
+
+    Both review legs reached this one from different directions. The strip closes a channel the
+    mode bits cannot express; the cap closes the one they can. Sharing a try block made the second
+    conditional on the first succeeding, so a filesystem that refuses removexattr for any reason
+    other than "no ACL here" published a preserved copy at its planted mode.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "strip_fails_cap_runs")
+    reports_dir = tmp_path / "_reports"
+    reports_dir.mkdir()
+    report_path = reports_dir / "scan_report.txt"
+    report_path.write_text("aws\tkey\tassignment\tdocs/x.md:3\n", encoding="utf-8")
+    report_path.chmod(0o644)
+
+    refused: list[str] = []
+
+    def refusing_removexattr(path, attribute, *args, **kwargs):
+        refused.append(str(path))
+        raise PermissionError(errno.EPERM, "removexattr refused (injected)")
+
+    monkeypatch.setattr(module.os, "removexattr", refusing_removexattr)
+
+    assert module._preserve_superseded(str(reports_dir), str(report_path)) is True, (
+        "CONTROL: preservation must still succeed; a strip that cannot run is not a reason to "
+        "destroy the evidence")
+
+    if not refused:
+        pytest.skip("this build never attempted an ACL strip; nothing was made to fail")
+
+    slots = [Path(s) for s in module._superseded_slots(str(reports_dir))]
+    kept = [s for s in slots if s.exists()]
+    assert kept, "CONTROL: nothing was preserved, so there is no mode to assert on"
+    got = stat.S_IMODE(kept[0].stat().st_mode)
+    assert not got & 0o077, (
+        f"REPAIRED: the ACL strip failed and took the mode cap down with it — the preserved copy "
+        f"is {got:04o}. A report nobody should have been able to read stayed group- and "
+        "other-readable because an unrelated call raised")
