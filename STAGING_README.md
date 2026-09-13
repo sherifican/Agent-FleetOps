@@ -139,6 +139,17 @@ eight. Gate review measured an ordinary pre-existing file at `scan_report.supers
 destroyed by a clean scan. A filename does not establish provenance, so the reservation is stated
 here rather than assumed — do not keep anything you care about at these names.
 
+**One narrow case writes a COPY rather than the file itself.** If the staged name stops naming
+the staged inode — a concurrent unlink or replace — no name reaches those bytes any more, and the
+descriptor this scanner holds is the last reference to them. Linking the inode back into the tree
+is not possible at that point (measured: the descriptor-directory path returns `ENOENT` once the
+link count is zero), so the bytes are READ through that descriptor and written to a fresh reserved
+name. That copy is a different inode carrying the same findings. It is kept even if its ACL strip
+is denied, which is the one place this tool reserves a name without having installed the policy on
+it: the alternative is destroying the only remaining copy to avoid mislabelling it, and evidence
+outranks labelling. The mode is set through the descriptor regardless, so such a file is at `0600`
+with its ACL entries masked to nothing.
+
 `scan_report.unpublished.txt` is where a FINDINGS report goes when the publish could not
 complete — a FIFO or a foreign-owned file at the report name, a group that cannot be preserved, a
 mode the filesystem will not verify. Those failures used to delete the staged findings, and the
@@ -167,7 +178,7 @@ undoes it, and the alternative is republishing the findings to whoever holds the
 
 ## What this scanner does NOT promise
 
-Three rounds of adversarial review converged on a set of claims that were wider than anything in
+Several rounds of adversarial review converged on a set of claims that were wider than anything in
 this position can deliver. They are stated here as limits rather than quietly left as bugs,
 because an overstated guarantee is worse than an absent one.
 
@@ -206,6 +217,32 @@ exception whose `__str__` never returns cannot be caught, because catching handl
 not waiting. Classification now reads a validated reason code the refusal carried from its own
 raise site. What remains is ordinary synchronous filesystem latency, which no user-space tool can
 promise away.
+
+**A CONCURRENT WRITER IN THE REPORT DIRECTORY BEATS EVERY CHECK IN THIS TOOL.** This is the
+widest limit here and the one that bounds several of the others, so read it before relying on any
+promise above. The scanner checks a name and then acts on it — preserves, replaces, unlinks — and
+between those two instants another process running as the same user can rename a different file
+onto that name. Review reproduced five such schedules. The refusal can replace a canonical report
+it never preserved, because the report it preserved was superseded after preservation and before
+publication. A classification can describe one inode while the reserved name it was read through
+holds another. Quarantine can establish custody by linking and then remove the source after that
+custody has been moved out from under it. In each case the loss is caused by a rename the scanner
+never sees, acting on a name the scanner believed it had just inspected.
+
+**No amount of re-checking fixes this, and adding one would be the wrong repair.** Another `lstat`
+before the destructive call only narrows the interval; the review that found these was explicit
+that "adding one more lstat or deleting an uncertain reserved name would repeat the same failure
+class". What a check CAN do is remove the cases that need no adversary, and two of those were
+closed rather than documented: the refusal writer no longer unlinks the canonical name at all, and
+a successful scan's sweep no longer removes a reserved file created after this run staged its own
+report. What remains needs a writer who is actively substituting names.
+
+**Precondition, therefore: the report directory must not be writable by anyone you are defending
+against, and no second writer should be publishing into it concurrently.** The scanner hardens
+`_reports/` to `0700` on creation, which covers group and other. It cannot cover another process
+running as YOU — a second scanner instance, a script tidying the tree, an editor writing through
+a temporary file. Serialising those is the caller's job; a lock this tool took would be advisory
+and a non-cooperating writer would ignore it.
 
 **These gates are STAGING-side, not CI.** Public CI runs the hermetic suite, the guard layer,
 `ref_gate.py` and `readme_guard.sh` only. `wall_check.py` and `scan_gate.py` run here, before a

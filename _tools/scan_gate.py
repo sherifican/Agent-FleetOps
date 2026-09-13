@@ -500,6 +500,72 @@ def _staged_holds_evidence(fd, hits):
         return True
 
 
+def _copy_out_unpublished(dirfd, fd):
+    """Last resort: write the held inode's bytes to a fresh reserved name, by READING not linking.
+
+    This runs only when the staged name has stopped naming the staged inode, which means no
+    rename, link or unlink can reach those bytes by name any more. The descriptor still can. The
+    copy is a different inode — it is not the file that was staged, and it carries none of that
+    file's identity — but it carries the findings, and the alternative measured by review is that
+    the next close frees them.
+
+    ONE DELIBERATE EXCEPTION IS TAKEN HERE, and it is the mirror of the one preservation takes.
+    Everywhere else a reserved name is refused when the access policy could not be installed on
+    the file behind it. Here the copy is kept even then, because this is the ONLY remaining copy:
+    refusing the name would destroy the evidence rather than merely decline to label it. The mode
+    is set through the descriptor either way, so a strip that is denied leaves the file at 0600
+    with its entries masked to nothing rather than at whatever the umask allowed.
+    """
+    if _PROC_FD_DIR is None:
+        return False
+    try:
+        src = os.open("%s/%d" % (_PROC_FD_DIR, fd), os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        chunks = []
+        while True:
+            chunk = os.read(src, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except OSError:
+        return False
+    finally:
+        _close_quietly(src)
+    body = b"".join(chunks)
+    if not body:
+        return False                      # nothing readable; there is no evidence to carry
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow
+    for candidate in _unpublished_slot_names():
+        try:
+            dst = os.open(candidate, flags, _REPORT_MODE, dir_fd=dirfd)
+        except OSError:
+            continue                      # occupied or unusable — the next name
+        try:
+            os.fchmod(dst, _REPORT_MODE)  # the create mode is umask-masked; this is not
+            if _XATTR_SUPPORTED:
+                try:
+                    _strip_acl_by_fd(dst)
+                except OSError as exc:
+                    if exc.errno not in _ACL_ABSENT:
+                        pass              # kept anyway: see the exception in this docstring
+            written = 0
+            while written < len(body):
+                written += os.write(dst, body[written:])
+        except OSError:
+            try:
+                os.unlink(candidate, dir_fd=dirfd)
+            except OSError:
+                pass
+            return False                  # a partial copy is not evidence; the name goes back
+        finally:
+            _close_quietly(dst)
+        return True
+    return False                          # every reserved name was taken
+
+
 def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
     """Keep a staged findings report the publish could not complete. Answer whether it was kept.
 
@@ -536,9 +602,22 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
         return False
     try:
         held = os.fstat(fd)
-        named = os.lstat(tmp_name, dir_fd=dirfd)
-        if (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino):
-            return False
+        try:
+            named = os.lstat(tmp_name, dir_fd=dirfd)
+            diverged = (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino)
+        except OSError:
+            diverged = True               # the name is gone, or cannot be read: same situation
+        if diverged:
+            # THE NAME NO LONGER REACHES THESE BYTES, AND THE BYTES ARE STILL HERE. Answering
+            # False was right about custody and wrong about consequence: the caller reads the
+            # evidence flag, correctly leaves alone a name it must not touch, and then closes
+            # the descriptor in its finally — and that close is the destruction, because this
+            # descriptor was the last reference. A cold review leg reproduced it from the other
+            # end of the module and measured the repair that does NOT work: os.link on the
+            # descriptor directory is ENOENT once the link count is zero, so the inode cannot be
+            # given a new name. It can still be READ. So the bytes are copied out under a fresh
+            # reserved name before anyone closes anything.
+            return _copy_out_unpublished(dirfd, fd)
         # THE SAME ACCESS POLICY AS A PUBLISHED REPORT. The failure that sends us here happens
         # BEFORE the ordinary installer's ACL strip, so retained evidence was arriving with the
         # directory's inherited ACL still on it. At 0600 the mask suppresses named entries, so
@@ -937,6 +1016,12 @@ def write_report(staging, hits):
 
         fd, tmp_name = _stage_report(dirfd, body, evidence=bool(hits))
         try:
+            # THE REFERENCE STAMP FOR THE SWEEP BELOW, taken on the staged inode before anything
+            # is published. Read through the held descriptor, so no name is involved.
+            _staged_ctime_ns = os.fstat(fd).st_ctime_ns
+        except OSError:
+            _staged_ctime_ns = None       # unknown age: the sweep falls back to its old behaviour
+        try:
             # THE CANONICAL NAME IS JUDGED AFTER THE FINDINGS ARE ON DISK, and the order is the
             # finding. This check used to sit above _stage_report, so a symlink planted at the
             # report name raised before anything was staged: the hits existed only in the argument
@@ -979,7 +1064,26 @@ def write_report(staging, hits):
             # denial-of-preservation. The slot belongs to one report generation, and this is
             # where that generation ends. The unpublished name belongs to the generation that
             # could not publish, and a run that HAS published ends that one too.
+            #
+            # "ANYTHING RESERVED IS AN EARLIER GENERATION" IS FALSE WHILE ANOTHER WRITER IS
+            # RUNNING, and the gate reproduced it with no adversary at all: a second writer that
+            # could not publish retained its findings under the quarantine name DURING this run,
+            # and this sweep removed their only name. So the sweep skips anything created after
+            # this run staged its own report. A file another writer quarantined while we were
+            # working is newer than our staging by construction.
+            #
+            # This is a NARROWING, not an ownership proof, and the difference is worth stating.
+            # st_ctime cannot be set by a writer the way mtime can, so it is not forgeable
+            # without the clock — but a file reserved BEFORE we staged is still swept, and that
+            # case is indistinguishable from the stale generation the sweep exists to clear.
+            # What it removes is the case that needs nobody to be hostile.
             for _name in _superseded_slot_names(include_unpublished=True):
+                try:
+                    if (_staged_ctime_ns is not None
+                            and os.lstat(_name, dir_fd=dirfd).st_ctime_ns > _staged_ctime_ns):
+                        continue          # newer than this run's own staging; not ours to end
+                except OSError:
+                    pass                  # cannot tell its age; fall through to the old behaviour
                 try:
                     os.unlink(_name, dir_fd=dirfd)
                 except IsADirectoryError:
@@ -1182,14 +1286,22 @@ def _preserve_superseded(dirfd, report_name):
         # safe in the interim. If preservation is refused and the report stays, it stays narrower
         # than it was, which is the direction that cannot hurt.
         #
-        # The ANSWER is kept. A reserved name asserts that the retained inode carries the
+        # The ANSWER is kept. A reserved name THIS FUNCTION CREATES asserts that the inode it
+        # linked carries the report's access policy; it says nothing about a file that was
+        # already sitting at such a name, and nothing about what another writer may put there
+        # afterwards. Read as a claim about whatever currently occupies the name, it is false —
+        # the gate demonstrated a substitution. A reserved name asserts that the retained
         # report's access policy; if it does not, this call has to decide that below rather than
         # hand the caller an authorization built on a strip that was refused.
         narrowed = _narrow_kept_copy(dirfd, linked)
 
     # Classify only AFTER the link, so a failed read cannot prevent preservation — and classify
     # THROUGH THE LINK, not through report_path. The two names described the same inode at link
-    # time, but only the link is a name nobody else is replacing. An os.replace onto report_path
+    # time, and the link is the name LESS likely to be replaced under us — not, as this comment
+    # said until round twenty-seven, a name nobody else is replacing. The gate landed a rename
+    # into the reserved slot between the link and this read and the classification then described
+    # the wrong inode; reading through a pathname is not reading through a held descriptor. What
+    # follows narrows the window rather than closing it. An os.replace onto report_path
     # between the link and this read leaves the classification describing a DIFFERENT inode from
     # the one that was preserved, and a status line verdict then unlinks the findings just kept.
     # An independent review leg supplied that interleaving; this reads the inode we actually hold.
@@ -1240,9 +1352,16 @@ def _preserve_superseded(dirfd, report_name):
         # Not removing it costs nothing here, and this is where preservation genuinely differs
         # from quarantine rather than merely lagging it. A quarantined name would survive BESIDE
         # a freshly published report and stand in for it. This one does not: the replacement is
-        # declined, so the inode goes on standing at the canonical name, and an ACL on the
-        # reserved name is an ACL already on the report itself — not a channel this call opened.
-        # The scanner deletes both reserved families after any successful publication.
+        # declined, so ordinarily the inode goes on standing at the canonical name too, and an
+        # ACL on the reserved name is an ACL already on the report itself — not a channel this
+        # call opened. The scanner deletes both reserved families after any successful
+        # publication.
+        #
+        # "ORDINARILY" IS DOING REAL WORK IN THAT SENTENCE, and the round that wrote it said it
+        # unconditionally. The gate's own probe removed the canonical entry during preservation
+        # and left this reserved link as the SOLE name for the findings. That does not weaken the
+        # decision — it is the strongest argument for it, because under that schedule giving the
+        # name back is precisely what would destroy them.
         return False
 
     # Nothing could be linked. The findings may still be preserved already, by an earlier call
@@ -1450,11 +1569,19 @@ def _publish_refusal(dirfd, refusal):
                 reason_class = None
             if not isinstance(reason_class, str) or not re.fullmatch(r"[a-z][a-z0-9\-]*", reason_class):
                 reason_class = "unclassified"
-        try:
-            if stat.S_ISLNK(os.lstat(_REPORT_NAME, dir_fd=dirfd).st_mode):
-                os.unlink(_REPORT_NAME, dir_fd=dirfd)
-        except OSError:
-            pass
+        # THE PRELIMINARY SYMLINK UNLINK IS GONE, and removing it closes two things at once.
+        #
+        # It read an lstat and then destroyed the name that lstat described. In a report directory
+        # another process can write to, those are two different instants: the gate landed a rename
+        # putting a real findings file over the symlink in between, and this writer deleted the
+        # findings on the strength of a verdict about something else. Its arm is in GROUP 36.
+        #
+        # Nothing is lost by dropping it, because os.replace does NOT follow a symlink at its
+        # destination — it replaces the name. A symlink at the report name now makes the policy
+        # installer refuse (it requires a regular file there) and the publish routes through the
+        # fallback below, which replaces the name just the same. The fallback's own comment
+        # already noted that this branch was the ONLY reason the canonical name is ever missing;
+        # that window is gone with it.
         # Before EITHER publish attempt, so the ordinary path is covered and not just the
         # fallback. A False verdict means the report holds findings that could not be kept, and
         # destroying evidence is worse than leaving a report that says "there are secrets here".

@@ -4927,3 +4927,184 @@ def test_the_forfeit_must_not_remove_the_last_name_for_the_findings(tmp_path: Pa
         "REPAIRED: the findings are gone. The canonical name was taken between the link and the "
         "forfeit, which made the reserved name the ONLY name for the inode — and the forfeit "
         "removed it. Declining to keep a name must never be the act that destroys the evidence")
+
+
+# =============================================================================================
+# GROUP 36 — the twenty-seventh round. Two destructive operations that acted on a name whose
+# identity was established at an earlier instant.
+#
+# The gate returned five findings of one class: in a report directory another same-UID process can
+# write to, every check-then-destroy is a race. Three of them cannot be closed by any check — the
+# gate said so itself, and they are documented as a limit rather than papered over. These two can,
+# because neither destructive operation was necessary in the form it had.
+#
+#   The refusal writer unlinked the canonical name when an lstat said symlink. It is the ONLY
+#   reason that name is ever missing (the publish replaces it atomically either way), and a rename
+#   landing a real findings file over the symlink between the lstat and the unlink made this
+#   writer delete the findings. The unlink is removed, not guarded: os.replace does not follow a
+#   symlink at the destination, so the policy installer's refusal simply routes the publish
+#   through the fallback that was already there.
+#
+#   A successful publish swept every reserved name, on the stated assumption that anything there
+#   belongs to an EARLIER generation. A concurrent writer that quarantines its findings DURING
+#   this run leaves a file that assumption misreads, and the sweep deleted its only name. The
+#   sweep now skips anything created after this run staged its own report. That is not a race-free
+#   ownership proof and does not claim to be; it removes the case that needs no adversary at all.
+# =============================================================================================
+
+
+def test_the_refusal_writer_does_not_unlink_a_regular_report(tmp_path: Path) -> None:
+    """REPAIRED: a stale symlink verdict must not authorize deleting a findings file."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "refusal_symlink_unlink")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    rp = reports / "scan_report.txt"
+    rp.write_text("aws\tkey\tassignment\tdocs/raced.md:2\n", encoding="utf-8")
+
+    real_lstat = module.os.lstat
+    lied: list[str] = []
+
+    class _SaysSymlink:
+        """Every field of the real stat, with the mode reporting a symlink."""
+        def __init__(self, real):
+            self._real = real
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+        @property
+        def st_mode(self):
+            return (self._real.st_mode & ~stat.S_IFMT(self._real.st_mode)) | stat.S_IFLNK
+
+    def lstat_that_lies_once(path, *args, **kwargs):
+        real = real_lstat(path, *args, **kwargs)
+        # KEYED ON THE CALLER, not on call ORDER. The first version keyed on "the first lstat of
+        # this name" and was consumed by an existence probe earlier in the same function, so the
+        # symlink check saw the truth and the arm passed while measuring nothing. That probe
+        # discards the mode it reads, so lying to it changes no behaviour.
+        if (isinstance(path, str) and path.endswith("scan_report.txt")
+                and sys._getframe(1).f_code.co_name == "_publish_refusal"):
+            # THE INTERLEAVING: the verdict is formed on a symlink that a concurrent rename has
+            # already replaced with a real findings file by the time it is acted on.
+            lied.append(path)
+            return _SaysSymlink(real)
+        return real
+
+    module.os.lstat = lstat_that_lies_once
+    try:
+        module._write_refusal_report(str(tmp_path), module.ScanRefused("report-path-unsafe 'x'"))
+    finally:
+        module.os.lstat = real_lstat
+
+    if not lied:
+        assert False, "CONTROL: the injection never fired, so this arm measured nothing"
+    assert _findings_anywhere(reports, "docs/raced.md:2"), (
+        "REPAIRED: the refusal writer deleted a regular findings file because an lstat taken "
+        "earlier had said the name was a symlink. The publish replaces that name atomically "
+        "whether or not it is a symlink, so the unlink bought nothing and cost the findings")
+
+
+def test_the_sweep_does_not_take_a_file_created_after_this_run_staged_its_own(
+    tmp_path: Path
+) -> None:
+    """REPAIRED: 'anything reserved is an earlier generation' is false while others are writing."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "sweep_newer_quarantine")
+    staging = tmp_path / "tree"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+
+    real_replace = module.os.replace
+    planted: list[Path] = []
+
+    def replace_then_another_writer_quarantines(*args, **kwargs):
+        result = real_replace(*args, **kwargs)
+        if not planted:
+            # A CONCURRENT WRITER that could not publish retains its findings under the
+            # quarantine name — after this run staged its report, and before this run sweeps.
+            q = reports / "scan_report.unpublished.txt"
+            q.write_text("gcp\tkey\tassignment\tsrc/other.py:11\n", encoding="utf-8")
+            planted.append(q)
+        return result
+
+    module.os.replace = replace_then_another_writer_quarantines
+    try:
+        module.write_report(str(staging), [("docs/mine.md", 3, "aws", "key", "assignment")])
+    finally:
+        module.os.replace = real_replace
+
+    if not planted:
+        assert False, "CONTROL: no publish happened, so the sweep was never reached"
+    assert _findings_anywhere(reports, "src/other.py:11"), (
+        "REPAIRED: the sweep deleted the only name of findings a concurrent writer had just "
+        "retained. A reserved name is not proof of an earlier generation while another writer "
+        "is still running")
+    assert (reports / "scan_report.txt").read_text(encoding="utf-8").count("docs/mine.md") == 1, (
+        "CONTROL: this run must still publish its own findings normally")
+
+
+def test_the_sweep_still_takes_an_older_reserved_name(tmp_path: Path) -> None:
+    """CONTROL: the guard must not disable the sweep it narrows."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "sweep_still_sweeps")
+    staging = tmp_path / "tree"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    stale = reports / "scan_report.superseded.txt"
+    stale.write_text("aws\tkey\tassignment\tdocs/old.md:1\n", encoding="utf-8")
+    os.utime(stale, (1, 1))
+
+    module.write_report(str(staging), [("docs/mine.md", 3, "aws", "key", "assignment")])
+
+    assert not stale.exists(), (
+        "CONTROL: a reserved name older than this run's staged report is exactly what the sweep "
+        "is for — if this survives, the guard disabled the sweep instead of narrowing it")
+
+
+def test_staged_findings_survive_the_staged_name_being_unlinked(tmp_path: Path) -> None:
+    """REPAIRED: the last descriptor must not be closed on bytes no name reaches any more.
+
+    A cold leg reproduced this one from the other side of the module. The staged findings are on
+    disk and held open; something fails; a concurrent unlink takes the staged NAME. Quarantine
+    compares that name to the held inode, finds they diverge, and answers "I did not take
+    custody" — correctly. The caller then reads the evidence flag, leaves the name alone (there
+    is none), and closes the descriptor in its finally. That close frees the inode, and the close
+    is the destruction: the bytes were readable through the descriptor directory right up to it.
+
+    The leg also measured the repair that does NOT work: os.link on /proc/self/fd/N is ENOENT
+    once the link count reaches zero, so the inode cannot be given a new name. Copying the bytes
+    out through a read of that same path does work, and is what this arm requires.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "staged_name_unlinked")
+    staging = tmp_path / "tree"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+
+    real_install = module._install_posix_acl_policy
+    took: list[str] = []
+
+    def install_after_a_concurrent_unlink(dirfd, src_name, dst_fd, dst_name):
+        # THE INTERLEAVING: the staged name is taken while the policy install is in flight, and
+        # the failure that follows routes this scan into quarantine with no name to hand it.
+        if not took:
+            try:
+                os.unlink(str(reports / dst_name))
+                took.append(dst_name)
+            except OSError:
+                pass
+        raise OSError(errno.EIO, "policy install failed (injected)")
+
+    module._install_posix_acl_policy = install_after_a_concurrent_unlink
+    try:
+        with pytest.raises(BaseException):
+            module.write_report(str(staging), [("docs/held.md", 7, "aws", "key", "assignment")])
+    finally:
+        module._install_posix_acl_policy = real_install
+
+    if not took:
+        pytest.skip("the staged name was never taken; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/held.md:7"), (
+        "REPAIRED: the findings this scan wrote are gone. They were still readable through the "
+        "held descriptor when quarantine gave up on them, and the descriptor was then closed. "
+        "A function that cannot take custody by NAME must copy the bytes out before the last "
+        "reference goes")
