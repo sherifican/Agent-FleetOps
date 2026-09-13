@@ -2891,7 +2891,12 @@ def test_an_acl_that_grants_other_refuses_rather_than_publishing_wide(tmp_path: 
         "and the staged report must not have been left other-readable on the way out")
 
 
-@pytest.mark.parametrize("planted", [0o644, 0o666])
+# 0644 and 0666 carry no other-EXECUTE, so a mutant clearing read and write only (& ~0o006) kept
+# execute and survived this arm — measured by gate review: planted 0601 published 0601. Execute on
+# a report is not itself a disclosure, but the fixture set decides which bits the assertion can
+# actually see, and one that never sets a bit cannot prove that bit is capped. Each other-bit now
+# appears alone as well as together.
+@pytest.mark.parametrize("planted", [0o644, 0o666, 0o601, 0o602, 0o604, 0o607])
 def test_a_planted_existing_report_cannot_widen_the_findings_it_is_replaced_by(
         tmp_path: Path, planted: int) -> None:
     """The cap on a NEW report was half a fix, and a review leg found the other half.
@@ -2921,9 +2926,12 @@ def test_a_planted_existing_report_cannot_widen_the_findings_it_is_replaced_by(
                                         "generic_key_assignment", "contents")])
 
     mode = stat.S_IMODE(rp.stat().st_mode)
-    # EVERY other bit, not just read. The gate ran a mutant that capped other-READ alone and this
-    # arm stayed green, because 0666 & ~0o004 still clears write in the fixtures it had. A cap
-    # asserted only on the bit the fixture happens to exercise is not a cap.
+    # EVERY other bit, not just read — and the arithmetic in the previous version of this comment
+    # was WRONG. It claimed 0666 & ~0o004 "still clears write". It does not: 0666 & ~0o004 is
+    # 0662, which leaves other-WRITE set. That is exactly why the mutant escaped — the old
+    # assertion looked only at the read bit and never saw the write bit that survived. A cap
+    # asserted on the one bit a fixture happens to exercise is not a cap, and an explanation that
+    # gets the arithmetic backwards hides the hole instead of recording it.
     assert not mode & 0o007, (
         f"a report planted at {planted:04o} caused the findings to be republished at {mode:04o}: "
         "the tree being scanned chose who may read or write the secrets found in it")

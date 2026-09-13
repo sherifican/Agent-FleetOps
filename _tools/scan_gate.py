@@ -252,10 +252,15 @@ def _report_mode(report_path, reports_dir):
     """A CANDIDATE mode, subject to the caller's cap. NOT the mode the report lands with.
 
     That distinction is the correction: an earlier revision of this docstring called the return
-    value "the mode the committed report must land with", and it is not. The caller intersects it
-    with 0600 and with the staged inode's own mode, so this function can only ever propose
-    something the caller then narrows. It cannot widen anything, and nothing here decides the
-    published policy on its own.
+    value "the mode the committed report must land with", and it is not. This function only ever
+    PROPOSES; the caller decides, and the two branches decide differently.
+
+    ON THE NEW-REPORT BRANCH the caller intersects this value with 0600 and with the staged
+    inode's own mode, so a new report is owner-only or stricter. ON THE EXISTING-REPORT BRANCH
+    this value is not used at all: the caller reads the old report's own mode and ACL and
+    preserves them, narrowed so "other" gains nothing. Replacements do NOT become owner-only, and
+    reading the 0600 intersection as a blanket rule for every publish is the misreading this
+    paragraph exists to prevent.
 
     What it proposes: for an EXISTING report, that file's current mode, since replacing a report
     should not change who can read or write it — the caller narrows that so "other" gains nothing,
@@ -294,10 +299,18 @@ def _report_mode(report_path, reports_dir):
     # withheld. This report redacts matched values, but it still names paths, line numbers and
     # finding classes, and widening who can read that is not a rounding error.
     #
-    # So an unmeasurable mode is not guessed. 0600 is the one answer that cannot widen anything:
-    # it is what mkstemp already gave the staged file, it is never broader than whatever the
-    # directory intended, and the scanner keeps working where everything else does. A reader who
-    # loses access gets a permission error, which is visible. The alternative was not.
+    # So an unmeasurable mode falls back to 0600 — but read what that fallback is and is NOT.
+    #
+    # It is a GUESS. The claim this comment used to make, that 0600 "is what mkstemp already gave
+    # the staged file" and "is never broader than whatever the directory intended", is FALSE and
+    # the failed-probe arms disprove it directly: with the probe forced to fail, a u::r,g::-,o::-
+    # directory wants 0400 and a u::-,g::-,o::- directory wants 0000. 0600 is broader than both.
+    #
+    # What makes the fallback safe is not this value but the CALLER. _install_posix_acl_policy
+    # intersects whatever this returns with the staged inode's own mode, and that inode carries
+    # the directory's real answer because mkstemp is itself an ordinary create here. The guess
+    # cannot widen the result because it is never the last word. A reader who loses access gets a
+    # permission error, which is visible; the alternative was not.
     tmpfile = getattr(os, "O_TMPFILE", 0)
     if tmpfile:
         try:
@@ -368,8 +381,9 @@ def _install_posix_acl_policy(src, dst):
         try:
             old = os.stat(src, follow_symlinks=False)
         except FileNotFoundError:
-            # A new report: whatever an ordinary create in this directory produces, MINUS every
-            # bit for "other".
+            # A new report: capped at owner read/write, and RETAINING any stricter restriction
+            # the directory's own creation policy applied. "Ordinary create MINUS other" was the
+            # round-ten rule and is superseded — it left group access nobody had chosen.
             #
             # Ordinary-create semantics are right for the DIRECTORY's explicit policy — a default
             # ACL is a deliberate statement about who may read files here, and inheriting it is
