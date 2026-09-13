@@ -518,6 +518,17 @@ def _copy_out_unpublished(dirfd, fd):
     """
     if _PROC_FD_DIR is None:
         return False
+    # THE SOURCE'S OWN MODE IS INSTALLED BEFORE IT IS READ BACK, and leaving that out made this
+    # whole path unreachable exactly when it was needed. _stage_report creates at 0600 and that
+    # number is UMASK-MASKED: at umask 0400 the staged inode is 0200 — owner-write, no owner-read
+    # — and the descriptor held over it is O_WRONLY. Reopening it through the descriptor
+    # directory for reading is then refused for its own owner, the copy returns False, and the
+    # caller closes the last reference to the findings. The ordinary quarantine path has always
+    # fchmod'd the source before linking it; this one was added later and never did.
+    try:
+        os.fchmod(fd, _REPORT_MODE)
+    except OSError:
+        pass                              # best effort: the read below may still succeed
     try:
         src = os.open("%s/%d" % (_PROC_FD_DIR, fd), os.O_RDONLY)
     except OSError:
@@ -536,34 +547,68 @@ def _copy_out_unpublished(dirfd, fd):
     body = b"".join(chunks)
     if not body:
         return False                      # nothing readable; there is no evidence to carry
+    # STAGE FIRST, RESERVE AFTERWARDS. The previous shape created the reserved name and wrote
+    # into it, so a write that failed partway left a fragment under a name that means "retained
+    # evidence" — and the only thing that would have removed it is an unlink allowed to fail. A
+    # leg measured exactly that: a refused unlink left two bytes standing under the reserved name.
+    # Writing into a private staged name first makes the reservation an atomic link of a file that
+    # is already complete, which is the discipline the quarantine path has used all along.
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow
-    for candidate in _unpublished_slot_names():
+    stage_name = None
+    stage_fd = None
+    for _ in range(_STAGE_ATTEMPTS):
+        name = ".scan_report_" + "".join(
+            _STAGE_ALPHABET[b % len(_STAGE_ALPHABET)] for b in os.urandom(8))
         try:
-            dst = os.open(candidate, flags, _REPORT_MODE, dir_fd=dirfd)
+            stage_fd = os.open(name, flags, _REPORT_MODE, dir_fd=dirfd)
+        except FileExistsError:
+            continue
         except OSError:
-            continue                      # occupied or unusable — the next name
+            return False
+        stage_name = name
+        break
+    if stage_fd is None:
+        return False
+    try:
         try:
-            os.fchmod(dst, _REPORT_MODE)  # the create mode is umask-masked; this is not
+            os.fchmod(stage_fd, _REPORT_MODE)   # the create mode is umask-masked; this is not
             if _XATTR_SUPPORTED:
                 try:
-                    _strip_acl_by_fd(dst)
+                    _strip_acl_by_fd(stage_fd)
                 except OSError as exc:
                     if exc.errno not in _ACL_ABSENT:
-                        pass              # kept anyway: see the exception in this docstring
+                        pass            # kept anyway: see the exception in this docstring
             written = 0
             while written < len(body):
-                written += os.write(dst, body[written:])
+                n = os.write(stage_fd, body[written:])
+                if n <= 0:
+                    # A write that reports no progress would otherwise spin here forever. It is
+                    # not a partial success; it is a failure that has not raised.
+                    return False
+                written += n
         except OSError:
+            return False
+        # EVERY BYTE IS ON DISK BEFORE ANY RESERVED NAME EXISTS. os.link refuses an occupied
+        # name, so an earlier run's retained findings cannot be overwritten to make room.
+        for candidate in _unpublished_slot_names():
             try:
-                os.unlink(candidate, dir_fd=dirfd)
+                os.link(stage_name, candidate, src_dir_fd=dirfd, dst_dir_fd=dirfd,
+                        follow_symlinks=False)
+            except OSError:
+                continue                  # occupied or unusable — the next name
+            return True
+        return False                      # every reserved name was taken
+    finally:
+        _close_quietly(stage_fd)
+        # The stage is removed whether or not it was published. If this unlink fails the file is
+        # left under the scanner's own temporary prefix, which promises nothing and claims
+        # nothing — the one place a leftover is harmless.
+        if stage_name is not None:
+            try:
+                os.unlink(stage_name, dir_fd=dirfd)
             except OSError:
                 pass
-            return False                  # a partial copy is not evidence; the name goes back
-        finally:
-            _close_quietly(dst)
-        return True
-    return False                          # every reserved name was taken
 
 
 def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
@@ -649,6 +694,21 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
                     follow_symlinks=False)
         except OSError:
             continue                      # occupied, unusable, or unsupported — try the next
+        # THE LINK IS CONFIRMED TO BE OURS BEFORE CUSTODY IS CLAIMED. The identity check above
+        # runs before this link and therefore says nothing about what the link actually landed
+        # on: a substitution of the staged name in between makes the reserved name describe a
+        # file this scan never staged, and answering True then tells the caller its findings are
+        # safe when they are not. A review leg traced exactly that gap.
+        try:
+            _linked = os.lstat(candidate, dir_fd=dirfd)
+            _ours = os.fstat(fd)
+        except OSError:
+            return False                  # cannot confirm: claim nothing, keep the stage
+        if (_linked.st_dev, _linked.st_ino) != (_ours.st_dev, _ours.st_ino):
+            # The reserved name is not our inode. It is NOT removed — it may be somebody else's
+            # retained evidence, and round twenty-six settled that giving a name back is a
+            # destructive act. The staged file is left alone too, so the bytes remain reachable.
+            return False
         try:
             os.unlink(tmp_name, dir_fd=dirfd)
         except OSError:
@@ -1082,8 +1142,16 @@ def write_report(staging, hits):
                     if (_staged_ctime_ns is not None
                             and os.lstat(_name, dir_fd=dirfd).st_ctime_ns > _staged_ctime_ns):
                         continue          # newer than this run's own staging; not ours to end
+                except FileNotFoundError:
+                    continue              # already gone; nothing to remove
                 except OSError:
-                    pass                  # cannot tell its age; fall through to the old behaviour
+                    # A QUESTION THIS CODE CANNOT ANSWER NEVER AUTHORIZES DESTRUCTION. The
+                    # previous shape fell through to the unlink here, which is precisely the
+                    # outcome the age check was added to prevent — the check protects a
+                    # concurrent writer's retained findings, and an unreadable answer was letting
+                    # them be removed anyway. `_staged_holds_evidence` was rewritten to invert
+                    # this same reasoning; the sweep had kept the old direction.
+                    continue
                 try:
                     os.unlink(_name, dir_fd=dirfd)
                 except IsADirectoryError:
@@ -1185,7 +1253,16 @@ def _read_prefix_held(fd, via_proc, count):
 def _narrow_held_copy(fd, via_proc):
     """The narrowing, on an inode already held. See _narrow_kept_copy for why each step is here."""
     target = "%s/%d" % (_PROC_FD_DIR, fd) if via_proc else fd
-    if _XATTR_SUPPORTED:
+    # WHERE THE XATTR CALLS DO NOT EXIST, NOTHING WAS STRIPPED — and a review leg was right that
+    # returning True here reported a removal that was never attempted. The cap below is still
+    # installed either way; what changes is only the claim this function makes about the strip.
+    if not _XATTR_SUPPORTED:
+        try:
+            os.chmod(target, _REPORT_MODE)
+        except OSError:
+            pass
+        return False
+    if True:
         try:
             _strip_acl_by_fd(fd)
         except OSError as exc:
@@ -1293,7 +1370,28 @@ def _narrow_kept_copy(dirfd, name):
         _close_quietly(fd)
 
 
-def _preserve_superseded(dirfd, report_name):
+def _slot_still_holds(dirfd, guard):
+    """Does the preserved slot still refer to the inode preservation actually kept?
+
+    `_preserve_superseded` closes its descriptor and answers a boolean, and the caller then stages
+    a refusal body and installs its policy before replacing anything. That is many syscalls, and a
+    review leg named the consequence: the authorization is SPENT long after it was computed, so a
+    slot taken in that window leaves the findings with no name once the replace lands.
+
+    This does not close the interval between its own check and the following rename — nothing in
+    POSIX can — and it is not offered as if it did. It closes the wide one.
+    """
+    if not guard:
+        return True                       # nothing was preserved; nothing to re-check
+    name, dev, ino = guard[0]
+    try:
+        seen = os.lstat(name, dir_fd=dirfd)
+    except OSError:
+        return False                      # cannot confirm the copy is still there: do not spend
+    return stat.S_ISREG(seen.st_mode) and (seen.st_dev, seen.st_ino) == (dev, ino)
+
+
+def _preserve_superseded(dirfd, report_name, guard_out=None):
     """Keep the report about to be replaced, and say whether replacing it is now safe.
 
     Returns True when the caller may replace the report, False when replacing it would destroy
@@ -1439,6 +1537,8 @@ def _preserve_superseded(dirfd, report_name):
 
     if linked is not None:
         if narrowed:
+            if guard_out is not None:
+                guard_out.append((linked, previous.st_dev, previous.st_ino))
             return True
         # THE POLICY WAS DENIED ON THE INODE WE JUST RESERVED A NAME FOR, so the replacement is
         # refused. Round twenty-three settled the shape for quarantine and preservation was left
@@ -1493,8 +1593,22 @@ def _preserve_superseded(dirfd, report_name):
             # failed that time — stayed wide for every run afterwards. The gate ruled it blocking,
             # and it is the same defect as the one below in a place the eye skips: the publish
             # about to happen is owner-only, and the second name beside it was not.
-            if _narrow_kept_copy(dirfd, candidate):
-                return True               # already preserved by an earlier call; oldest wins
+            # THROUGH A HELD DESCRIPTOR, like the other branch. Round twenty-eight anchored the
+            # fresh-link path and left this one comparing an lstat and then handing the NAME to a
+            # helper that opens it again — so the identity test and the narrowing could describe
+            # two different files. A leg reproduced it: True returned after stripping and
+            # chmodding one inode having checked another. The same defect in a second place, two
+            # rounds later; the sibling of a fixed branch is where it goes to live.
+            _kept_fd, _kept_via_proc = _open_held_copy(dirfd, candidate, previous)
+            if _kept_fd is None:
+                return False              # the slot stopped being the inode we just checked
+            try:
+                if _narrow_held_copy(_kept_fd, _kept_via_proc):
+                    if guard_out is not None:
+                        guard_out.append((candidate, previous.st_dev, previous.st_ino))
+                    return True           # already preserved by an earlier call; oldest wins
+            finally:
+                _close_quietly(_kept_fd)
             # AND THE NAME STAYS. This copy is a second name for the SAME inode the report is
             # standing on — the identity check above is what establishes that — so an ACL on it
             # is an ACL already on the report itself, not a channel this call opened. Unlinking a
@@ -1694,7 +1808,8 @@ def _publish_refusal(dirfd, refusal):
         # destroying evidence is worse than leaving a report that says "there are secrets here".
         # The refusal still reaches the caller through the exit code, which is the channel that
         # actually carries it.
-        if not _preserve_superseded(dirfd, _REPORT_NAME):
+        _slot_guard = []
+        if not _preserve_superseded(dirfd, _REPORT_NAME, _slot_guard):
             return
         fd, tmp_name = _stage_report(dirfd, f"scan_gate: REFUSED {reason_class}\n")
         try:
@@ -1707,6 +1822,9 @@ def _publish_refusal(dirfd, refusal):
             _held = os.fstat(fd)
             if (_named.st_dev, _named.st_ino) != (_held.st_dev, _held.st_ino):
                 raise OSError(errno.EIO, "report-staged-name-diverged")
+            # THE AUTHORIZATION IS RE-CHECKED WHERE IT IS SPENT, not only where it was computed.
+            if not _slot_still_holds(dirfd, _slot_guard):
+                return
             os.replace(tmp_name, _REPORT_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
         except BaseException:
             try:

@@ -5224,3 +5224,313 @@ def test_the_ordinary_preservation_path_is_unchanged(tmp_path: Path) -> None:
     if os.geteuid() != 0:
         assert not stat.S_IMODE(kept[0].stat().st_mode) & 0o077, (
             "CONTROL: narrowing through the descriptor must still reach the mode")
+
+
+# =============================================================================================
+# GROUP 38 — the twenty-ninth round. The sibling branch, and a reserved name given out too early.
+#
+# Round twenty-eight anchored preservation to a held descriptor and anchored ONE of its two
+# branches. The existing-slot branch — the one that runs when no new link could be made and an
+# earlier call's copy is already sitting in a slot — still compared an lstat to the expected inode
+# and then handed the NAME to a helper that opens it again. A leg reproduced the gap: it returned
+# True after narrowing a different inode than the one it had checked. This is the same defect in a
+# second place, two rounds later, which has now happened often enough in this file to be worth
+# naming as a habit rather than an accident: when a fix anchors one branch, its sibling is where
+# the same defect goes to live.
+#
+# The second arm is about a reserved name being granted before the bytes are all written. The
+# copy-out path created the reserved name first and wrote into it, so a write error left a partial
+# file under a name that means "retained evidence" — and the cleanup for that case is an unlink
+# that is allowed to fail. The leg measured exactly that: a refused unlink left two bytes standing
+# under the reserved name.
+# =============================================================================================
+
+
+def test_the_existing_slot_branch_narrows_the_inode_it_checked(tmp_path: Path) -> None:
+    """REPAIRED: the sibling branch must hold the inode too, not re-resolve the name."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "existing_slot_identity")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    rp = reports / "scan_report.txt"
+    rp.write_text("aws\tkey\tassignment\tdocs/mine.md:1\n", encoding="utf-8")
+
+    # An earlier call already preserved this inode under the first slot: a real second name.
+    slot = reports / "scan_report.superseded.txt"
+    os.link(rp, slot)
+    # Every remaining slot is occupied by a directory, so no NEW link can be made and the
+    # function must take the existing-slot branch.
+    for name in list(module._superseded_slot_names())[1:]:
+        (reports / name).mkdir()
+
+    real_lstat = module.os.lstat
+    swapped: list[str] = []
+
+    def lstat_then_swap_the_slot(path, *args, **kwargs):
+        result = real_lstat(path, *args, **kwargs)
+        if (not swapped and isinstance(path, str)
+                and path.endswith("scan_report.superseded.txt")
+                and sys._getframe(1).f_code.co_name == "_preserve_superseded"):
+            # THE INTERLEAVING: identity is established, and the name then stops meaning it.
+            swapped.append(path)
+            other = reports / "planted.txt"
+            other.write_text("gcp\tkey\tassignment\tsrc/theirs.py:9\n", encoding="utf-8")
+            os.replace(other, slot)
+        return result
+
+    module.os.lstat = lstat_then_swap_the_slot
+    try:
+        authorized = preserve_superseded(module, reports)
+    finally:
+        module.os.lstat = real_lstat
+
+    if not swapped:
+        pytest.skip("the existing-slot branch was not reached; this arm measured nothing")
+    assert authorized is False, (
+        "REPAIRED: the replacement was authorized after the slot stopped holding the inode that "
+        "was checked. The identity test and the narrowing were applied to two different files")
+
+
+def test_a_partial_copy_never_occupies_a_reserved_name(tmp_path: Path) -> None:
+    """REPAIRED: a reserved name is granted only once every byte is written."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "partial_copy_reserved")
+    staging = tmp_path / "tree"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+
+    real_write = module.os.write
+    real_unlink = module.os.unlink
+    broke: list[int] = []
+
+    def write_that_fails_after_the_first_chunk(fd, data):
+        if not broke:
+            broke.append(fd)
+            real_write(fd, data[:2])
+            raise OSError(errno.EIO, "write failed mid-copy (injected)")
+        return real_write(fd, data)
+
+    def unlink_that_refuses(*args, **kwargs):
+        # The cleanup is best effort by construction, so the arm makes it fail: what remains on
+        # disk afterwards is the property under test, not the cleanup's own luck.
+        raise PermissionError(errno.EACCES, "unlink refused (injected)")
+
+    real_install = module._install_posix_acl_policy
+
+    def install_after_taking_the_staged_name(dirfd, src_name, dst_fd, dst_name):
+        # real_unlink, NOT os.unlink: the module-level patch below makes every unlink refuse, and
+        # the first version of this arm used the patched one — so the staged name was never taken,
+        # the copy-out never ran, and the arm skipped while appearing to be set up correctly.
+        try:
+            real_unlink(str(reports / dst_name))
+        except OSError:
+            pass
+        raise OSError(errno.EIO, "policy install failed (injected)")
+
+    module._install_posix_acl_policy = install_after_taking_the_staged_name
+    module.os.write = write_that_fails_after_the_first_chunk
+    module.os.unlink = unlink_that_refuses
+    try:
+        with pytest.raises(BaseException):
+            module.write_report(str(staging), [("docs/held.md", 4, "aws", "key", "assignment")])
+    finally:
+        module.os.write = real_write
+        module.os.unlink = real_unlink
+        module._install_posix_acl_policy = real_install
+
+    if not broke:
+        pytest.skip("the copy-out path never wrote; this arm measured nothing")
+    reserved = [p for p in reports.iterdir() if p.name.startswith("scan_report.unpublished")]
+    for p in reserved:
+        body = p.read_text(encoding="utf-8", errors="replace")
+        assert body.endswith("\n") and "docs/held.md:4" in body, (
+            f"REPAIRED: {p.name} is a reserved name holding a PARTIAL copy ({body!r}). A reserved "
+            "name means retained evidence; it must not be granted until every byte is written, "
+            "because the cleanup that would remove it is allowed to fail")
+
+
+def test_copy_out_works_when_the_umask_stripped_owner_read(tmp_path: Path) -> None:
+    """REPAIRED: the last-resort copy must not be defeated by the mode its own stage was created with.
+
+    A cold leg found this one from the umask end. _stage_report creates at 0600 AND THAT IS
+    UMASK-MASKED: at umask 0400 the staged inode is 0200, owner-write with no owner-read. The held
+    descriptor is O_WRONLY. When the staged name diverges, the copy-out reopens the inode through
+    the descriptor directory O_RDONLY — and that open is refused, because the inode has no read
+    bit for anyone. The copy returns False, the caller closes the last reference, and the findings
+    are gone. The non-diverged quarantine path already fchmods the source before it links; this
+    path was added later and never did.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "copyout_umask")
+    staging = tmp_path / "tree"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+
+    real_unlink = module.os.unlink
+    took: list[str] = []
+    real_install = module._install_posix_acl_policy
+
+    def install_after_taking_the_staged_name(dirfd, src_name, dst_fd, dst_name):
+        if not took:
+            took.append(dst_name)
+            try:
+                real_unlink(str(reports / dst_name))
+            except OSError:
+                pass
+        raise OSError(errno.EIO, "policy install failed (injected)")
+
+    module._install_posix_acl_policy = install_after_taking_the_staged_name
+    previous_umask = os.umask(0o400)          # strips the OWNER READ bit from the staged file
+    try:
+        with pytest.raises(BaseException):
+            module.write_report(str(staging), [("docs/umask.md", 5, "aws", "key", "assignment")])
+    finally:
+        os.umask(previous_umask)
+        module._install_posix_acl_policy = real_install
+
+    if not took:
+        pytest.skip("the staged name was never taken; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/umask.md:5"), (
+        "REPAIRED: at umask 0400 the staged findings were created without owner read, the "
+        "copy-out could not reopen them for reading, and the last descriptor was closed on the "
+        "only copy. The mode has to be installed on the source before it is read back")
+
+
+def test_the_sweep_keeps_a_reserved_name_whose_age_cannot_be_read(tmp_path: Path) -> None:
+    """REPAIRED: a question this code cannot answer must not authorize destruction.
+
+    The age guard added one round earlier skips a reserved name that is newer than this run's own
+    staging. A cold leg pointed out that its except-OSError falls THROUGH to the unlink: when the
+    lstat fails, the sweep does the exact thing the guard was added to prevent. That is the same
+    inversion `_staged_holds_evidence` was rewritten to remove, still standing here.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "sweep_unknown_age")
+    staging = tmp_path / "tree"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+
+    real_lstat = module.os.lstat
+    real_replace = module.os.replace
+    planted: list[Path] = []
+
+    def replace_then_a_concurrent_writer_quarantines(*args, **kwargs):
+        result = real_replace(*args, **kwargs)
+        if not planted:
+            q = reports / "scan_report.unpublished.txt"
+            q.write_text("gcp\tkey\tassignment\tsrc/theirs.py:3\n", encoding="utf-8")
+            planted.append(q)
+        return result
+
+    def lstat_that_cannot_answer(path, *args, **kwargs):
+        if (isinstance(path, str) and path.startswith("scan_report.unpublished")
+                and sys._getframe(1).f_code.co_name == "write_report"):
+            raise OSError(errno.EIO, "cannot stat (injected)")
+        return real_lstat(path, *args, **kwargs)
+
+    module.os.replace = replace_then_a_concurrent_writer_quarantines
+    module.os.lstat = lstat_that_cannot_answer
+    try:
+        module.write_report(str(staging), [("docs/mine.md", 1, "aws", "key", "assignment")])
+    finally:
+        module.os.replace = real_replace
+        module.os.lstat = real_lstat
+
+    if not planted:
+        assert False, "CONTROL: no publish happened, so the sweep was never reached"
+    assert _findings_anywhere(reports, "src/theirs.py:3"), (
+        "REPAIRED: the sweep could not read the reserved file's age and removed it anyway. The "
+        "age check exists only to protect that file; on an unreadable answer it did the thing "
+        "the check was added to prevent")
+
+
+def test_quarantine_does_not_report_custody_of_a_substituted_link(tmp_path: Path) -> None:
+    """REPAIRED: the identity check must bind the LINK, not merely precede it."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quarantine_link_identity")
+    staging = tmp_path / "tree"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+
+    real_link = module.os.link
+    swapped: list[str] = []
+    real_install = module._install_posix_acl_policy
+
+    def failing_install(dirfd, src_name, dst_fd, dst_name):
+        raise OSError(errno.EIO, "policy install failed (injected)")
+
+    def link_that_lands_on_something_else(src, dst, *args, **kwargs):
+        # THE SUBSTITUTION: the staged name stops being our inode between the identity check and
+        # the link, so the reserved name ends up describing a file this scan never staged.
+        if not swapped and isinstance(dst, str) and dst.startswith("scan_report.unpublished"):
+            swapped.append(dst)
+            other = reports / "foreign.txt"
+            other.write_text("gcp\tkey\tassignment\tsrc/foreign.py:2\n", encoding="utf-8")
+            try:
+                real_link(str(other), str(reports / dst))
+                return None
+            except OSError:
+                pass
+        return real_link(src, dst, *args, **kwargs)
+
+    module._install_posix_acl_policy = failing_install
+    module.os.link = link_that_lands_on_something_else
+    try:
+        with pytest.raises(BaseException):
+            module.write_report(str(staging), [("docs/ours.md", 6, "aws", "key", "assignment")])
+    finally:
+        module.os.link = real_link
+        module._install_posix_acl_policy = real_install
+
+    if not swapped:
+        pytest.skip("no quarantine link was attempted; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/ours.md:6"), (
+        "REPAIRED: quarantine answered that it had taken custody, the caller acted on that "
+        "answer, and the reserved name held a file this scan never staged. Our findings are gone")
+
+
+def test_a_slot_stolen_after_authorization_does_not_get_the_report_replaced(tmp_path: Path) -> None:
+    """REPAIRED: the authorization must still hold at the moment it is spent.
+
+    Preservation closes its descriptor and answers True. The caller then stages a refusal body and
+    installs its policy — many syscalls — and only then replaces the canonical name. A cold leg
+    pointed out that the answer is spent long after it was computed, and that stealing the slot in
+    that window leaves the findings with no name at all. It also said what would close THIS window
+    without pretending to close the last instruction: check, immediately before the replace, that
+    the slot still holds the inode that was preserved.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "slot_stolen_after_auth")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    rp = reports / "scan_report.txt"
+    rp.write_text("aws\tkey\tassignment\tdocs/spent.md:7\n", encoding="utf-8")
+
+    real_stage = module._stage_report
+    stolen: list[str] = []
+
+    def stage_then_steal_the_slot(dirfd, body, evidence=False):
+        result = real_stage(dirfd, body, evidence=evidence)
+        if not stolen:
+            stolen.append("yes")
+            slot = reports / "scan_report.superseded.txt"
+            if slot.exists():
+                plant = reports / "plant.txt"
+                plant.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+                os.replace(plant, slot)
+        return result
+
+    module._stage_report = stage_then_steal_the_slot
+    try:
+        module._write_refusal_report(str(tmp_path), module.ScanRefused("report-path-unsafe 'x'"))
+    finally:
+        module._stage_report = real_stage
+
+    if not stolen:
+        pytest.skip("no refusal was staged; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/spent.md:7"), (
+        "REPAIRED: the slot was taken between the authorization and the replace, so the preserved "
+        "copy stopped being our inode — and the replace then dropped the canonical name, which "
+        "was the last one the findings had")
