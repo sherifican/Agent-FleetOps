@@ -1492,7 +1492,13 @@ def _ordinary_create_mode(directory: Path, name: str = ".ordinary_probe") -> int
         probe.unlink()
 
 
-@pytest.mark.parametrize("preset", [0o600, 0o660, 0o640])
+# 0o660 was here until round fourteen and now narrows to 0o640: group WRITE on a report that came
+# out of the untrusted tree is the plant an independent review demonstrated — any member of the
+# staging tree's group overwrites the published report with a CLEAN line after the scanner returns.
+# The presets below are the modes preservation still keeps EXACTLY, which is what this arm is for;
+# the narrowing itself is pinned by test_a_planted_existing_report_cannot_widen_the_findings_it_is
+# _replaced_by. 0o400 is included so the arm also covers a policy stricter than the cap.
+@pytest.mark.parametrize("preset", [0o600, 0o640, 0o400])
 def test_replacing_a_report_preserves_the_mode_it_already_had(tmp_path: Path, preset: int) -> None:
     if os.geteuid() == 0:
         pytest.skip("root ignores mode bits; this needs an unprivileged writer")
@@ -2039,12 +2045,13 @@ def test_the_access_policy_lands_before_any_group_or_other_access(tmp_path: Path
     reports_dir.mkdir()
     rp = reports_dir / "scan_report.txt"
     rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
-    # 0o660, not 0o664. This arm measures ORDERING — that no call grants more than the policy
-    # being installed, before the ACL lands or after. Preservation is now narrow-only and caps
-    # "other" off, so a fixture granting other would end at a different mode than its source and
-    # red this arm for a reason that is not ordering. Group access is still present, so the
-    # exposure this arm hunts is still there to find.
-    rp.chmod(0o660)
+    # 0o640, not 0o664 and no longer 0o660. This arm measures ORDERING — that no call grants more
+    # than the policy being installed, before the ACL lands or after. Preservation caps group WRITE
+    # and all other access, so a fixture carrying either would end at a different mode than its
+    # source and red this arm for a reason that is not ordering. Group READ survives the cap, so
+    # the exposure this arm hunts — a window where the staged file is wider than the target — is
+    # still there to find.
+    rp.chmod(0o640)
     named = subprocess.run(["setfacl", "-m", f"u:{os.geteuid()}:r", "--", str(rp)],
                            capture_output=True, text=True)
     if named.returncode != 0:
@@ -3001,3 +3008,101 @@ def test_a_failed_mode_probe_does_not_discard_a_stricter_directory_policy(
         f"with the probe unusable the report landed {got:04o}, but this directory actually gives "
         f"{expected:04o} to a private create. A guessed 0600 discarded the restriction the "
         "directory had already applied; the staged inode carries it without guessing")
+
+
+@pytest.mark.parametrize("umask_val", [0o022, 0o002, 0o000])
+def test_the_report_directory_is_never_writable_by_anyone_else(tmp_path: Path,
+                                                               umask_val: int) -> None:
+    """Four rounds hardened the FILE and left the CONTAINER unconstrained.
+
+    Directory write permission, not file mode, is what governs unlink and create. os.makedirs
+    defaults to 0o777, so at umask 0 the report directory was created world-writable with an
+    owner-only report inside it — and any local account could unlink that 0600 report and drop its
+    own "scan_gate: CLEAN" at the same path. Measured before the fix: _reports 0777 at umask 0 and
+    0775 at umask 0002, which is ordinary where per-user groups are configured.
+
+    A file mode is only as good as the directory holding it, and every permission arm before this
+    one asserted the file.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "reportdir_umask_%o" % umask_val)
+    previous = os.umask(umask_val)
+    try:
+        staging = tmp_path / "staging"
+        os.makedirs(staging)
+        module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                            "generic_key_assignment", "contents")])
+        dmode = stat.S_IMODE((staging / "_reports").stat().st_mode)
+    finally:
+        os.umask(previous)
+
+    assert not dmode & 0o022, (
+        f"the report directory is {dmode:04o} at umask {umask_val:04o}: another account can unlink "
+        "the owner-only report inside it and publish its own CLEAN at the same path, which makes "
+        "the report's own mode irrelevant to the outcome it was hardened for")
+
+
+def test_an_existing_permissive_report_directory_is_narrowed_before_publishing(
+        tmp_path: Path) -> None:
+    """Creation mode is only half of it: exist_ok=True leaves an existing directory alone.
+
+    The scanned tree is untrusted and can ship its own `_reports` at 0777. Only the WRITE bits are
+    removed, and only from group and other: this narrows who can FORGE the report, not who can
+    find it, and it touches the scanner's own output directory rather than anything it was asked
+    to scan.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "reportdir_existing")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    reports_dir.chmod(0o777)
+
+    module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                        "generic_key_assignment", "contents")])
+
+    dmode = stat.S_IMODE(reports_dir.stat().st_mode)
+    assert not dmode & 0o022, (
+        f"an existing report directory shipped at 0777 stayed {dmode:04o}: the publish went into a "
+        "directory strangers can rewrite")
+    assert dmode & 0o400, (
+        f"and the owner must still be able to reach its own reports, not {dmode:04o}")
+
+
+@pytest.mark.parametrize("planted", [0o660, 0o662, 0o670])
+def test_a_planted_group_writable_report_cannot_keep_its_group_write(tmp_path: Path,
+                                                                     planted: int) -> None:
+    """The unclosed half of the planted-mode bug: other was capped, group was kept.
+
+    An earlier comment said so explicitly — "a 0660 keeps group write". A planted 0660 is the same
+    plant with a different audience: any member of the staging tree's group overwrites the
+    published report with a CLEAN line after the scanner returns, and a reader sees CLEAN.
+
+    Group READ is deliberately still preserved; only write and execute go. The demonstrated attack
+    is a write, and dropping group read would additionally refuse every report carrying a
+    group-granting ACL.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "planted_gw_%o" % planted)
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    rp.chmod(planted)
+
+    module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                        "generic_key_assignment", "contents")])
+
+    mode = stat.S_IMODE(rp.stat().st_mode)
+    assert not mode & stat.S_IWGRP, (
+        f"a report planted at {planted:04o} published the findings at {mode:04o}: the scanned tree "
+        "handed write access to its own report to a group, and a group member can replace it with "
+        "a CLEAN line the moment the scanner returns")
+    assert not mode & 0o007, f"and no other access, not {mode:04o}"

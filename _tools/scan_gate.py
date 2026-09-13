@@ -460,24 +460,35 @@ def _install_posix_acl_policy(src, dst):
             if current.st_gid != old.st_gid:
                 raise OSError(errno.EPERM, "report-policy-group-not-preservable")
 
-        # The same "other" cap as a new report, and for a sharper reason. Preserving the old mode
-        # was added because forcing a umask-derived one WIDENED an existing private report — but
-        # in this product the "existing report" lives inside the tree being scanned, and that tree
-        # is untrusted. A committed _reports/scan_report.txt checks out 0644 at an ordinary umask,
-        # and preserving it faithfully republished the findings at 0644: review measured planted
-        # 0644 -> published 0644, and planted 0666 -> published 0666. The new-report cap never ran,
-        # because this is the existing-report arm.
+        # ONE policy, both branches: the report this tool publishes is owner-only, or narrower
+        # where the old one was narrower. Intersect, never assign.
         #
-        # Honouring the old policy must not mean honouring a PLANTED one, so preservation is
-        # narrow-only. The property the earlier round protected is untouched: a 0600 report stays
-        # 0600, a 0660 keeps group write, a 0640 keeps group read. Only "other" is refused, and
-        # only ever downward.
+        # Preserving the old mode exists because forcing a umask-derived one once WIDENED an
+        # existing private report. But in this product the "existing report" lives inside the tree
+        # being scanned, and that tree is untrusted — so its mode is attacker-supplied. Review
+        # measured planted 0644 -> published 0644 and planted 0666 -> published 0666, which closed
+        # the "other" half. This round closes the GROUP half, which the previous comment here
+        # explicitly kept: "a 0660 keeps group write". A planted 0660 is the same plant with a
+        # different audience — any member of the staging tree's group overwrites the published
+        # report with a CLEAN line after the scanner returns, and a reader sees CLEAN.
+        #
+        # Group READ is deliberately KEPT, and that is a judgement worth stating rather than
+        # burying. The demonstrated attack is a WRITE: a group member overwrites the published
+        # report with a CLEAN line after the scanner returns. Dropping group read as well would
+        # also refuse every report carrying an ACL that grants a group, since installing such an
+        # ACL restores the bits the cap removed and the mode verification then fails — a real
+        # availability cost for a disclosure argument nobody has demonstrated against a REPLACED
+        # report. So this closes the sequence that was shown and leaves the one that was not.
+        #
+        # A genuinely narrower policy still wins: 0400 stays 0400 and 0000 stays 0000, because an
+        # intersection cannot widen. What is gone is the scanned tree's ability to hand its own
+        # report's WRITE access to anybody.
         #
         # Fail-closed consequence, stated rather than discovered: if the old report carries a
         # POSIX ACL that grants "other", installing that ACL restores the bits this cap removed,
         # the mode verification below then fails, and the publish is refused instead of going out
         # wide. A refusal is the safe direction for a secrets report; it is not silent.
-        mode = stat.S_IMODE(old.st_mode) & ~0o007
+        mode = stat.S_IMODE(old.st_mode) & ~0o037
         if not _XATTR_SUPPORTED:
             # No POSIX-ACL xattr API here, so there is no ACL for THIS code to carry, and the
             # mode is carried over instead. That is a mode-only fallback outside the implemented
@@ -563,9 +574,39 @@ def write_report(staging, hits):
     if os.path.islink(reports_dir):
         raise ScanRefused("report-path-unsafe '_reports'")
 
-    os.makedirs(reports_dir, exist_ok=True)
+    # NOT INDEPENDENTLY MUTATION-PROVABLE, and said so rather than left to look proven: reverting
+    # this mode alone leaves every directory arm GREEN, because the narrowing block below removes
+    # the same bits a moment later. The narrowing is the enforcing step; this is defence in depth,
+    # and it matters only in the window between creation and that block, or if the block is ever
+    # moved or removed. A reader mutating this line and seeing green should mutate the block.
+    #
+    # mode=0o700 on CREATION. os.makedirs defaults to 0o777, so at umask 0 this directory was
+    # created world-writable — and directory write permission, not file mode, is what governs
+    # unlink and create. Review measured it: _reports 0777 with the report inside at 0600, where
+    # any local account can unlink that owner-only report and drop its own "scan_gate: CLEAN" at
+    # the same path. Four rounds hardened the FILE and never constrained the CONTAINER, which made
+    # the file's mode irrelevant to the outcome the hardening was for.
+    os.makedirs(reports_dir, mode=0o700, exist_ok=True)
     if not os.path.isdir(reports_dir):
         raise ScanRefused("report-path-unsafe '_reports'")
+
+    # An ALREADY-EXISTING directory keeps its own mode through exist_ok=True, so creation mode is
+    # only half the answer. Group- or other-WRITE on it is the same unlink-and-replace capability,
+    # and at umask 0002 — ordinary where per-user groups are configured — it is 0775.
+    #
+    # Only the write bits are removed, and only from group and other. Read and traverse are left
+    # exactly as the operator had them: this narrows who can FORGE the report, not who can find
+    # it, and it touches the scanner's own output directory rather than anything it was asked to
+    # scan. If the narrowing itself fails, the report cannot be published safely here and the
+    # scan refuses rather than writing into a directory strangers can rewrite.
+    try:
+        _dmode = stat.S_IMODE(os.stat(reports_dir, follow_symlinks=False).st_mode)
+        if _dmode & 0o022:
+            os.chmod(reports_dir, _dmode & ~0o022)
+            if stat.S_IMODE(os.stat(reports_dir, follow_symlinks=False).st_mode) & 0o022:
+                raise ScanRefused("report-dir-writable '_reports'")
+    except OSError as exc:
+        raise ScanRefused("report-dir-unsafe '_reports'") from exc
 
     if os.path.islink(report_path):
         raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
