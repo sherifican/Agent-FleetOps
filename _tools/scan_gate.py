@@ -527,7 +527,8 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
     # one name simply moves us to the next rather than costing anyone their evidence.
     for candidate in _unpublished_slot_names():
         try:
-            os.link(tmp_name, candidate, src_dir_fd=dirfd, dst_dir_fd=dirfd)
+            os.link(tmp_name, candidate, src_dir_fd=dirfd, dst_dir_fd=dirfd,
+                    follow_symlinks=False)
         except OSError:
             continue                      # occupied, unusable, or unsupported — try the next
         try:
@@ -723,9 +724,8 @@ def _makedirs_owner_only(path):
     if not missing:
         return
 
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(cursor, os.O_RDONLY | os.O_DIRECTORY | nofollow)
+        fd, _ = _open_dir_nofollow(cursor, None)
     except OSError:
         return
     try:
@@ -835,9 +835,13 @@ def write_report(staging, hits):
     # trust boundary, not something inside it. Everything BELOW it is descriptor-relative from
     # here on. Hardening an ancestor the caller named would be a different decision and is not
     # this function's to make.
-    _nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
-        parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY | _nofollow)
+        # Through the same helper the report directory uses, which carries the O_PATH fallback.
+        # A 0300 directory — create and traverse, no read — fails an O_RDONLY open, and round
+        # fourteen built that fallback for exactly this case. It was wired to `_reports` and not
+        # to the root above it, so a 0300 `_reports` published while a 0300 scan root could not
+        # publish at all and the refusal writer left no artifact either.
+        parent_fd, _ = _open_dir_nofollow(staging, None)
     except OSError as exc:
         raise ScanRefused("report-path-unsafe '_reports'") from exc
     try:
@@ -1243,10 +1247,22 @@ def _write_refusal_report(staging, refusal):
     # wrong. Failure to harden is swallowed here rather than raised, because this function must not
     # displace the refusal it was called to report — but then nothing is published either, which
     # the caller already treats as the report being unavailable.
+    # THE SAME RESOLUTION THE PUBLISHER USES, because otherwise the two writers disagree about
+    # which tree they are in. O_NOFOLLOW applies to the TRAILING component only — open(2):
+    # "Symbolic links in earlier components of the pathname will still be followed" — so naming
+    # <staging>/_reports here re-walked a symlinked scan root that write_report had just refused
+    # by holding a descriptor, and replaced the report inside its target. Anything the publisher
+    # refuses by holding a descriptor, this writer would otherwise still reach by name.
     try:
-        dirfd = _harden_report_dir(reports_dir)
+        parent_fd, _ = _open_dir_nofollow(staging, None)
+    except OSError:
+        return
+    try:
+        dirfd = _harden_report_dir(reports_dir, parent_fd=parent_fd)
     except (ScanRefused, OSError):
         return
+    finally:
+        _close_quietly(parent_fd)
     try:
         _publish_refusal(dirfd, refusal)
     except Exception:

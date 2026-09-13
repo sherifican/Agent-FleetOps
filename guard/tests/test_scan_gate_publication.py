@@ -4325,3 +4325,101 @@ def test_a_pre_existing_directory_is_never_widened_however_it_looks(tmp_path: Pa
         "This call did not create it, so its owner bits were never this tool's to restore")
     assert (reports / "operator_data.txt").read_text(encoding="utf-8") == "OPERATOR DATA\n", (
         "CONTROL: the operator's file must be untouched")
+
+
+# =============================================================================================
+# GROUP 31 — the twenty-second round. Two writers that did not agree about the same path, and
+# round fourteen's availability case applied one level too shallow.
+#
+#   #1 O_NOFOLLOW APPLIES TO THE TRAILING COMPONENT ONLY. open(2) is explicit: "Symbolic links in
+#      earlier components of the pathname will still be followed." write_report avoids that by
+#      opening `staging` itself O_NOFOLLOW and working from that descriptor. The refusal writer
+#      dropped the descriptor and re-walked the path, so a symlinked STAGING that write_report had
+#      just refused was followed by the handler that runs on its refusal — and the report inside
+#      the symlink's target was replaced. Split-brain between the two writers: anything
+#      write_report refuses by holding a descriptor, the refusal writer will still name.
+#
+#   #2 The scan ROOT is opened O_RDONLY with no O_PATH fallback, so a 0300 staging directory —
+#      write and search, no read — cannot publish at all, while a 0300 `_reports` publishes fine.
+#      _open_dir_nofollow exists for exactly this case and was wired to the child, not the root.
+# =============================================================================================
+
+
+def test_the_refusal_writer_does_not_follow_a_staging_symlink_the_publisher_refused(
+    tmp_path: Path
+) -> None:
+    """REPAIRED: both writers resolve the scan root the same way, or they disagree about safety."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "refusal_staging_symlink")
+    real_root = tmp_path / "elsewhere"
+    (real_root / "_reports").mkdir(parents=True)
+    victim = real_root / "_reports" / "scan_report.txt"
+    victim.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    staging = tmp_path / "staging_link"
+    staging.symlink_to(real_root)
+
+    with pytest.raises(Exception) as caught:
+        module.write_report(str(staging), NEW_HIT)
+    # CONTROL: the publisher really does refuse this state — that is the premise of the finding.
+    assert "report-path-unsafe" in str(caught.value), (
+        f"CONTROL: expected the publisher to refuse a symlinked scan root, got {caught.value!r}")
+
+    module._write_refusal_report(str(staging), caught.value)
+
+    assert victim.read_text(encoding="utf-8") == "scan_gate: CLEAN\n", (
+        "REPAIRED: the refusal writer followed a symlinked scan root that write_report had just "
+        "refused, and replaced the report inside its target. O_NOFOLLOW covers the trailing "
+        "component only; the earlier components were re-walked")
+
+
+def test_a_write_and_search_scan_root_can_still_publish(tmp_path: Path) -> None:
+    """REPAIRED: round fourteen's availability case, applied to the scan root and not just below it.
+
+    A 0300 directory grants create and traverse but not read, so an O_RDONLY open of it fails. The
+    O_PATH fallback exists for precisely that and was wired to `_reports` while the scan root kept
+    the plain open.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "wx_scan_root")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    staging.chmod(0o300)
+    try:
+        # CONTROL: the owner really can create in this directory, so a refusal is the scanner's
+        # doing and not the filesystem's.
+        probe = os.open(str(staging / ".control_probe"), os.O_CREAT | os.O_WRONLY, 0o600)
+        os.close(probe)
+        os.unlink(str(staging / ".control_probe"))
+    except OSError:
+        staging.chmod(0o700)
+        pytest.skip("this filesystem does not allow creating in a 0300 directory")
+
+    try:
+        module.write_report(str(staging), NEW_HIT)
+        published = (staging / REPORT_REL).exists()
+        mode = stat.S_IMODE((staging / REPORT_REL).stat().st_mode) if published else None
+    finally:
+        staging.chmod(0o700)
+        for child in staging.rglob("*"):
+            try:
+                child.chmod(0o700 if child.is_dir() else 0o600)
+            except OSError:
+                pass
+
+    assert published, (
+        "REPAIRED: a 0300 scan root was refused although its owner can create there. The O_PATH "
+        "fallback was wired to the report directory and not to the root above it")
+    assert mode == 0o600, f"and the report must still land under the one rule, not {mode:04o}"
+
+
+def test_quarantine_does_not_link_through_a_symlink(tmp_path: Path) -> None:
+    """REPAIRED: the two evidence paths agree. Preservation passes follow_symlinks=False; the
+    quarantine link did not, so the two halves of the same guarantee disagreed."""
+    source = SCANNER.read_text(encoding="utf-8")
+    quarantine = source[source.index("def _quarantine_unpublished"):]
+    quarantine = quarantine[:quarantine.index("\ndef ")]
+    assert "follow_symlinks=False" in quarantine, (
+        "the quarantine link still follows symlinks while preservation's does not; a staged name "
+        "swapped for a symlink would link its target into the evidence store")
