@@ -60,6 +60,14 @@ longer decides the report's mode.** That is a deliberate reversal of the previou
 it buys is that a default ACL which would lock the owner out cannot produce findings nobody can
 read.
 
+**A RETAINED findings file whose access policy could not be installed keeps its bytes and loses
+its reserved name.** The reserved `scan_report.unpublished.*` names mean "retained evidence,
+carrying the report's access policy". If the ACL strip is denied, that policy is not on the file,
+and linking it into a reserved name anyway would report a compliance that was never installed —
+review measured exactly that. The bytes stay at the scanner's staged `.scan_report_` name
+instead, which promises nothing. Preserving evidence outranks labelling it; claiming a policy it
+does not have does not.
+
 **Any POSIX ACL on the published report is REMOVED, never carried** — whether inherited from the
 directory or copied from the report being replaced. Be precise about what that buys, because an
 earlier version of this note overstated it: a `chmod` writes the group bits into the ACL mask, so
@@ -164,10 +172,18 @@ findings rather than destroying them. That is the safe direction, but it means a
 names can stop the report being updated. Occupancy is a denial of service against publication,
 never a way to make the scanner destroy evidence.
 
-**"Never raises" means never raises an error. It does not mean uninterruptible.** The refusal
-writer will not let its own failure displace the failure it was called to report, and it will not
-block. It does not catch `KeyboardInterrupt` or `SystemExit`, and it should not: a cancellation is
-not a refusal to report, and swallowing one would be a different defect.
+**"Never raises" means never raises an error. It does not mean uninterruptible, and "never
+blocks" is a bounded claim.** The refusal writer will not let its own failure displace the failure
+it was called to report. It does not catch `KeyboardInterrupt` or `SystemExit`, and it should not:
+a cancellation is not a refusal to report, and swallowing one would be a different defect.
+
+On blocking, the precise statement: this path opens nothing that can wait for a peer — every open
+that could meet a FIFO carries `O_NONBLOCK` or is `O_PATH` — and it renders no arbitrary object.
+It used to call `str()` on the refusal it was handed, which review showed is unbounded: an
+exception whose `__str__` never returns cannot be caught, because catching handles raising and
+not waiting. Classification now reads a validated reason code the refusal carried from its own
+raise site. What remains is ordinary synchronous filesystem latency, which no user-space tool can
+promise away.
 
 **These gates are STAGING-side, not CI.** Public CI runs the hermetic suite, the guard layer,
 `ref_gate.py` and `readme_guard.sh` only. `wall_check.py` and `scan_gate.py` run here, before a

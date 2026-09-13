@@ -107,7 +107,20 @@ def _allowlist(staging: str):
     return out
 
 class ScanRefused(Exception):
-    """Operational failure: never turn an incomplete scan into a CLEAN result."""
+    """Operational failure: never turn an incomplete scan into a CLEAN result.
+
+    Carries its own reason CLASS, derived here at raise time from this tool's own message. The
+    refusal writer reads that attribute instead of rendering the exception, because rendering an
+    arbitrary object is how a refusal path acquires unbounded behaviour it cannot guard: the gate
+    supplied an exception whose __str__ waits on an event nobody sets, and `except Exception`
+    cannot interrupt a callback that never raises. A validated token computed from a string this
+    file wrote needs no rendering later.
+    """
+
+    def __init__(self, message=""):
+        super().__init__(message)
+        token = message.split(" ", 1)[0].rstrip(";:,.") if isinstance(message, str) else ""
+        self.reason_class = token if re.fullmatch(r"[a-z][a-z0-9\-]*", token or "") else "unclassified"
 
 
 def _git(staging, args, reason, rel="."):
@@ -516,8 +529,16 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
         if _XATTR_SUPPORTED:
             try:
                 _strip_acl_by_fd(fd)
-            except OSError:
-                pass                      # best effort, and independent of the cap below
+            except OSError as exc:
+                if exc.errno not in _ACL_ABSENT:
+                    # NOT best effort here, and that is the correction. A reserved quarantine name
+                    # means "retained evidence, carrying the report's access policy". If the strip
+                    # was DENIED then that policy is not on the file, and linking it into a
+                    # reserved name anyway reports compliance that was never installed — the gate
+                    # measured exactly that, an ACL-bearing retained file at 0600 presented as
+                    # retained. Answering False keeps the BYTES: the caller leaves them at the
+                    # staged name, which promises nothing and claims nothing.
+                    return False
         os.fchmod(fd, _REPORT_MODE)
     except OSError:
         return False
@@ -1178,6 +1199,12 @@ def _write_refusal_report(staging, refusal):
     still propagates. Writes through a temporary file in the real
     <staging>/_reports directory, atomically put in place with os.replace.
 
+    Its guard catches Exception around publication, and classification reads a validated reason
+    class rather than rendering the refusal — an earlier revision of this paragraph described an
+    OSError/UnicodeError-only guard and said a ValueError out of __str__ would propagate. Both
+    stopped being true and the paragraph stood anyway, which is the defect this file keeps
+    relearning.
+
     "Creates nothing when no report exists" stood here and was not quite true; the cold leg
     caught it. The existence test is os.path.lexists, which a DANGLING SYMLINK satisfies — so at
     a report name pointing nowhere this function unlinks the link and creates a regular file
@@ -1209,12 +1236,20 @@ def _write_refusal_report(staging, refusal):
     and there IS a window in which the report is missing: between that unlink and the replace, or
     if the publish then fails. What the function does NOT do is write through a link.
 
-    "Never raises" is scoped to the errors this can expect — OSError and UnicodeError. An
-    unexpected type still propagates: a refusal whose __str__ raises ValueError will replace the
-    refusal being reported, which `except Exception` would close at the cost of swallowing the
-    defects this file exists to surface. That trade has not been made, so the narrower claim is
-    the true one. AttributeError from the POSIX-ACL path on a non-Linux platform used to escape
-    the same way; that one is closed at its source rather than by widening this catch.
+    "NEVER RAISES" IS NOW THE WIDE CLAIM, and the paragraph that stood here said the opposite for
+    two rounds after it stopped being true. It said the guard was scoped to OSError and
+    UnicodeError, and that an unexpected type — a refusal whose __str__ raised — would propagate
+    and replace the refusal being reported. It also recorded a deliberate decision NOT to widen
+    the catch, on the grounds that swallowing would hide the defects this file exists to surface.
+    That trade WAS later made, by a different round, and nobody came back to this paragraph. The
+    gate found the contradiction between it and the code eight lines below it.
+
+    What is true: the guard is `except Exception`, so no ordinary error out of the publication
+    body displaces the refusal. KeyboardInterrupt and SystemExit are deliberately not caught. And
+    nothing here renders the refusal object, so the question of what its __str__ does no longer
+    arises — classification reads a validated reason class the exception carried from its own
+    raise site. AttributeError from the POSIX-ACL path on a non-Linux platform is closed at its
+    source rather than by this catch, which is unchanged and still the right shape.
 
     When the replacement cannot be published under the old policy, a private 0600 refusal
     replaces it instead. 0600 is not simply "narrower": against an old 0400 or 0000 report it
@@ -1300,15 +1335,23 @@ def _publish_refusal(dirfd, refusal):
         if isinstance(refusal, (OSError, UnicodeError)):
             reason_class = "input-error"
         else:
-            # str() on an exception runs whatever __str__ it has. Guarded so that an
-            # unrenderable refusal still produces a REPORT with a class, rather than skipping
-            # the publish entirely and leaving a stale CLEAN standing beside the failure.
+            # NO ARBITRARY RENDERING HAPPENS HERE. The previous form called str() on the refusal
+            # and wrapped it in `except Exception` — which handles a __str__ that RAISES and does
+            # nothing at all about one that never returns. The gate supplied exactly that and
+            # measured this function waiting on it; catching exceptions cannot interrupt a
+            # callback that does not raise, so the guard was aimed at the wrong failure.
+            #
+            # ScanRefused computes its own class at raise time from a message this file wrote.
+            # Here that is one dictionary lookup and a pattern check, with nothing executed on
+            # the caller's behalf. The honest residual: a class that overrides __getattribute__
+            # can still interfere with the lookup. That is narrower than rendering, and it is not
+            # reachable from a directory's contents — main() routes only ScanRefused, OSError and
+            # UnicodeError into this function.
             try:
-                msg = str(refusal)
+                reason_class = refusal.__dict__.get("reason_class")
             except Exception:
-                msg = ""
-            reason_class = msg.split(" ", 1)[0].rstrip(";:,.")
-            if not reason_class or not re.fullmatch(r"[a-z][a-z0-9\-]*", reason_class):
+                reason_class = None
+            if not isinstance(reason_class, str) or not re.fullmatch(r"[a-z][a-z0-9\-]*", reason_class):
                 reason_class = "unclassified"
         try:
             if stat.S_ISLNK(os.lstat(_REPORT_NAME, dir_fd=dirfd).st_mode):

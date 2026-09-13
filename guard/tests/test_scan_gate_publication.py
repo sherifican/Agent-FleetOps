@@ -4423,3 +4423,135 @@ def test_quarantine_does_not_link_through_a_symlink(tmp_path: Path) -> None:
     assert "follow_symlinks=False" in quarantine, (
         "the quarantine link still follows symlinks while preservation's does not; a staged name "
         "swapped for a symlink would link its target into the evidence store")
+
+
+# =============================================================================================
+# GROUP 32 — the twenty-third round. The gate's last two, and both are about a promise rather
+# than a crash.
+#
+#   #1 "No ACL on a retained report" was unconditional in the contract and best-effort in the
+#      code. With the strip denied, quarantine swallowed the failure, applied 0600, linked the
+#      file into a RESERVED name and reported retention success — presenting an artifact as
+#      policy-compliant when its policy had not been installed. The gate's instruction is the
+#      right one: preserve the bytes, do not silently present them as compliant.
+#
+#   #2 "Never blocks" was refuted by a refusal object whose __str__ never returns. Round
+#      eighteen wrapped str() in `except Exception`, which cannot interrupt a callback that does
+#      not raise. The fix the gate names is better than a guard: stop rendering arbitrary objects
+#      in this path at all, and carry a validated reason code from the failure that raised.
+# =============================================================================================
+
+
+class _RefusalWhoseStrBlocks(Exception):
+    """A refusal that never finishes rendering. Catching exceptions cannot interrupt it."""
+
+    def __init__(self):
+        super().__init__("blocking-refusal")
+        import threading
+        self.entered = threading.Event()
+        self._never_set = threading.Event()
+
+    def __str__(self):
+        self.entered.set()
+        self._never_set.wait()             # unset, with no setter anywhere
+        return "unreachable"
+
+
+def test_a_refusal_that_never_finishes_rendering_does_not_hang_the_writer(
+    tmp_path: Path
+) -> None:
+    """REPAIRED: the refusal path renders no arbitrary object, so it cannot wait on one."""
+    import threading
+
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "refusal_str_blocks")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    rp = reports / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+
+    refusal = _RefusalWhoseStrBlocks()
+    done = threading.Event()
+
+    def run():
+        try:
+            module._write_refusal_report(str(staging), refusal)
+        finally:
+            done.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    finished = done.wait(timeout=5.0)
+
+    assert finished, (
+        "REPAIRED: the refusal writer waited on a __str__ that never returns. Wrapping str() in "
+        "`except Exception` cannot interrupt a callback that does not raise — the fix is to stop "
+        "rendering arbitrary objects in this path")
+    assert not refusal.entered.is_set(), (
+        "the writer still called __str__ on the refusal object. A validated reason code carried "
+        "from the failure needs no rendering at all")
+    assert rp.read_text(encoding="utf-8").startswith("scan_gate: REFUSED"), (
+        "and it must still publish a refusal, with a class, rather than skipping the publish")
+
+
+def test_a_retained_report_whose_policy_failed_is_not_presented_as_compliant(
+    tmp_path: Path
+) -> None:
+    """REPAIRED: bytes are preserved; a reserved name is not handed to a non-compliant file.
+
+    The reserved quarantine names mean "retained evidence, published under the report policy". A
+    file whose ACL strip was denied has not had that policy installed, so it does not get one of
+    those names — its bytes stay at the staged name, which promises nothing.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "retained_policy_failed")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    try:
+        os.mkfifo(str(reports / "scan_report.txt"))
+    except (OSError, AttributeError):
+        pytest.skip("this platform cannot create a FIFO; the retention path is not reachable here")
+
+    denied: list[str] = []
+
+    def removexattr_denied(path, *args, **kwargs):
+        denied.append(str(path))
+        raise PermissionError(errno.EPERM, "strip denied (injected)")
+
+    real_removexattr = module.os.removexattr
+    module.os.removexattr = removexattr_denied
+    try:
+        with pytest.raises(Exception):
+            module.write_report(str(staging), NEW_HIT)
+    finally:
+        module.os.removexattr = real_removexattr
+
+    if not denied:
+        pytest.skip("this build attempted no ACL strip; nothing was made to fail")
+
+    assert _findings_anywhere(reports, "docs/example.md:12"), (
+        "CONTROL: the bytes must survive regardless — preserving evidence outranks labelling it")
+    reserved = [p.name for p in reports.iterdir()
+                if p.name.startswith("scan_report.unpublished")
+                and "docs/example.md:12" in p.read_text(encoding="utf-8")]
+    assert not reserved, (
+        f"REPAIRED: findings whose access policy could not be installed were linked into the "
+        f"reserved name(s) {reserved} and reported as retained. A reserved name says the report "
+        "policy is on the file; here it was denied and swallowed")
+
+
+def test_the_refusal_docstring_does_not_describe_a_guard_it_no_longer_has(tmp_path: Path) -> None:
+    """REPAIRED: the docstring said it catches only OSError/UnicodeError and lets a ValueError
+    from __str__ propagate. Round eighteen changed both and left the paragraph standing."""
+    source = SCANNER.read_text(encoding="utf-8")
+    doc = source[source.index("def _write_refusal_report"):]
+    doc = doc[:doc.index('"""', doc.index('"""') + 3)]
+    # Asserted on the CLAIM, not on the token. The corrected paragraph legitimately names
+    # ValueError while recording what it used to say, and an arm keyed on the bare word would
+    # forbid the correction from explaining itself.
+    assert "still propagates: a refusal whose __str__ raises" not in doc, (
+        "the refusal writer's docstring still claims an unexpected type propagates and replaces "
+        "the refusal being reported; the guard became `except Exception` two rounds ago")
+    assert "scoped to the errors this can expect" not in doc, (
+        "and it still describes an OSError/UnicodeError-only guard that the code no longer has")
