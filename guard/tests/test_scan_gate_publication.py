@@ -3462,3 +3462,118 @@ def test_a_failed_acl_strip_does_not_skip_the_mode_cap(tmp_path: Path, monkeypat
         f"REPAIRED: the ACL strip failed and took the mode cap down with it — the preserved copy "
         f"is {got:04o}. A report nobody should have been able to read stayed group- and "
         "other-readable because an unrelated call raised")
+
+
+# =============================================================================================
+# GROUP 24 — the seventeenth round, third part. A publish that REFUSES must not take this scan's
+# findings down with it.
+#
+# The cold leg reproduced this from the CLI. A FIFO at the canonical report name is not a
+# symlink, so the path check admits it; the policy installer then refuses it as a non-regular
+# file; and the failure path unlinked the staged temporary that held the secrets this scan had
+# just found. `_write_refusal_report` runs next and receives only the EXCEPTION — it has no
+# access to `hits` and cannot carry them — so it publishes `scan_gate: REFUSED input-error` over
+# the top. The operator is left with a refusal naming a permission problem, and the evidence that
+# there were real secrets in the tree is gone.
+#
+# Any other OSError out of the policy installer takes the same path: a foreign uid, a gid that
+# cannot be preserved, a mode the filesystem will not verify.
+#
+# So a staged FINDINGS report that cannot be published is kept at a reserved name instead of
+# deleted. A staged CLEAN is not: it carries no evidence, and leaving one beside a refusal would
+# put a file saying CLEAN next to an rc 2, which is the false-authorization direction every other
+# rule in this file exists to prevent.
+# =============================================================================================
+
+
+UNPUBLISHED_REL = Path("_reports") / "scan_report.unpublished.txt"
+
+
+def test_findings_survive_a_policy_failure_instead_of_being_unlinked(tmp_path: Path) -> None:
+    """REPAIRED: the hits this scan found outlive a publish that could not complete."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quarantine_fifo")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    fifo = reports / "scan_report.txt"
+    try:
+        os.mkfifo(str(fifo))
+    except (OSError, AttributeError):
+        pytest.skip("this platform cannot create a FIFO; the refusal state is not reachable here")
+
+    with pytest.raises(Exception):
+        module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                            "generic_key_assignment", "contents")])
+
+    kept = staging / UNPUBLISHED_REL
+    assert kept.exists(), (
+        "REPAIRED: the staged findings were unlinked on the way out of a failed publish. The "
+        "refusal writer that runs next receives only the exception and cannot carry them, so "
+        "this scan's evidence is gone and the caller sees a permission complaint instead")
+    body = kept.read_text(encoding="utf-8")
+    assert "docs/example.md:12" in body and "SECRET" in body, (
+        f"the kept file is not the findings report — it holds {body!r}")
+    mode = stat.S_IMODE(kept.stat().st_mode)
+    assert mode == 0o600, (
+        f"the kept findings landed at {mode:04o}; a report that could not be published is still a "
+        "report naming secrets, and it does not get a wider audience than one that could")
+
+    # CONTROL: the fixture really did drive the refusal path rather than some other failure.
+    assert stat.S_ISFIFO(os.stat(str(fifo), follow_symlinks=False).st_mode), (
+        "CONTROL: the FIFO is gone, so this arm measured a different failure than the one it "
+        "was written for")
+
+
+def test_a_staged_clean_is_not_kept_when_the_publish_fails(tmp_path: Path) -> None:
+    """CONTROL-SHAPED REPAIR: only EVIDENCE is worth keeping past a refusal.
+
+    A staged status line carries nothing, and a file saying CLEAN sitting beside an rc 2 is the
+    false authorization this scanner exists to prevent. The asymmetry is the point: findings are
+    kept, status lines are not.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quarantine_clean")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    try:
+        os.mkfifo(str(reports / "scan_report.txt"))
+    except (OSError, AttributeError):
+        pytest.skip("this platform cannot create a FIFO; the refusal state is not reachable here")
+
+    with pytest.raises(Exception):
+        module.write_report(str(staging), [])
+
+    assert not (staging / UNPUBLISHED_REL).exists(), (
+        "a staged CLEAN was kept past the refusal. It is not evidence, and a file saying CLEAN "
+        "beside an rc 2 tells a reader this tree passed")
+    leftovers = [p.name for p in reports.iterdir() if p.name.startswith(".scan_report_")]
+    assert not leftovers, (
+        f"the staged temporary was left behind as {leftovers}; not keeping it means removing it")
+
+
+def test_a_later_successful_publish_clears_the_unpublished_findings(tmp_path: Path) -> None:
+    """The generation boundary applies to this name too, exactly as it does to the slots.
+
+    A kept unpublished report belongs to the scan that could not publish it. Once a later scan
+    HAS published, leaving it behind puts a stale findings file beside a current report, and the
+    reader cannot tell which run either came from.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quarantine_cleared")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    stale = staging / UNPUBLISHED_REL
+    stale.write_text("aws\tkey\tassignment\tdocs/old.md:1\n", encoding="utf-8")
+
+    module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                        "generic_key_assignment", "contents")])
+
+    assert (staging / REPORT_REL).exists(), "CONTROL: this run must actually have published"
+    assert not stale.exists(), (
+        "a successful publish left the previous generation's unpublished findings in place; the "
+        "reserved names belong to one report generation, and this is where that generation ends")

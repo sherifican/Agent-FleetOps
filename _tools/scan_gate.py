@@ -425,11 +425,67 @@ def _install_posix_acl_policy(src, dst_fd, dst):
 _SUPERSEDED_SLOTS = 8
 
 
-def _superseded_slots(reports_dir):
-    """Every name the preserved copy may occupy, in the order they are tried."""
+# RESERVED NAME. Where a staged FINDINGS report goes when it could not be published. It belongs
+# to this scanner on the same terms as the preservation slots: it is removed at the next
+# successful publication, and nothing you care about should live at this name.
+_UNPUBLISHED_NAME = "scan_report.unpublished.txt"
+
+
+def _quarantine_unpublished(reports_dir, tmp_path, fd, hits):
+    """Keep a staged findings report the publish could not complete. Answer whether it was kept.
+
+    A False answer means the caller should remove the staged file, and that is the ordinary case.
+
+    WHY THIS EXISTS. Every failure path out of write_report used to unlink the staged temporary,
+    and `_write_refusal_report` runs next holding only the EXCEPTION — it never receives `hits`
+    and cannot carry them. A cold review leg reproduced the consequence from the CLI: a FIFO at
+    the canonical report name is not a symlink, so the path check admits it and the policy
+    installer refuses it as a non-regular file; the secrets this scan had just found were deleted
+    on the way out; and the refusal published over the top said `input-error`. The operator is
+    left with a permission complaint and no sign that the tree actually contained secrets. Any
+    other OSError from the installer takes the same route — a foreign uid, an unpreservable gid,
+    a mode the filesystem will not verify.
+
+    ONLY EVIDENCE IS KEPT, and the asymmetry is deliberate. A staged CLEAN carries nothing, and a
+    file saying CLEAN left beside an rc 2 tells a reader this tree was scanned and passed, which
+    is the false authorization every other rule here exists to prevent. Findings beside a refusal
+    say "there are secrets here", which is the conservative direction.
+
+    An EMPTY staged file is not kept either: the failure preceded the write, so there is nothing
+    in it to preserve and a zero-length findings report would be its own false statement.
+
+    The mode goes on through the held descriptor and the staged name is checked to still BE that
+    descriptor's inode, for the same reason the publish path does both: this runs inside an
+    untrusted directory, and it runs when something has already gone wrong.
+    """
+    if not hits:
+        return False
+    try:
+        held = os.fstat(fd)
+        if held.st_size == 0:
+            return False
+        named = os.stat(tmp_path, follow_symlinks=False)
+        if (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino):
+            return False
+        os.fchmod(fd, _REPORT_MODE)
+        os.replace(tmp_path, os.path.join(reports_dir, _UNPUBLISHED_NAME))
+    except OSError:
+        return False
+    return True
+
+
+def _superseded_slots(reports_dir, include_unpublished=False):
+    """Every name the preserved copy may occupy, in the order they are tried.
+
+    include_unpublished adds the quarantine name, which is NOT a preservation slot and is never
+    linked into — it is only ever swept. Preservation must not try to link findings into it,
+    because a scan that could not publish already owns that name.
+    """
     yield os.path.join(reports_dir, "scan_report.superseded.txt")
     for n in range(1, _SUPERSEDED_SLOTS):
         yield os.path.join(reports_dir, "scan_report.superseded.%d.txt" % n)
+    if include_unpublished:
+        yield os.path.join(reports_dir, _UNPUBLISHED_NAME)
 
 
 def _harden_report_dir(reports_dir, restore_owner=False):
@@ -582,7 +638,10 @@ def write_report(staging, hits):
         # held the slot while the current ones were destroyed. A planted name had the same effect
         # permanently, which made refusing to overwrite into a denial-of-preservation. The slot
         # belongs to one report generation, and this is where that generation ends.
-        for _superseded in _superseded_slots(reports_dir):
+        # The unpublished name belongs to the generation that could not publish, so a run that
+        # HAS published ends it along with the preservation slots. Leaving it would stand a stale
+        # findings file beside a current report with nothing to say which run either came from.
+        for _superseded in _superseded_slots(reports_dir, include_unpublished=True):
             try:
                 os.unlink(_superseded)
             except IsADirectoryError:
@@ -596,10 +655,13 @@ def write_report(staging, hits):
             except OSError:
                 pass
     except BaseException:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        # KEEP THE FINDINGS if there are any and they made it to disk. Unlinking here destroyed
+        # the hits this scan had just written, and the refusal that follows cannot carry them.
+        if not _quarantine_unpublished(reports_dir, tmp_path, fd, hits):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
         raise
     finally:
         try:
@@ -774,8 +836,15 @@ def _write_refusal_report(staging, refusal):
     """Best-effort: replace an EXISTING report with a single REFUSED line, so that a stale CLEAN
     does not survive beside an rc 2 wherever this function can reach it. Never raises; the
     original refusal still propagates. Writes through a temporary file in the real
-    <staging>/_reports directory, atomically put in place with os.replace. Creates nothing when
-    no report exists.
+    <staging>/_reports directory, atomically put in place with os.replace.
+
+    "Creates nothing when no report exists" stood here and was not quite true; the cold leg
+    caught it. The existence test is os.path.lexists, which a DANGLING SYMLINK satisfies — so at
+    a report name pointing nowhere this function unlinks the link and creates a regular file
+    holding a REFUSED line, where write_report would have refused the same state outright. The
+    two writers therefore disagree about whether a symlink is a report, and this one is the
+    permissive side. That is the intended direction for a writer whose job is to leave a refusal
+    record rather than to publish, but it is a creation, so the sentence now says so.
 
     WHERE IT CANNOT REACH, stated plainly because an earlier revision of this docstring claimed
     the guarantee unconditionally and gate review falsified it three ways:

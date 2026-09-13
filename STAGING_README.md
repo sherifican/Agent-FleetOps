@@ -88,11 +88,21 @@ of who wrote them:
     scan_report.txt
     scan_report.superseded.txt
     scan_report.superseded.1.txt  …  scan_report.superseded.7.txt
+    scan_report.unpublished.txt
 
 The numbered names became scanner-owned when the preservation slot was widened from one name to
 eight. Gate review measured an ordinary pre-existing file at `scan_report.superseded.1.txt` being
 destroyed by a clean scan. A filename does not establish provenance, so the reservation is stated
 here rather than assumed — do not keep anything you care about at these names.
+
+`scan_report.unpublished.txt` is where a FINDINGS report goes when the publish could not
+complete — a FIFO or a foreign-owned file at the report name, a group that cannot be preserved, a
+mode the filesystem will not verify. Those failures used to delete the staged findings, and the
+refusal written next carries only an error class, never the hits, so the evidence that the tree
+contained secrets was lost at exactly the moment it mattered. A staged CLEAN is NOT kept this way:
+it is not evidence, and a file saying CLEAN beside an exit status of 2 tells a reader this tree
+passed. The kept file is `0600` like any other report, and the next successful publication removes
+it along with the preservation slots.
 
 A preserved copy is a HARD LINK to the report being replaced, not a duplicate of it, and the
 scanner narrows that inode to owner-only — otherwise preservation would keep exactly the exposure
