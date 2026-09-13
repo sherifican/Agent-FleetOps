@@ -1853,6 +1853,21 @@ def test_a_refusal_report_strips_the_access_control_list_too(tmp_path: Path) -> 
     assert proc.returncode == 0, "CONTROL: a clean run, so there is a report to replace"
     rp = staging / REPORT_REL
 
+    # A DEFAULT ACL on the DIRECTORY. The refusal republishes through its own mkstemp inode, which
+    # never inherits the old FILE's ACL — only the directory's default one. Gate review caught this
+    # arm still unable to fail after I claimed I had fixed both strip arms: I seeded the ordinary
+    # one and asserted it of both. An arm declared fixed is worse than one known broken.
+    reports_dir = staging / "_reports"
+    inherited = subprocess.run(["setfacl", "-d", "-m", f"u:{os.geteuid()}:r,g::r", str(reports_dir)],
+                               capture_output=True, text=True)
+    if inherited.returncode != 0:
+        pytest.skip(f"the filesystem refused a default ACL: {inherited.stderr.strip()[:80]}")
+    probe = reports_dir / ".inherit_probe"
+    probe.write_text("x", encoding="utf-8")
+    inherits = _acl(probe) is not None
+    probe.unlink()
+    if not inherits:
+        pytest.skip("this filesystem does not hand a new file the directory default ACL")
     named = subprocess.run(["setfacl", "-m", f"u:{os.geteuid()}:r", "--", str(rp)],
                            capture_output=True, text=True)
     if named.returncode != 0:
@@ -3118,3 +3133,130 @@ def test_a_planted_report_cannot_hand_its_group_the_findings(tmp_path: Path,
         "path and line of each one")
     assert not mode & 0o007, f"and no other access, not {mode:04o}"
     assert mode & stat.S_IRUSR, f"while the owner must still be able to read it, not {mode:04o}"
+
+
+@pytest.mark.parametrize("planted", [0o644, 0o640, 0o666])
+def test_the_preserved_copy_is_narrowed_not_left_at_the_mode_it_had(tmp_path: Path,
+                                                                    planted: int) -> None:
+    """Review: "preservation keeps the leak the owner-only publish was about to close."
+
+    The reserved slot is a SECOND published name inside the untrusted tree, and a hard link keeps
+    the old inode's mode and ACL by definition — which is the point when preserving evidence and
+    the problem when that evidence was published wide. A findings report at a planted 0644 is
+    replaced owner-only at the canonical name while the preserved copy sits beside it still
+    group- and other-readable, and os.replace would have dropped that inode entirely.
+
+    This is NOT the closed finding about the replacement branch preserving a planted mode. That
+    was the canonical file; this is the slot, and the refusal path is the one that keeps it.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "preserved_mode_%o" % planted)
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    findings = "SECRET\tgeneric_key_assignment\tcontents\tdocs/example.md:12\n"
+    rp.write_text(findings, encoding="utf-8")
+    rp.chmod(planted)
+
+    module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe 'a'"))
+
+    kept = [reports_dir / n for n in _superseded_names() if (reports_dir / n).exists()]
+    assert kept, "CONTROL: nothing was preserved, so there is no mode to assert"
+    for k in kept:
+        mode = stat.S_IMODE(k.stat().st_mode)
+        assert not mode & 0o077, (
+            f"the preserved copy {k.name} is {mode:04o}, carried from a report planted at "
+            f"{planted:04o}. The canonical name was published owner-only and the findings stayed "
+            "readable beside it under a second name this tool created")
+
+
+def test_the_refusal_fallback_strips_an_inherited_acl_too(tmp_path: Path) -> None:
+    """The fallback ASSIGNED 0600 and stopped, which is owner-only in the mode bits only.
+
+    It runs when the ordinary policy install has already failed — the path that executes when
+    something has gone wrong — and said nothing about an ACL the directory handed the staged file
+    at creation. A report whose mode reads 0600 while an inherited entry still grants a named user
+    is exactly the channel a mode cap cannot see.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores these checks; this needs an unprivileged writer")
+    if shutil.which("setfacl") is None:
+        pytest.skip("setfacl is not installed; the ACL contract cannot be measured here")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "fallback_acl_strip")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+
+    applied = subprocess.run(["setfacl", "-d", "-m", f"u:{os.geteuid()}:r,g::r", str(reports_dir)],
+                             capture_output=True, text=True)
+    if applied.returncode != 0:
+        pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
+    probe = reports_dir / ".inherit_probe"
+    probe.write_text("x", encoding="utf-8")
+    inherits = _acl(probe) is not None
+    probe.unlink()
+    if not inherits:
+        pytest.skip("this filesystem does not hand a new file the directory default ACL")
+
+    # Force the ordinary policy install to fail so the FALLBACK is what publishes.
+    def refusing_policy(src, dst):
+        raise OSError(errno.EIO, "report-permission-preservation-failed")
+    module._install_posix_acl_policy = refusing_policy
+
+    module._write_refusal_report(str(staging), module.ScanRefused("invalid-wide-encoding 'b'"))
+
+    assert rp.read_text(encoding="utf-8").startswith("scan_gate: REFUSED"), (
+        "CONTROL: the fallback did not publish, so there is nothing to assert about it")
+    assert _acl(rp) is None, (
+        "the fallback published a report still carrying the directory's inherited ACL: its mode "
+        "reads owner-only and its actual access does not")
+    assert not stat.S_IMODE(rp.stat().st_mode) & 0o077, "and the mode must be owner-only too"
+
+
+@pytest.mark.parametrize("dmode", [0o300, 0o700, 0o755])
+def test_a_write_and_traverse_report_directory_still_publishes(tmp_path: Path,
+                                                               dmode: int) -> None:
+    """An availability regression the hardening introduced, caught by the gate with a control.
+
+    A directory at 0300 grants WRITE and TRAVERSE but not READ. Its owner can create and traverse
+    named entries there perfectly well — an O_RDONLY open of it simply fails. Round fourteen used
+    O_RDONLY alone to anchor the hardening and turned that into a refusal, where the parent
+    scanner published normally. Measured both ways before the fix.
+
+    O_PATH opens such a directory without requiring read; its descriptor cannot be fchmod'd, so
+    the mode is reached through /proc/self/fd. Both handles stay O_NOFOLLOW.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permission bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "wx_dir_%o" % dmode)
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    reports_dir.chmod(dmode)
+    try:
+        canary = reports_dir / ".canary"
+        fd = os.open(str(canary), os.O_CREAT | os.O_WRONLY, 0o600)
+        os.close(fd)
+        os.unlink(str(canary))
+    except OSError:
+        reports_dir.chmod(0o700)
+        pytest.skip(f"this filesystem does not allow creating in a {dmode:04o} directory")
+
+    try:
+        module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                            "generic_key_assignment", "contents")])
+        published = (reports_dir / "scan_report.txt").exists()
+    finally:
+        reports_dir.chmod(0o700)
+
+    assert published, (
+        f"a {dmode:04o} report directory refused the publish, but its owner can create there — "
+        "the hardening turned a working configuration into a refusal, which is a stale-CLEAN "
+        "consequence rather than a permission limit")

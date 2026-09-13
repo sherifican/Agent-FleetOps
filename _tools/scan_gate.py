@@ -476,15 +476,39 @@ def _harden_report_dir(reports_dir):
     operator had them: this narrows who can FORGE the report, not who can find it, and it touches
     the scanner's own output directory rather than anything it was asked to scan.
     """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    opath = getattr(os, "O_PATH", 0)
+
+    # O_RDONLY first, then O_PATH. A directory at 0300 — WRITE and TRAVERSE but not READ — lets
+    # its owner create and traverse named entries perfectly well, and an O_RDONLY open of it
+    # fails. Round fourteen used O_RDONLY alone and turned that into a refusal: gate review
+    # measured the parent publishing normally in exactly that fixture while this code refused,
+    # with a control confirming the owner could still create there. That is an availability
+    # regression introduced by the hardening, not a filesystem limit.
+    #
+    # O_PATH opens the directory without requiring read, but an O_PATH descriptor cannot be
+    # fchmod'd, so the mode is reached through its /proc/self/fd entry. Both handles are still
+    # O_NOFOLLOW, so neither can be swapped onto a symlink after the check.
+    fd = None
+    via_proc = False
     try:
-        fd = os.open(reports_dir, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
-    except OSError as exc:
-        raise ScanRefused("report-dir-unsafe '_reports'") from exc
+        fd = os.open(reports_dir, os.O_RDONLY | os.O_DIRECTORY | nofollow)
+    except OSError:
+        if opath:
+            try:
+                fd = os.open(reports_dir, opath | os.O_DIRECTORY | nofollow)
+                via_proc = True
+            except OSError as exc:
+                raise ScanRefused("report-dir-unsafe '_reports'") from exc
+        else:
+            raise ScanRefused("report-dir-unsafe '_reports'")
     try:
-        mode = stat.S_IMODE(os.fstat(fd).st_mode)
+        target = "/proc/self/fd/%d" % fd if via_proc else fd
+        mode = stat.S_IMODE(os.stat(target).st_mode if via_proc else os.fstat(fd).st_mode)
         if mode & 0o022:
-            os.fchmod(fd, mode & ~0o022)
-            if stat.S_IMODE(os.fstat(fd).st_mode) & 0o022:
+            os.chmod(target, mode & ~0o022)
+            now = stat.S_IMODE(os.stat(target).st_mode if via_proc else os.fstat(fd).st_mode)
+            if now & 0o022:
                 raise ScanRefused("report-dir-writable '_reports'")
     except OSError as exc:
         raise ScanRefused("report-dir-unsafe '_reports'") from exc
@@ -598,6 +622,35 @@ def _preserve_superseded(reports_dir, report_path):
             continue                      # occupied, unusable, or unsupported — try the next
         linked = candidate
         break
+
+    if linked is not None:
+        # NARROW THE PRESERVED COPY. The slot is a SECOND published name inside the untrusted
+        # tree, and a hard link keeps the old inode's mode and ACL by definition — which is the
+        # point when preserving evidence and the problem when that evidence was published wide.
+        # Review put it exactly: preservation keeps the leak the owner-only publish was about to
+        # close. A findings report sitting at a planted 0644 is replaced owner-only at the
+        # canonical name while the preserved copy stays group- and other-readable beside it, and
+        # os.replace would have dropped that inode entirely.
+        #
+        # This narrows BOTH names, because they are one inode — deliberately. The canonical one is
+        # about to be replaced, and narrowing a report nobody should have been able to read is
+        # safe in the interim. If preservation is refused and the report stays, it stays narrower
+        # than it was, which is the direction that cannot hurt.
+        try:
+            _kept = stat.S_IMODE(os.lstat(linked).st_mode)
+            if _XATTR_SUPPORTED:
+                try:
+                    os.removexattr(linked, ACL_XATTR, follow_symlinks=False)
+                except OSError as exc:
+                    if exc.errno not in _ACL_ABSENT:
+                        raise
+            if _kept & 0o077:
+                os.chmod(linked, _kept & 0o600)
+        except OSError:
+            # Best effort: failing to narrow the kept copy must not destroy it. The canonical
+            # publish still lands owner-only, and a preserved copy that could not be narrowed is
+            # strictly better than no preserved copy at all.
+            pass
 
     # Classify only AFTER the link, so a failed read cannot prevent preservation — and classify
     # THROUGH THE LINK, not through report_path. The two names described the same inode at link
@@ -789,6 +842,18 @@ def _write_refusal_report(staging, refusal):
             try:
                 with os.fdopen(fd, "w") as f:
                     f.write(f"scan_gate: REFUSED {reason_class}\n")
+                # Strip any inherited ACL here too. This fallback runs when the ordinary policy
+                # install failed, and it used to ASSIGN 0600 and stop — which is owner-only in the
+                # mode bits and says nothing about an ACL the directory handed the staged file at
+                # creation. A report whose mode reads 0600 while an inherited entry still grants a
+                # named user is exactly the channel the mode cap cannot see, and the fallback is
+                # the path that runs when something has already gone wrong.
+                if _XATTR_SUPPORTED:
+                    try:
+                        os.removexattr(tmp_path, ACL_XATTR, follow_symlinks=False)
+                    except OSError as exc:
+                        if exc.errno not in _ACL_ABSENT:
+                            raise
                 os.chmod(tmp_path, 0o600)
                 os.replace(tmp_path, report_path)
             except BaseException:
