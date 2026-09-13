@@ -348,199 +348,85 @@ _ACL_ABSENT = frozenset(
 
 
 def _install_posix_acl_policy(src, dst):
-    """Install the report's whole access policy on dst, while dst is still private.
+    """Install the report's access policy on the staged file, before it is ever published.
 
-    st_mode is only part of the permission contract. A POSIX ACL lives in an extended attribute, so
-    a replace that preserves the mode can still change WHO may read the file, because the new inode
-    inherits the DIRECTORY's default ACL rather than the one the old report carried.
+    ONE RULE, BOTH BRANCHES: the report this scanner publishes is OWNER-ONLY, or narrower where
+    the directory or the report being replaced was narrower. Nothing inside the scanned tree can
+    widen it. The mode is INTERSECTED, never assigned, so a stricter policy still wins and no
+    policy can loosen.
 
-    The ORDER is the contract, and it is why this is one function rather than a chmod standing
-    beside an ACL copy. Setting the mode first opens a window in which the temporary file already
-    grants group and other access under the INHERITED policy, and the intended one lands after.
-    Installing both here, with dst still at mkstemp's 0600, means that window never opens.
+    Two review legs converged on this after four rounds of narrower rules, each of which left one
+    audience behind:
 
-    Replacing an existing report preserves its mode AND its ACL, including the ABSENCE of one: an
-    inherited entry is removed rather than left to widen access silently — NARROWED so that
-    "other" never gains access, because the report being replaced lives in the untrusted tree and
-    a committed one checks out 0644.
+      round ten     capped "other" on new reports, arguing group access expressed a sharing
+                    decision. It does not: an ordinary create grants the process's primary group
+                    access with no setgid directory, no default ACL, and nobody deciding anything.
+      round eleven  made new reports owner-only and left the REPLACEMENT path uncapped, where a
+                    planted 0644 republished the findings at 0644.
+      round fourteen capped group WRITE on replacement and kept group READ, reasoning that the
+                    demonstrated attack was a write. Both legs refused that: a planted 0640 hands
+                    the file's group the class, path and line of every secret found, and "there
+                    was an existing file" is not a sharing decision by anyone who matters when the
+                    existing file came out of the untrusted tree.
 
-    A genuinely new report is OWNER-ONLY. It does not keep what the directory gave it: that rule
-    published findings at 0644 under an ordinary umask, and the earlier promise of exact
-    ordinary-create inheritance is deliberately broken here rather than quietly preserved. A
-    directory policy STRICTER than 0600 still applies, since the mode is intersected and an
-    intersection cannot widen.
+    NO ACL IS CARRIED ONTO THE PUBLISHED REPORT, and any inherited one is removed. Copying the old
+    report's ACL was the same defect in a channel the mode cap could not see: a named-user entry on
+    a planted report was copied verbatim onto the findings inode, and an inherited default ACL made
+    "owner-only" true of the mode bits and false of the actual access. Removing is always narrowing,
+    so it cannot introduce the failure it prevents. A directory policy STRICTER than owner-only
+    still applies, because it is already present in the staged inode's own mode.
 
-    Failure raises. A report whose access policy could not be established must not be published
-    under a guess about who may read it — which is also why the mode probe answers 0600 rather
-    than a umask formula when it cannot measure.
-
-    The domain is POSIX access ACLs. On a filesystem expressing policy some other way, this
-    preserves mode and ownership and says nothing about the rest.
+    Ownership is still preserved: a different uid refuses, because an unprivileged process cannot
+    give a file away and publishing under an identity the old report did not have is its own
+    change of policy. A different gid is repaired where possible and refuses where not.
     """
     try:
+        # What the directory ACTUALLY gave the private mkstemp inode. mkstemp is itself an ordinary
+        # create in this directory, so this carries the default ACL and the umask already — the one
+        # term in the intersection that is measured rather than probed or guessed.
+        staged = stat.S_IMODE(os.stat(dst, follow_symlinks=False).st_mode)
+
         try:
             old = os.stat(src, follow_symlinks=False)
         except FileNotFoundError:
-            # A new report: capped at owner read/write, and RETAINING any stricter restriction
-            # the directory's own creation policy applied. "Ordinary create MINUS other" was the
-            # round-ten rule and is superseded — it left group access nobody had chosen.
-            #
-            # Ordinary-create semantics are right for the DIRECTORY's explicit policy — a default
-            # ACL is a deliberate statement about who may read files here, and inheriting it is
-            # the correct behaviour. They are wrong as a fallback when no such policy exists,
-            # because then the answer comes from the umask, and review measured what that means:
-            # at the ordinary login umask 0022 a findings report was published 0644, and at
-            # umask 0 it was 0666 in a 0777 directory. This report lists the CLASS, PATH and LINE
-            # of every secret found. An ordinary file it is not.
-            #
-            # HISTORICAL, and wrong — kept only because the sentence below answers it. Round ten
-            # capped "other" alone, arguing that group access expressed a sharing decision. The
-            # gate refused that reasoning: an ordinary create grants the process's PRIMARY GROUP
-            # access with no setgid directory, no default ACL, and nobody having decided
-            # anything. The rule is now owner-only, and what follows is the current policy.
-            # & 0o600: never WIDER than owner-only, and narrower where the directory says so.
-            #
-            # The gate rejected the weaker rule this replaced. Capping only "other" assumed group
-            # access implied a sharing decision; it does not — an ordinary create grants the
-            # process's primary group access with no setgid directory, no default ACL and nobody
-            # having decided anything. A report naming the class, path and line of every secret
-            # found does not get a default audience by accident.
-            #
-            # Intersecting rather than assigning keeps the inheritance machinery meaningful in the
-            # direction that is always safe: a directory whose default ACL is STRICTER than 0600
-            # still wins, because the probe returns that stricter mode and the mask cannot widen
-            # it. What is gone is the old promise of EXACT ordinary-create inheritance, which the
-            # gate correctly called a contract this commit breaks rather than preserves.
-            # Three sources, intersected, because each one can be wrong on its own:
-            #
-            #   _report_mode   what an ordinary create in this directory produces — EXCEPT that
-            #                  it returns a guessed 0o600 when its unnamed probe is unsupported,
-            #                  and a guess cannot preserve a restriction it never measured. The
-            #                  gate reproduced that: a u::r,g::-,o::- default ACL with the probe
-            #                  forced to fail published 0600 where 0400 was the directory's
-            #                  actual answer, and u::-,g::-,o::- published 0600 where 0000 was.
-            #   0o600          the confidentiality cap: a report naming the class, path and line
-            #                  of every secret found gets no default audience.
-            #   staged         what the directory ACTUALLY gave the private mkstemp inode. This
-            #                  is not a guess at any point: mkstemp is itself an ordinary create
-            #                  in this directory, so its mode already carries the default ACL and
-            #                  the umask. It is the failed-probe answer, measured rather than
-            #                  assumed.
-            #
-            # Intersection cannot widen, so adding a term can only ever tighten the result, and
-            # the stricter-wins arm still proves the directory is consulted rather than the value
-            # being hard-coded.
-            staged = stat.S_IMODE(os.stat(dst, follow_symlinks=False).st_mode)
-            os.chmod(dst, _report_mode(src, os.path.dirname(dst)) & 0o600 & staged)
-            return
-
-        current = os.stat(dst, follow_symlinks=False)
-        if not stat.S_ISREG(old.st_mode) or not stat.S_ISREG(current.st_mode):
-            raise OSError(errno.EINVAL, "report-policy-requires-regular-files")
-        if old.st_uid != current.st_uid:
-            # A different OWNER is not recoverable here: an unprivileged process cannot give a file
-            # away, so the old policy genuinely cannot be reinstated. Refuse rather than publish
-            # under an identity the old report did not have.
-            raise OSError(errno.EPERM, "report-policy-owner-differs")
-        if old.st_gid != current.st_gid:
-            # A different GROUP is ordinary and usually fixable: a report written under newgrp, an
-            # owner's chgrp, or a setgid report directory all produce one with nobody hostile
-            # involved. Refusing outright used to compose with the refusal writer's fallback into
-            # DELETING the report over a condition this process can simply correct, so correct it
-            # — and only refuse when the correction is the thing that fails.
-            try:
-                # follow_symlinks=False like every other metadata call here. The S_ISREG check
-                # above happens once, before this point; os.chown follows by default, so a dst
-                # that was a regular file at the check and a symlink by now would have its
-                # TARGET regrouped. The function already decided not to follow.
-                os.chown(dst, -1, old.st_gid, follow_symlinks=False)
-            except OSError as exc:
-                raise OSError(exc.errno, "report-policy-group-not-preservable") from exc
+            # A NEW report. _report_mode proposes what an ordinary create here produces, except
+            # that it returns a guessed 0o600 when its unnamed probe is unsupported — so `staged`
+            # is what rescues the restriction that guess would discard.
+            mode = _report_mode(src, os.path.dirname(dst)) & 0o600 & staged
+        else:
             current = os.stat(dst, follow_symlinks=False)
-            if current.st_gid != old.st_gid:
-                raise OSError(errno.EPERM, "report-policy-group-not-preservable")
+            if not stat.S_ISREG(old.st_mode) or not stat.S_ISREG(current.st_mode):
+                raise OSError(errno.EINVAL, "report-policy-requires-regular-files")
+            if old.st_uid != current.st_uid:
+                raise OSError(errno.EPERM, "report-policy-owner-differs")
+            if old.st_gid != current.st_gid:
+                # An ordinary difference — a report written under newgrp, an owner's chgrp, a
+                # setgid report directory — and repairable. follow_symlinks=False like every other
+                # metadata call here: os.chown follows by default, and a dst that was regular at
+                # the check above and a symlink by now would have its TARGET regrouped.
+                try:
+                    os.chown(dst, -1, old.st_gid, follow_symlinks=False)
+                except OSError as exc:
+                    raise OSError(exc.errno, "report-policy-group-not-preservable") from exc
+                if os.stat(dst, follow_symlinks=False).st_gid != old.st_gid:
+                    raise OSError(errno.EPERM, "report-policy-group-not-preservable")
+            mode = stat.S_IMODE(old.st_mode) & 0o600
 
-        # ONE policy, both branches: the report this tool publishes is owner-only, or narrower
-        # where the old one was narrower. Intersect, never assign.
-        #
-        # Preserving the old mode exists because forcing a umask-derived one once WIDENED an
-        # existing private report. But in this product the "existing report" lives inside the tree
-        # being scanned, and that tree is untrusted — so its mode is attacker-supplied. Review
-        # measured planted 0644 -> published 0644 and planted 0666 -> published 0666, which closed
-        # the "other" half. This round closes the GROUP half, which the previous comment here
-        # explicitly kept: "a 0660 keeps group write". A planted 0660 is the same plant with a
-        # different audience — any member of the staging tree's group overwrites the published
-        # report with a CLEAN line after the scanner returns, and a reader sees CLEAN.
-        #
-        # Group READ is deliberately KEPT, and that is a judgement worth stating rather than
-        # burying. The demonstrated attack is a WRITE: a group member overwrites the published
-        # report with a CLEAN line after the scanner returns. Dropping group read as well would
-        # also refuse every report carrying an ACL that grants a group, since installing such an
-        # ACL restores the bits the cap removed and the mode verification then fails — a real
-        # availability cost for a disclosure argument nobody has demonstrated against a REPLACED
-        # report. So this closes the sequence that was shown and leaves the one that was not.
-        #
-        # A genuinely narrower policy still wins: 0400 stays 0400 and 0000 stays 0000, because an
-        # intersection cannot widen. What is gone is the scanned tree's ability to hand its own
-        # report's WRITE access to anybody.
-        #
-        # Fail-closed consequence, stated rather than discovered: if the old report carries a
-        # POSIX ACL that grants "other", installing that ACL restores the bits this cap removed,
-        # the mode verification below then fails, and the publish is refused instead of going out
-        # wide. A refusal is the safe direction for a secrets report; it is not silent.
-        mode = stat.S_IMODE(old.st_mode) & ~0o037
-        if not _XATTR_SUPPORTED:
-            # No POSIX-ACL xattr API here, so there is no ACL for THIS code to carry, and the
-            # mode is carried over instead. That is a mode-only fallback outside the implemented
-            # POSIX-ACL domain — NOT a claim that the mode is the whole access policy on such a
-            # platform. Absence of the API does not establish absence of a policy: Windows chmod
-            # only controls the read-only attribute and ignores the rest, and native ACLs there
-            # and on macOS are untouched and unmeasured by this tool.
-            os.chmod(dst, mode)
-            return
-        try:
-            acl = os.getxattr(src, ACL_XATTR, follow_symlinks=False)
-        except OSError as exc:
-            if exc.errno not in _ACL_ABSENT:
-                raise
-            acl = None
-
-        if acl is not None and stat.S_IMODE(old.st_mode) & 0o007:
-            # Decided BEFORE anything is written to dst, which is the whole point of putting it
-            # here. The cap above removes "other" from the MODE, but an ACL carries its own
-            # other:: entry, so installing it puts those bits straight back — and the mode
-            # verification at the end would then catch it only AFTER the staged report had been
-            # made other-readable. A guard arm measured exactly that: the publish refused, and the
-            # staged file was left readable on the way out. An exposure a later unlink cleans up
-            # is still an exposure while it lasts, which is the rule this file already applies to
-            # its own ordering.
-            #
-            # The source's mode bits already reflect its ACL's other:: entry, so no ACL parsing is
-            # needed to know the answer. Refusing is the safe direction for a report naming the
-            # location of every secret found, and the caller gets the error rather than a wide
-            # artifact.
-            raise OSError(errno.EPERM, "report-policy-other-access-refused")
-
-        if acl is None:
-            # Drop the inherited entry while group and other access are still switched off.
+        # Strip any inherited ACL BEFORE the chmod, while the staged file is still private. Doing
+        # it after would open exactly the window this ordering exists to close.
+        if _XATTR_SUPPORTED:
             try:
                 os.removexattr(dst, ACL_XATTR, follow_symlinks=False)
             except OSError as exc:
                 if exc.errno not in _ACL_ABSENT:
                     raise
-            os.chmod(dst, mode)
-        else:
-            # Special bits only; content access stays private until the ACL itself supplies the
-            # owner, mask and other bits.
-            os.chmod(dst, (mode & 0o7000) | 0o600)
-            os.setxattr(dst, ACL_XATTR, acl, follow_symlinks=False)
-            if os.getxattr(dst, ACL_XATTR, follow_symlinks=False) != acl:
-                raise OSError(errno.EIO, "report-access-acl-verification-failed")
 
+        os.chmod(dst, mode)
         if stat.S_IMODE(os.stat(dst, follow_symlinks=False).st_mode) != mode:
             raise OSError(errno.EIO, "report-mode-verification-failed")
     except OSError as exc:
         raise OSError(exc.errno, "report-permission-preservation-failed") from exc
+
 
 # The preservation slot, and why it is a SET of names rather than one.
 #
@@ -567,6 +453,48 @@ def _superseded_slots(reports_dir):
         yield os.path.join(reports_dir, "scan_report.superseded.%d.txt" % n)
 
 
+def _harden_report_dir(reports_dir):
+    """Remove group and other WRITE from the report directory, without following a symlink.
+
+    Directory write permission, not file mode, is what governs unlink and create. os.makedirs
+    defaults to 0o777, so at umask 0 this directory was created world-writable with an owner-only
+    report inside it, and any local account could delete that report and publish its own CLEAN at
+    the same path. Measured: 0777 at umask 0, 0775 at umask 0002 — ordinary where per-user groups
+    are configured. Four rounds hardened the FILE; every permission arm asserted the file.
+
+    Creation mode alone is not enough, because exist_ok=True leaves an EXISTING directory's mode
+    untouched and the scanned tree can ship its own `_reports`.
+
+    Anchored on a DESCRIPTOR opened O_NOFOLLOW rather than on the pathname. Review found the
+    pathname version following a raced symlink and chmod-ing the target — mutating something
+    outside the tree before refusing. os.chmod(follow_symlinks=False) is not the fix: on Linux it
+    raises NotImplementedError, which is not an OSError and would escape the refusal writer's
+    contract. A dirfd answers both: it cannot be swapped after it is open, and fchmod on it needs
+    no follow_symlinks argument at all.
+
+    Only WRITE is removed, and only from group and other. Read and traverse are left exactly as the
+    operator had them: this narrows who can FORGE the report, not who can find it, and it touches
+    the scanner's own output directory rather than anything it was asked to scan.
+    """
+    try:
+        fd = os.open(reports_dir, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise ScanRefused("report-dir-unsafe '_reports'") from exc
+    try:
+        mode = stat.S_IMODE(os.fstat(fd).st_mode)
+        if mode & 0o022:
+            os.fchmod(fd, mode & ~0o022)
+            if stat.S_IMODE(os.fstat(fd).st_mode) & 0o022:
+                raise ScanRefused("report-dir-writable '_reports'")
+    except OSError as exc:
+        raise ScanRefused("report-dir-unsafe '_reports'") from exc
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
 def write_report(staging, hits):
     reports_dir = os.path.join(staging, "_reports")
     report_path = os.path.join(reports_dir, "scan_report.txt")
@@ -574,39 +502,10 @@ def write_report(staging, hits):
     if os.path.islink(reports_dir):
         raise ScanRefused("report-path-unsafe '_reports'")
 
-    # NOT INDEPENDENTLY MUTATION-PROVABLE, and said so rather than left to look proven: reverting
-    # this mode alone leaves every directory arm GREEN, because the narrowing block below removes
-    # the same bits a moment later. The narrowing is the enforcing step; this is defence in depth,
-    # and it matters only in the window between creation and that block, or if the block is ever
-    # moved or removed. A reader mutating this line and seeing green should mutate the block.
-    #
-    # mode=0o700 on CREATION. os.makedirs defaults to 0o777, so at umask 0 this directory was
-    # created world-writable — and directory write permission, not file mode, is what governs
-    # unlink and create. Review measured it: _reports 0777 with the report inside at 0600, where
-    # any local account can unlink that owner-only report and drop its own "scan_gate: CLEAN" at
-    # the same path. Four rounds hardened the FILE and never constrained the CONTAINER, which made
-    # the file's mode irrelevant to the outcome the hardening was for.
     os.makedirs(reports_dir, mode=0o700, exist_ok=True)
     if not os.path.isdir(reports_dir):
         raise ScanRefused("report-path-unsafe '_reports'")
-
-    # An ALREADY-EXISTING directory keeps its own mode through exist_ok=True, so creation mode is
-    # only half the answer. Group- or other-WRITE on it is the same unlink-and-replace capability,
-    # and at umask 0002 — ordinary where per-user groups are configured — it is 0775.
-    #
-    # Only the write bits are removed, and only from group and other. Read and traverse are left
-    # exactly as the operator had them: this narrows who can FORGE the report, not who can find
-    # it, and it touches the scanner's own output directory rather than anything it was asked to
-    # scan. If the narrowing itself fails, the report cannot be published safely here and the
-    # scan refuses rather than writing into a directory strangers can rewrite.
-    try:
-        _dmode = stat.S_IMODE(os.stat(reports_dir, follow_symlinks=False).st_mode)
-        if _dmode & 0o022:
-            os.chmod(reports_dir, _dmode & ~0o022)
-            if stat.S_IMODE(os.stat(reports_dir, follow_symlinks=False).st_mode) & 0o022:
-                raise ScanRefused("report-dir-writable '_reports'")
-    except OSError as exc:
-        raise ScanRefused("report-dir-unsafe '_reports'") from exc
+    _harden_report_dir(reports_dir)
 
     if os.path.islink(report_path):
         raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
@@ -808,6 +707,18 @@ def _write_refusal_report(staging, refusal):
         # held. That is a design change and is NOT made here. Until it is, the guarantee this
         # function offers is bounded by the exit code, which no plant can forge.
         return
+    # The refusal path publishes into the same directory and needs the same container guarantee.
+    # Round fourteen hardened it in write_report ONLY, which the gate caught: a refusal wrote an
+    # owner-only report into a directory group or other could still rewrite, so the hardening
+    # covered the path that usually succeeds and not the one that runs when something is already
+    # wrong. Failure to harden is swallowed here rather than raised, because this function must not
+    # displace the refusal it was called to report — but then nothing is published either, which
+    # the caller already treats as the report being unavailable.
+    try:
+        _harden_report_dir(reports_dir)
+    except (ScanRefused, OSError):
+        return
+
     report_path = os.path.join(reports_dir, "scan_report.txt")
     if not os.path.lexists(report_path):
         return

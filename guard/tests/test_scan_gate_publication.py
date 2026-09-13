@@ -1498,7 +1498,12 @@ def _ordinary_create_mode(directory: Path, name: str = ".ordinary_probe") -> int
 # The presets below are the modes preservation still keeps EXACTLY, which is what this arm is for;
 # the narrowing itself is pinned by test_a_planted_existing_report_cannot_widen_the_findings_it_is
 # _replaced_by. 0o400 is included so the arm also covers a policy stricter than the cap.
-@pytest.mark.parametrize("preset", [0o600, 0o640, 0o400])
+# 0o640 joined 0o660 in being narrowed at round fifteen: both review legs refused keeping group
+# READ on a replacement, because a planted 0640 hands the file's group the class, path and line of
+# every secret found and "there was an existing file" is not a sharing decision by anyone who
+# matters when that file came out of the untrusted tree. What still round-trips EXACTLY is
+# owner-only and stricter.
+@pytest.mark.parametrize("preset", [0o600, 0o400])
 def test_replacing_a_report_preserves_the_mode_it_already_had(tmp_path: Path, preset: int) -> None:
     if os.geteuid() == 0:
         pytest.skip("root ignores mode bits; this needs an unprivileged writer")
@@ -1776,46 +1781,16 @@ def _acl(path: Path):
         return None
 
 
-def test_replacing_a_report_preserves_its_access_control_list(tmp_path: Path) -> None:
-    if os.geteuid() == 0:
-        pytest.skip("root ignores these checks; this needs an unprivileged writer")
-    if shutil.which("setfacl") is None:
-        pytest.skip("setfacl is not installed; the ACL contract cannot be measured here")
-    driver = make_tool(tmp_path)
-    staging = make_staging(tmp_path)
-    write(staging / "docs" / "readme.md", "nothing private here\n")
+def test_replacing_a_report_strips_the_access_control_list(tmp_path: Path) -> None:
+    """SUPERSEDED SUBJECT: this arm asserted the ACL was PRESERVED. Both review legs refused that.
 
-    proc = scan(tmp_path, driver, staging)
-    assert proc.returncode == 0, "CONTROL: a clean run, so there is a report to replace"
-    rp = staging / REPORT_REL
-    reports_dir = staging / "_reports"
+    Copying the old report's ACL was the mode cap's blind channel. A named-user entry on a planted
+    report was copied verbatim onto the findings inode, and an inherited default ACL made
+    "owner-only" true of the mode bits and false of the actual access. The report now carries NO
+    ACL: removing one is always narrowing, so it cannot introduce the failure it prevents.
 
-    named = subprocess.run(["setfacl", "-m", f"u:{os.geteuid()}:r", "--", str(rp)],
-                           capture_output=True, text=True)
-    if named.returncode != 0:
-        pytest.skip(f"the filesystem refused an ACL entry: {named.stderr.strip()[:80]}")
-    subprocess.run(["setfacl", "-d", "-m", "u::rw,g::r,o::-", str(reports_dir)],
-                   capture_output=True, text=True)
-
-    before = _acl(rp)
-    assert before is not None, "CONTROL: the report really does carry an ACL to preserve"
-    before_mode = stat.S_IMODE(rp.stat().st_mode)
-
-    proc = scan(tmp_path, driver, staging)
-    assert proc.returncode == 0 and report(staging) == "scan_gate: CLEAN\n", "it rewrote the report"
-
-    assert stat.S_IMODE(rp.stat().st_mode) == before_mode, "the mode is preserved (it already was)"
-    assert _acl(rp) == before, (
-        "the mode bits match and the ACL does not: replacing a report must not change WHO can read "
-        "or write it, and an ACL is where that is actually written")
-
-
-def test_a_refusal_report_preserves_the_access_control_list_too(tmp_path: Path) -> None:
-    """The refusal writer has its own replace, and the arm above only covers the ordinary one.
-
-    Found by the hunk sweep: reverting the refusal writer's ACL call left the suite green. That is
-    the same gap that the mode contract had one round earlier, in the same pair of functions — the
-    ordinary path gets the arm and its sibling is assumed to follow.
+    Ownership is still preserved — that is a different question from audience, and giving a file
+    away is not something this process can undo.
     """
     if os.geteuid() == 0:
         pytest.skip("root ignores these checks; this needs an unprivileged writer")
@@ -1828,49 +1803,69 @@ def test_a_refusal_report_preserves_the_access_control_list_too(tmp_path: Path) 
     proc = scan(tmp_path, driver, staging)
     assert proc.returncode == 0, "CONTROL: a clean run, so there is a report to replace"
     rp = staging / REPORT_REL
+
+    # A DEFAULT ACL on the DIRECTORY, not just an ACL on the old file. The published report is a
+    # fresh mkstemp inode: it never inherits the old FILE's ACL, only the directory's default one.
+    # Without this the arm passes whether or not the strip happens — measured, by disabling the
+    # strip and watching it stay green. An arm that cannot fail is not evidence.
+    reports_dir = staging / "_reports"
+    inherited = subprocess.run(["setfacl", "-d", "-m", f"u:{os.geteuid()}:r,g::r", str(reports_dir)],
+                               capture_output=True, text=True)
+    if inherited.returncode != 0:
+        pytest.skip(f"the filesystem refused a default ACL: {inherited.stderr.strip()[:80]}")
     named = subprocess.run(["setfacl", "-m", f"u:{os.geteuid()}:r", "--", str(rp)],
                            capture_output=True, text=True)
     if named.returncode != 0:
         pytest.skip(f"the filesystem refused an ACL entry: {named.stderr.strip()[:80]}")
-    subprocess.run(["setfacl", "-d", "-m", "u::rw,g::r,o::-", str(staging / "_reports")],
-                   capture_output=True, text=True)
-    before = _acl(rp)
-    assert before is not None, "CONTROL: the report really does carry an ACL to preserve"
+    assert _acl(rp) is not None, "CONTROL: the report really does carry an ACL going in"
+    probe = reports_dir / ".inherit_probe"
+    probe.write_text("x", encoding="utf-8")
+    inherits = _acl(probe) is not None
+    probe.unlink()
+    if not inherits:
+        pytest.skip("this filesystem does not hand a new file the directory default ACL")
 
-    locked = staging / "locked"
-    write(locked / "inner.txt", "unreachable\n")
-    locked.chmod(0)
-    try:
-        try:
-            os.scandir(str(locked)).close()
-            pytest.skip("the OS does not enforce directory mode 000 here (root?); arm not measurable")
-        except PermissionError:
-            pass
-        proc = scan(tmp_path, driver, staging)
-        assert proc.returncode == 2, "CONTROL: an unreadable directory refuses the scan"
-        assert report(staging) is not None and "REFUSED" in report(staging), \
-            "CONTROL: the refusal writer actually replaced the report"
-        assert _acl(rp) == before, (
-            "replacing a report with a refusal must not change who can read it; the refusal is the "
-            "artifact a reader most needs and the one most likely to be read by someone else")
-    finally:
-        locked.chmod(0o755)
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0 and report(staging) == "scan_gate: CLEAN\n", "it rewrote the report"
+
+    assert _acl(rp) is None, (
+        "the published report still carries an ACL. A named entry on a planted report is copied "
+        "straight onto the findings inode that way, and the mode cap cannot see it")
+    assert not stat.S_IMODE(rp.stat().st_mode) & 0o077, (
+        f"and it must be owner-only, not {stat.S_IMODE(rp.stat().st_mode):04o}")
 
 
-# =============================================================================================
-# GROUP 20 — the probe must publish no name, and the policy must land before any access
-#
-# Round-4 adversarial review. Three findings, each a case where the SUITE stayed green:
-#
-#   probe-rename-race — the unique-name probe closed the collision but not the race. The stat
-#     and the unlink still name a PATH rather than hold the descriptor the open returned, so a
-#     file renamed onto that name between them is measured as the contract and then deleted.
-#   acl-copy-after-chmod-order-unpinned — swapping the chmod and the ACL copy left every test
-#     green, while the commit message asserted the order was load-bearing. It is: between them
-#     the temporary report carries the DIRECTORY's inherited policy at its full mode.
-#   an existing report with NO acl silently gained the directory's default one, because "no ACL
-#     to copy" was read as "nothing to do" rather than as a policy in its own right.
-# =============================================================================================
+def test_a_refusal_report_strips_the_access_control_list_too(tmp_path: Path) -> None:
+    """The refusal path gets the same policy, and had to be asserted separately once before.
+
+    The refusal writer has its own mkstemp call and its own publish, so a policy proven on the
+    ordinary path says nothing about it — round fourteen hardened the report DIRECTORY in
+    write_report only, and the gate found the refusal path still writing into an unhardened one.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores these checks; this needs an unprivileged writer")
+    if shutil.which("setfacl") is None:
+        pytest.skip("setfacl is not installed; the ACL contract cannot be measured here")
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0, "CONTROL: a clean run, so there is a report to replace"
+    rp = staging / REPORT_REL
+
+    named = subprocess.run(["setfacl", "-m", f"u:{os.geteuid()}:r", "--", str(rp)],
+                           capture_output=True, text=True)
+    if named.returncode != 0:
+        pytest.skip(f"the filesystem refused an ACL entry: {named.stderr.strip()[:80]}")
+    assert _acl(rp) is not None, "CONTROL: the report carries an ACL going in"
+
+    (staging / "docs" / "ghost.txt").symlink_to(tmp_path / "nowhere")
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 2, "CONTROL: the second run refuses"
+
+    assert _acl(rp) is None, "a refusal published a report still carrying the old ACL"
+    assert not stat.S_IMODE(rp.stat().st_mode) & 0o077, (
+        f"and it must be owner-only, not {stat.S_IMODE(rp.stat().st_mode):04o}")
 
 
 def test_the_mode_probe_cannot_be_raced_onto_a_name(tmp_path: Path, monkeypatch) -> None:
@@ -2027,106 +2022,55 @@ def test_a_report_with_no_acl_does_not_inherit_the_directorys_default(tmp_path: 
     assert stat.S_IMODE(rp.stat().st_mode) == before_mode, "and the mode is still preserved"
 
 
-def test_the_access_policy_lands_before_any_group_or_other_access(tmp_path: Path, monkeypatch) -> None:
-    """The ordering the commit message claimed was load-bearing, now actually pinned.
+def test_the_staged_report_is_never_wider_than_the_policy_being_installed(tmp_path: Path) -> None:
+    """SUBJECT NARROWED: this arm watched the ORDER of an ACL install, and there is no longer one.
 
-    Reverting the order left the whole suite green, which is what made this worth writing. The
-    instrument reads the temporary file's mode at the instant the ACL is installed: if the mode
-    was set first, the file has already granted group and other access under the INHERITED
-    policy by then.
+    It was written because reverting the ACL/chmod order left the whole suite green: the staged
+    file briefly carried group and other access under the inherited policy before the intended one
+    landed. Round fifteen stopped installing ACLs entirely, so that specific window is gone — but
+    the property behind it is not, and it is the reason this arm survives rather than being
+    deleted: at NO point may the staged inode be wider than the policy being installed, because an
+    exposure a later call narrows again is still an exposure while it lasts.
+
+    Every permission-changing call is recorded in order, not just the last one, since a mutant that
+    widens and then narrows satisfies any end-state assertion.
     """
     if os.geteuid() == 0:
         pytest.skip("root ignores these checks; this needs an unprivileged writer")
-    if shutil.which("setfacl") is None:
-        pytest.skip("setfacl is not installed; the ACL contract cannot be measured here")
     driver = make_tool(tmp_path)
-    module = import_driver(driver, "acl_order")
+    module = import_driver(driver, "policy_order")
     reports_dir = tmp_path / "_reports"
     reports_dir.mkdir()
     rp = reports_dir / "scan_report.txt"
     rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
-    # 0o640, not 0o664 and no longer 0o660. This arm measures ORDERING — that no call grants more
-    # than the policy being installed, before the ACL lands or after. Preservation caps group WRITE
-    # and all other access, so a fixture carrying either would end at a different mode than its
-    # source and red this arm for a reason that is not ordering. Group READ survives the cap, so
-    # the exposure this arm hunts — a window where the staged file is wider than the target — is
-    # still there to find.
-    rp.chmod(0o640)
-    named = subprocess.run(["setfacl", "-m", f"u:{os.geteuid()}:r", "--", str(rp)],
-                           capture_output=True, text=True)
-    if named.returncode != 0:
-        pytest.skip(f"the filesystem refused an ACL entry: {named.stderr.strip()[:80]}")
+    rp.chmod(0o600)
 
     staged = reports_dir / ".scan_report_staged"
     staged.write_text("scan_gate: REFUSED input-error\n", encoding="utf-8")
     staged.chmod(0o600)
 
-    real_setxattr = module.os.setxattr
     real_chmod = module.os.chmod
-    timeline: list[tuple] = []
+    seen: list[int] = []
 
-    # Sampling ONLY at setxattr proved too late: a mutant that chmods to the full mode, then back
-    # to private, then installs the ACL passed the earlier version of this arm. The exposure is
-    # real while it lasts, so every permission-changing call is recorded in order.
     def watching_chmod(path, mode, *args, **kwargs):
         result = real_chmod(path, mode, *args, **kwargs)
         if str(path) == str(staged):
-            timeline.append(("chmod", stat.S_IMODE(os.stat(path).st_mode), None))
+            seen.append(stat.S_IMODE(os.stat(path).st_mode))
         return result
 
-    def watching_setxattr(path, name, value, *args, **kwargs):
-        if str(path) == str(staged):
-            # Keyed on the ACL's OWN name. Cutting the prefix at the first xattr of ANY name lets
-            # a decoy user.* setxattr end the window early, after which a chmod 0666 before the
-            # real ACL goes unseen.
-            # Recorded AFTER the call returns. Appending first counts a FAILED setxattr as the
-            # install, which ends the checked prefix early and hides every exposure after it.
-            before = stat.S_IMODE(os.stat(path).st_mode)
-            result = real_setxattr(path, name, value, *args, **kwargs)
-            # The VALUE matters, not just the name: setxattr(ACL_XATTR, <dummy>) then chmod 0666
-            # then the real ACL ends the window at the dummy and hides the 0666.
-            timeline.append((f"setxattr:{name}", before, bytes(value)))
-            return result
-        return real_setxattr(path, name, value, *args, **kwargs)
+    module.os.chmod = watching_chmod
+    try:
+        module._install_posix_acl_policy(str(rp), str(staged))
+    finally:
+        module.os.chmod = real_chmod
 
-    real_chown = module.os.chown
-
-    def watching_chown(path, uid, gid, *args, **kwargs):
-        result = real_chown(path, uid, gid, *args, **kwargs)
-        if str(path) == str(staged):
-            timeline.append(("chown", stat.S_IMODE(os.stat(path).st_mode), None))
-        return result
-
-    monkeypatch.setattr(module.os, "chmod", watching_chmod)
-    monkeypatch.setattr(module.os, "setxattr", watching_setxattr)
-    monkeypatch.setattr(module.os, "chown", watching_chown)
-    module._install_posix_acl_policy(str(rp), str(staged))
-
-    source_acl = os.getxattr(str(rp), ACL_XATTR)
-    installs = [i for i, (op, _, val) in enumerate(timeline)
-                if op == f"setxattr:{ACL_XATTR}" and val == source_acl]
-    assert installs, "CONTROL: no ACL was ever installed, so the ordering was not exercised"
-    # The prefix is the temporal half. The TAIL matters too: correctly installing the ACL and
-    # then chmod 0666 satisfies every prefix assertion, so the final state is asserted as well.
-    final = stat.S_IMODE(os.stat(staged).st_mode)
-    assert final == stat.S_IMODE(rp.stat().st_mode), (
-        f"the staged report ended at {final:04o} but the report it replaces is "
-        f"{stat.S_IMODE(rp.stat().st_mode):04o}: an exposure after the ACL lands is still an "
-        "exposure, and checking only the prefix cannot see it")
-    # Nothing ANYWHERE in the timeline may grant more than the policy being installed. The prefix
-    # rule below is stricter before the ACL lands; this one covers the gap between the install and
-    # the end, where a transient chmod 0666 was previously invisible to both checks.
-    target = stat.S_IMODE(rp.stat().st_mode)
-    wider = [(op, oct(mode)) for op, mode, _ in timeline if mode & ~target]
+    assert seen, "CONTROL: no chmod on the staged file was observed, so nothing was measured"
+    wider = [oct(m) for m in seen if m & 0o077]
     assert not wider, (
-        f"the staged report was wider than the policy being installed ({target:04o}) at: {wider}. "
-        "An exposure that a later call narrows again is still an exposure while it lasts")
-    before = [mode for op, mode, _ in timeline[:installs[0] + 1]]
-    assert all(mode & 0o077 == 0 for mode in before), (
-        f"the staged report granted group/other access before its ACL landed: {timeline!r}. Until "
-        "the intended policy is installed those bits belong to the DIRECTORY's inherited one, and "
-        "every moment they are effective is a moment the report is readable by the wrong set of "
-        "people — whether or not a later call narrows them again.")
+        f"the staged report was wider than owner-only at: {wider}. An exposure that a later call "
+        "narrows again is still an exposure while it lasts")
+    final = stat.S_IMODE(staged.stat().st_mode)
+    assert not final & 0o077, f"and it must end owner-only, not {final:04o}"
 
 
 def test_a_refusal_that_cannot_publish_replaces_the_stale_clean(tmp_path: Path, monkeypatch) -> None:
@@ -2854,17 +2798,13 @@ def test_a_new_findings_report_is_never_other_readable(tmp_path: Path) -> None:
         f"and it must still be readable by its owner, not merely locked down to {mode:04o}")
 
 
-def test_an_acl_that_grants_other_refuses_rather_than_publishing_wide(tmp_path: Path) -> None:
-    """The fail-closed edge of the narrow-only preservation, pinned so it is not a surprise.
+def test_an_acl_that_grants_other_is_stripped_rather_than_refused(tmp_path: Path) -> None:
+    """SUPERSEDED SUBJECT: this arm asserted a REFUSAL. Stripping is strictly better.
 
-    Preserving the old report's mode is narrow-only: "other" is capped off, because in this
-    product the existing report lives in the untrusted tree and a committed one checks out 0644.
-    A POSIX ACL is the case the cap cannot simply mask — installing the old report's ACL restores
-    the bits the cap removed, the mode verification then disagrees, and the publish is REFUSED.
-
-    Refusing is the safe direction for a report naming the location of every secret found, and it
-    is loud: the caller gets the error, not a wide artifact. This arm exists so that behaviour is
-    a decision on the record rather than something an adopter discovers.
+    Round twelve refused the publish when the old report's ACL granted other, because installing
+    that ACL restored the bits the mode cap removed. Round fifteen stopped installing ACLs at all,
+    which turns a refusal into a narrowing: the adopter gets their report, nobody else gets access,
+    and the availability cost of the refusal disappears.
     """
     if os.geteuid() == 0:
         pytest.skip("root ignores these checks; this needs an unprivileged writer")
@@ -2887,22 +2827,26 @@ def test_an_acl_that_grants_other_refuses_rather_than_publishing_wide(tmp_path: 
     staged = reports_dir / ".scan_report_staged"
     staged.write_text("scan_gate: REFUSED input-error\n", encoding="utf-8")
     staged.chmod(0o600)
+    # The STAGED file carries the ACL here, because that is what the strip acts on. Setting one
+    # only on the old report leaves this arm unable to fail.
+    seeded = subprocess.run(["setfacl", "-m", f"u:{os.geteuid()}:r,o::r", "--", str(staged)],
+                            capture_output=True, text=True)
+    if seeded.returncode != 0:
+        pytest.skip(f"the filesystem refused an ACL entry: {seeded.stderr.strip()[:80]}")
+    assert _acl(staged) is not None, "CONTROL: the staged file carries an ACL to strip"
 
-    with pytest.raises(OSError) as caught:
-        module._install_posix_acl_policy(str(rp), str(staged))
+    module._install_posix_acl_policy(str(rp), str(staged))
 
-    assert "report-permission-preservation-failed" in str(caught.value), (
-        "an ACL granting other must refuse the publish, not widen it silently; the caller needs "
-        f"the failure, and it got {caught.value!r}")
-    assert not stat.S_IMODE(staged.stat().st_mode) & stat.S_IROTH, (
-        "and the staged report must not have been left other-readable on the way out")
+    mode = stat.S_IMODE(staged.stat().st_mode)
+    assert not mode & 0o077, (
+        f"the staged report ended at {mode:04o}: an ACL granting other was allowed to widen it")
+    assert _acl(staged) is None, "and the granting ACL must not have been carried onto it"
 
 
 # 0644 and 0666 carry no other-EXECUTE, so a mutant clearing read and write only (& ~0o006) kept
 # execute and survived this arm — measured by gate review: planted 0601 published 0601. Execute on
 # a report is not itself a disclosure, but the fixture set decides which bits the assertion can
-# actually see, and one that never sets a bit cannot prove that bit is capped. Each other-bit now
-# appears alone as well as together.
+# actually see, and one that never sets a bit cannot prove that bit is capped.
 @pytest.mark.parametrize("planted", [0o644, 0o666, 0o601, 0o602, 0o604, 0o607])
 def test_a_planted_existing_report_cannot_widen_the_findings_it_is_replaced_by(
         tmp_path: Path, planted: int) -> None:
@@ -2981,7 +2925,11 @@ def test_a_failed_mode_probe_does_not_discard_a_stricter_directory_policy(
     refused: list[int] = []
 
     def probe_refusing_open(path, flags, *args, **kwargs):
-        if tmpfile_flag and flags & tmpfile_flag:
+        # (flags & O_TMPFILE) == O_TMPFILE, not a bare AND. O_TMPFILE is 0o20200000 and INCLUDES
+        # O_DIRECTORY (0o200000), so a bare AND matches every plain directory open too — which
+        # made this injector refuse the report directory's own O_DIRECTORY handle and red the arm
+        # for a reason that has nothing to do with the probe it exists to fault.
+        if tmpfile_flag and (flags & tmpfile_flag) == tmpfile_flag:
             refused.append(flags)
             raise OSError(errno.EOPNOTSUPP, "O_TMPFILE unsupported (injected)")
         return real_open(path, flags, *args, **kwargs)
@@ -3106,3 +3054,67 @@ def test_a_planted_group_writable_report_cannot_keep_its_group_write(tmp_path: P
         "handed write access to its own report to a group, and a group member can replace it with "
         "a CLEAN line the moment the scanner returns")
     assert not mode & 0o007, f"and no other access, not {mode:04o}"
+
+
+def test_the_refusal_path_hardens_the_report_directory_too(tmp_path: Path) -> None:
+    """Round fourteen hardened the directory in write_report ONLY, and the gate caught it.
+
+    The refusal writer has its own publish, and it is the path that runs when something is already
+    wrong — so hardening the path that usually succeeds and not the one that runs on failure gets
+    it exactly backwards. A refusal wrote an owner-only report into a directory group or other
+    could still rewrite, which is the same unlink-and-replace with a different trigger.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "refusal_dir_harden")
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    reports_dir.chmod(0o777)
+
+    module._write_refusal_report(str(staging), module.ScanRefused("invalid-wide-encoding 'b'"))
+
+    dmode = stat.S_IMODE(reports_dir.stat().st_mode)
+    assert not dmode & 0o022, (
+        f"the refusal published into a directory at {dmode:04o}: anyone can unlink the report it "
+        "just wrote and replace it with a CLEAN line")
+
+
+@pytest.mark.parametrize("planted", [0o640, 0o644, 0o660])
+def test_a_planted_report_cannot_hand_its_group_the_findings(tmp_path: Path,
+                                                             planted: int) -> None:
+    """The round-fifteen change, and it was UNPINNED until this arm existed.
+
+    Round fourteen kept group READ on the replacement path, reasoning that the demonstrated attack
+    was a write. Both review legs refused that independently: a planted 0640 hands the file's group
+    the class, path and line of every secret found, and "there was an existing file" is not a
+    sharing decision by anyone who matters when that file came out of the untrusted tree.
+
+    The existing planted-mode arms assert other-access and group WRITE, so restoring the old
+    `& ~0o037` cap left them all green — measured. A change nothing can fail on is not proven, and
+    this is the arm that can.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "planted_gr_%o" % planted)
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    rp = reports_dir / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    rp.chmod(planted)
+
+    module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                        "generic_key_assignment", "contents")])
+
+    mode = stat.S_IMODE(rp.stat().st_mode)
+    assert not mode & stat.S_IRGRP, (
+        f"a report planted at {planted:04o} published the findings at {mode:04o}: the scanned tree "
+        "selected a reader class for its own secrets, and every member of that group now has the "
+        "path and line of each one")
+    assert not mode & 0o007, f"and no other access, not {mode:04o}"
+    assert mode & stat.S_IRUSR, f"while the owner must still be able to read it, not {mode:04o}"
