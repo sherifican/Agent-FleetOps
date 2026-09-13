@@ -30,26 +30,51 @@ arm is evidence of awareness, not of mitigation.
 
 ## Who can read the report
 
-**A report this scanner CREATES is owner-only.** It names the class, path and line of every
-secret found, so it does not get a default audience. An earlier rule made a new report match
-whatever an ordinary create in that directory produces; publication review measured what that
-meant in practice — `0644` at the ordinary login umask `0022`, and `0666` inside a `0777`
-directory at umask `0`. Readable by every account on the box.
+**Every report this scanner publishes is `0600`** — owner read and write, nothing for group,
+nothing for other. New report or replacement, whatever the umask masked, whatever stood at the
+name before. The report names the class, path and line of every secret found, so it does not get
+a default audience.
 
-A directory policy that is STRICTER than owner-only still wins: the inherited mode is intersected
-with `0600`, and an intersection cannot widen. A default ACL that grants group or other access no
-longer widens a new report.
+That rule arrived by correction, and the corrections are worth knowing because every one of them
+shipped first:
 
-**A report this scanner REPLACES keeps the access policy it had, narrowed.** Preserving the old
-mode exists so that replacing a report does not change who could read it — but the report being
-replaced lives inside the tree being scanned, and that tree is untrusted. A committed
-`_reports/scan_report.txt` checks out `0644`, and preserving it faithfully republished the
-findings at `0644`. So preservation is narrow-only: `0600` stays `0600`, `0660` keeps group
-write, `0640` keeps group read, and "other" is refused in every case.
+* An early rule made a new report match whatever an ordinary create in that directory produces.
+  Measured: `0644` at the ordinary login umask `0022`, and `0666` inside a `0777` directory at
+  umask `0` — readable by every account on the box.
+* A later rule preserved the mode of the report being REPLACED, so that replacing a report would
+  not change who could read it. But the report being replaced lives inside the tree being scanned,
+  and that tree is untrusted: a committed `_reports/scan_report.txt` checks out `0644`, and
+  preserving it faithfully republished the findings at `0644`.
+* Narrowing that preserved mode to "no other" kept group. A planted `0640` hands the file's group
+  the class, path and line of every secret found, and "there was an existing file" is not a
+  sharing decision by anyone who matters when that file came out of the untrusted tree.
+* Intersecting with the staged file's own mode was meant to let a STRICTER local policy still win.
+  Measured: the only thing that reliably flowed in through that intersection was the umask
+  removing the OWNER's bits. At umask `0400` the findings published at `0200` — a report its
+  reader cannot open, which looks to a human exactly like a scanner that found nothing. Removing
+  an owner's own bits from a file that owner still owns enforces nothing, because the uid restores
+  them whenever it likes.
 
-If the old report carries a POSIX ACL granting "other", the publish is REFUSED rather than widened
-— the ACL would restore the bits the cap removes. A refusal is loud and reaches the caller; a wide
-artifact would not be.
+So the mode is a constant rather than a negotiation. **A directory policy stricter than `0600` no
+longer decides the report's mode.** That is a deliberate reversal of the previous rule, and what
+it buys is that a default ACL which would lock the owner out cannot produce findings nobody can
+read.
+
+**Any POSIX ACL on the published report is REMOVED, never carried** — whether inherited from the
+directory or copied from the report being replaced. Be precise about what that buys, because an
+earlier version of this note overstated it: a `chmod` writes the group bits into the ACL mask, so
+at `0600` the mask is `---` and a retained named-user entry is already masked to nothing. The
+strip matters because the mask is one `chmod` away from coming back — widening the file to `0640`
+re-arms every entry, with no ACL visible in anything a reader is likely to inspect — and removing
+the entries makes that impossible instead of merely currently harmless.
+
+**The report DIRECTORY loses group and other write.** Directory write permission, not file mode,
+is what governs unlink and create, so a world-writable `_reports/` lets any local account delete
+an owner-only report and publish its own `CLEAN` at the same path. Group and other keep whatever
+read and traverse they had: this narrows who can forge the report, not who can find it. If the
+scanner CREATED the directory on this run it also restores the owner's own `rwx`, because `mkdir`
+is umask-masked and a directory the scanner cannot write is one it cannot publish into at all. A
+`_reports/` that already existed is left with the owner bits its operator gave it.
 
 There is deliberately no sharing opt-in. If you need a report readable by another account, copy it
 out of the staging tree to a location you control, rather than asking the scanner to publish it

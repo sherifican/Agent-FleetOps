@@ -125,6 +125,22 @@ def clean_env(tmp_path: Path, path_prefix: Path | None = None) -> dict:
     return env
 
 
+def install_policy(module, report_path: Path, staged: Path) -> None:
+    """Call the policy installer the way the publication path does: on a HELD descriptor.
+
+    The installer stopped taking the staged file by NAME at round seventeen. A pathname is what a
+    swapped symlink can occupy, and os.chmod on this platform cannot decline to follow one — it is
+    not in os.supports_follow_symlinks, and follow_symlinks=False raises NotImplementedError,
+    which is not an OSError. Every arm that calls the installer directly goes through here so no
+    arm can quietly keep measuring the pathname contract after the code stopped offering it.
+    """
+    fd = os.open(str(staged), os.O_RDONLY)
+    try:
+        module._install_posix_acl_policy(str(report_path), fd, str(staged))
+    finally:
+        os.close(fd)
+
+
 def make_tool(tmp_path: Path, source: str | None = None, name: str = "tool") -> Path:
     """Copy the scanner under test into ``<tmp>/<name>/`` with a synthetic terms file beside it.
     Returns the path of the copied scanner (the DRIVER)."""
@@ -1434,7 +1450,10 @@ def test_a_refusal_report_is_readable_too(tmp_path: Path) -> None:
     OWNER-ONLY: the gate refused the argument that group access expresses a sharing decision,
     since an ordinary create grants the primary group access with nobody deciding anything. So the
     assertion is no longer "an ordinary create minus other" — it is that nothing beyond the owner
-    is granted, while a directory policy stricter than 0600 still wins by intersection.
+    is granted. Round seventeen removed the second half of the sentence that used to stand here,
+    which said a directory policy stricter than 0600 still wins by intersection: it does not any
+    more, because the only thing that reliably arrived through that intersection was the umask
+    stripping the owner's own bits off the findings. The mode is a constant now.
     """
     driver = make_tool(tmp_path)
     staging = make_staging(tmp_path)
@@ -1503,8 +1522,16 @@ def _ordinary_create_mode(directory: Path, name: str = ".ordinary_probe") -> int
 # every secret found and "there was an existing file" is not a sharing decision by anyone who
 # matters when that file came out of the untrusted tree. What still round-trips EXACTLY is
 # owner-only and stricter.
-@pytest.mark.parametrize("preset", [0o600, 0o400])
-def test_replacing_a_report_preserves_the_mode_it_already_had(tmp_path: Path, preset: int) -> None:
+# ROUND SEVENTEEN TURNED THIS ARM AROUND, and the reason is worth keeping. What a replacement
+# preserved used to be "the mode it already had, narrowed". 0o400 is the case that decided it: a
+# report the OPERATOR had made read-only and a report the UMASK had made read-only are the same
+# four bits, and this writer cannot tell them apart. Removing an owner's own bits from a file that
+# owner still owns enforces nothing — the uid restores them at will — so the only thing the
+# preservation reliably delivered was a findings report its reader could not open. 0o200 is
+# included because it is what umask 0400 actually produces.
+@pytest.mark.parametrize("preset", [0o600, 0o400, 0o200])
+def test_replacing_a_report_publishes_the_one_rule_whatever_it_replaced(
+        tmp_path: Path, preset: int) -> None:
     if os.geteuid() == 0:
         pytest.skip("root ignores mode bits; this needs an unprivileged writer")
     driver = make_tool(tmp_path)
@@ -1518,10 +1545,11 @@ def test_replacing_a_report_preserves_the_mode_it_already_had(tmp_path: Path, pr
 
     proc = scan(tmp_path, driver, staging)
     assert proc.returncode == 0 and report(staging) == "scan_gate: CLEAN\n", "it rewrote the report"
-    assert _mode(rp) == preset, (
-        f"the report was {preset:04o} and is now {_mode(rp):04o}; replacing a file must not change "
-        "who can read or write it — widening a private report and narrowing a shared one are both "
-        "silent policy changes")
+    assert _mode(rp) == 0o600, (
+        f"the report stood at {preset:04o} and was republished at {_mode(rp):04o}; ONE RULE means "
+        "a replacement lands at 0600 — owner read and write, nothing for group, nothing for other")
+    assert rp.read_text(encoding="utf-8") == "scan_gate: CLEAN\n", (
+        "and the republished report must be readable by the uid that wrote it")
 
 
 def test_a_new_report_lands_where_an_ordinary_create_in_that_directory_lands(tmp_path: Path) -> None:
@@ -1531,7 +1559,10 @@ def test_a_new_report_lands_where_an_ordinary_create_in_that_directory_lands(tmp
     OWNER-ONLY: the gate refused the argument that group access expresses a sharing decision,
     since an ordinary create grants the primary group access with nobody deciding anything. So the
     assertion is no longer "an ordinary create minus other" — it is that nothing beyond the owner
-    is granted, while a directory policy stricter than 0600 still wins by intersection.
+    is granted. Round seventeen removed the second half of the sentence that used to stand here,
+    which said a directory policy stricter than 0600 still wins by intersection: it does not any
+    more, because the only thing that reliably arrived through that intersection was the umask
+    stripping the owner's own bits off the findings. The mode is a constant now.
     """
     if os.geteuid() == 0:
         pytest.skip("root ignores mode bits; this needs an unprivileged writer")
@@ -1551,14 +1582,21 @@ def test_a_new_report_lands_where_an_ordinary_create_in_that_directory_lands(tmp
     assert got & stat.S_IRUSR, f"and its owner must still be able to read it, not {got:04o}"
 
 
-def test_a_default_acl_stricter_than_owner_only_still_wins(tmp_path: Path) -> None:
-    """The inheritance that SURVIVES the owner-only rule, because intersection cannot widen.
+def test_a_default_acl_that_would_lock_the_owner_out_does_not_decide_the_report(
+        tmp_path: Path) -> None:
+    """The arm that changed direction at round seventeen, and why.
 
-    Round eleven stopped a new report inheriting an ordinary create, which had published findings
-    at 0644. The mode is intersected with 0600 rather than assigned, so a directory whose default
-    ACL is STRICTER than owner-only still decides. Without this arm the intersection is
-    indistinguishable from a hard-coded 0600, and the machinery that reads the directory could be
-    deleted with the suite still green.
+    Until then the mode was INTERSECTED with what the directory would give an ordinary create, so
+    a default ACL stricter than owner-only decided the published mode. A cold review leg measured
+    the consequence: a directory whose default ACL grants the owner read only, or nothing at all,
+    published the findings at 0400 or 0000 — a report carrying the class, path and line of every
+    secret found, in a file the operator who asked for it cannot open.
+
+    Removing an owner's own bits from a file that owner still owns is not a stricter policy. The
+    uid restores them whenever it likes, so nothing was ever enforced by it; what the intersection
+    actually bought was an unreadable artifact that reads, to a human, exactly like a scanner that
+    found nothing. The directory's answer is still honoured in the direction that can hurt — a
+    default ACL granting OTHER is stripped rather than carried, which the arm below measures.
     """
     if os.geteuid() == 0:
         pytest.skip("root ignores mode bits; this needs an unprivileged writer")
@@ -1573,19 +1611,22 @@ def test_a_default_acl_stricter_than_owner_only_still_wins(tmp_path: Path) -> No
                              capture_output=True, text=True)
     if applied.returncode != 0:
         pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
-    expected = _ordinary_create_mode(reports_dir)
-    if expected & 0o200:
-        pytest.skip(f"this filesystem gave an ordinary create {expected:04o} despite a read-only "
-                    "default ACL; the stricter-wins property is not measurable here")
+    inherited = _ordinary_create_mode(reports_dir)
+    if inherited & 0o200:
+        pytest.skip(f"this filesystem gave an ordinary create {inherited:04o} despite a read-only "
+                    "default ACL; there is nothing for this arm to measure")
 
     proc = scan(tmp_path, driver, staging)
     assert proc.returncode == 0, "CONTROL: a clean run"
-    got = _mode(staging / REPORT_REL)
-    assert got == expected, (
-        f"the report is {got:04o} where this directory's default ACL gives {expected:04o}. A "
-        "policy stricter than owner-only must still win: the mode is intersected with 0600, and "
-        "an intersection cannot widen — if this now reads 0600, the directory is no longer being "
-        "consulted at all")
+    rp = staging / REPORT_REL
+    got = _mode(rp)
+    assert got == 0o600, (
+        f"an ordinary create in this directory lands at {inherited:04o} and the report came out "
+        f"at {got:04o}. The one rule is 0600: a default ACL that would lock the owner out of the "
+        "findings must not decide the mode of the report those findings are published in")
+    assert rp.read_text(encoding="utf-8") == "scan_gate: CLEAN\n", (
+        f"CONTROL: the report must be readable by the uid that wrote it; an ordinary create here "
+        f"gives {inherited:04o}, which is the mode this arm exists to stop being used")
 
 
 def test_a_default_acl_granting_other_does_not_widen_a_new_report(tmp_path: Path) -> None:
@@ -1659,103 +1700,6 @@ def test_a_refusal_report_keeps_the_mode_the_report_it_replaces_had(tmp_path: Pa
             "replacing a private report with a refusal must not publish it more widely")
     finally:
         locked.chmod(0o755)
-
-
-# =============================================================================================
-# GROUP 18 — the mode probe must not collide with, or destroy, a file it did not create
-#
-# Round-3 adversarial review. GROUP 17's contract is read by creating a probe file in the report's
-# own directory and asking the filesystem what mode it got. The first implementation used a FIXED
-# name and unlinked that path unconditionally, which produces two defects measured here:
-#
-#   1. A file already at that name makes O_EXCL fail, so every later report silently falls back to
-#      a umask-derived mode — the exact answer GROUP 17 exists to stop being used.
-#   2. The unlink runs in a finally, so it DELETES that file even though this code did not create
-#      it. A tool whose entire purpose is refusing to write through things it does not own must not
-#      remove a stranger's file at a predictable path.
-#
-# The probe has to be uniquely named per attempt, and nothing may be unlinked that was not created
-# by the attempt doing the unlinking.
-# =============================================================================================
-
-
-def test_the_mode_probe_never_deletes_a_file_it_did_not_create(tmp_path: Path) -> None:
-    driver = make_tool(tmp_path)
-    module = import_driver(driver, "probe_victim")
-    reports_dir = tmp_path / "_reports"
-    reports_dir.mkdir()
-    victim = reports_dir / ".scan_report_mode_probe"
-    victim.write_text("SOMEONE ELSE FILE", encoding="utf-8")
-
-    module._report_mode(str(reports_dir / "scan_report.txt"), str(reports_dir))
-
-    assert victim.exists(), "the probe must not remove a file it did not create"
-    assert victim.read_text(encoding="utf-8") == "SOMEONE ELSE FILE", "and must not rewrite it"
-
-
-def test_a_file_at_the_probe_name_does_not_downgrade_the_mode_contract(tmp_path: Path) -> None:
-    """A leftover must not silently push every later report onto the fallback.
-
-    This arm NEEDS a default ACL. Without one the fallback and the correct answer are the same
-    number on this box, so the assertion holds whether or not the collision was routed around —
-    a test that cannot fail. The control below refuses to proceed until they actually differ.
-    """
-    if os.geteuid() == 0:
-        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
-    if shutil.which("setfacl") is None:
-        pytest.skip("setfacl is not installed; without an ACL this arm cannot distinguish the two")
-    driver = make_tool(tmp_path)
-    module = import_driver(driver, "probe_collision")
-    reports_dir = tmp_path / "_reports"
-    reports_dir.mkdir()
-    applied = subprocess.run(["setfacl", "-d", "-m", "u::rw,g::r,o::-", str(reports_dir)],
-                             capture_output=True, text=True)
-    if applied.returncode != 0:
-        pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
-
-    expected = _ordinary_create_mode(reports_dir) & ~0o007   # other is capped off
-    mask = os.umask(0o022)
-    os.umask(mask)
-    assert expected != 0o666 & ~mask, (
-        "CONTROL: the ACL must make the correct answer differ from the fallback, or this arm "
-        f"cannot tell them apart (both would be {expected:04o})")
-
-    (reports_dir / ".scan_report_mode_probe").write_text("in the way\n", encoding="utf-8")
-    got = module._report_mode(str(reports_dir / "scan_report.txt"), str(reports_dir))
-
-    assert got == expected, (
-        f"with a file at the probe name the contract returned {got:04o} instead of {expected:04o}; "
-        "a collision must be routed around, not answered with the fallback guess")
-
-
-def test_the_fallback_is_used_only_when_the_directory_cannot_be_probed(tmp_path: Path) -> None:
-    """The branch that was invisible: a deliberately wrong fallback passed the whole suite."""
-    if os.geteuid() == 0:
-        pytest.skip("root can write a directory with no write bit; this needs an unprivileged writer")
-    driver = make_tool(tmp_path)
-    module = import_driver(driver, "probe_fallback")
-    reports_dir = tmp_path / "_reports"
-    reports_dir.mkdir()
-    reports_dir.chmod(0o500)
-    try:
-        try:
-            (reports_dir / ".writable_probe").write_text("x", encoding="utf-8")
-            pytest.skip("the OS does not enforce the directory write bit here; arm not measurable")
-        except OSError:
-            pass
-        got = module._report_mode(str(reports_dir / "scan_report.txt"), str(reports_dir))
-        mask = os.umask(0o022)
-        os.umask(mask)
-        assert got == 0o600, (
-            f"an unmeasurable directory must answer 0600, got {got:04o}. It used to answer the "
-            "umask formula; round-5 review measured that publishing 0664 where an ordinary create "
-            "gives 0640, granting other-read the directory's default ACL withheld. A formula "
-            "cannot see a default ACL, so when the probe cannot run there is nothing to compute "
-            "from and the only safe answer is the one that cannot widen access.")
-        assert got & 0o077 == 0, (
-            "CONTROL: whatever the unmeasurable answer is, it must grant nothing to group or other")
-    finally:
-        reports_dir.chmod(0o700)
 
 
 # =============================================================================================
@@ -1883,93 +1827,6 @@ def test_a_refusal_report_strips_the_access_control_list_too(tmp_path: Path) -> 
         f"and it must be owner-only, not {stat.S_IMODE(rp.stat().st_mode):04o}")
 
 
-def test_the_mode_probe_cannot_be_raced_onto_a_name(tmp_path: Path, monkeypatch) -> None:
-    """A named probe is a promise an attacker can keep for you.
-
-    The instrument substitutes a file for whatever named entry the probe creates, which is what a
-    writer to the reports directory can do between the create and the stat. Against a probe that
-    never publishes a name there is nothing to substitute and the hook finds no file to rename.
-    """
-    driver = make_tool(tmp_path)
-    module = import_driver(driver, "probe_race")
-    reports_dir = tmp_path / "_reports"
-    reports_dir.mkdir()
-    victim = reports_dir / "someone_elses_file"
-    victim.write_text("SOMEONE ELSE FILE", encoding="utf-8")
-    victim.chmod(0o606)
-
-    real_open = module.os.open
-    opens: list[tuple[str, int]] = []
-
-    probe_dir = str(reports_dir)
-
-    def racing_open(path, flags, *args, **kwargs):
-        fd = real_open(path, flags, *args, **kwargs)
-        opens.append((str(path), flags))
-        # Keyed on a named FILE appearing, not on a flag bit, so the arm does not depend on how
-        # any particular libc spells its open modes. Scoped to entries the scanner creates inside
-        # the reports directory: os.open is process-wide while patched, so an unscoped hook would
-        # happily rename the victim over an unrelated file pytest itself opened.
-        if (isinstance(path, str) and os.path.dirname(path) == probe_dir
-                and path != str(victim) and os.path.isfile(path)):
-            try:
-                os.rename(str(victim), path)
-            except OSError:
-                pass
-        return fd
-
-    if not getattr(os, "O_TMPFILE", 0):
-        pytest.skip("no O_TMPFILE here; the unnamed-probe property is not measurable on this "
-                    "platform and the fallback it takes instead is pinned by its own arm")
-    try:
-        # The flag EXISTING is not the filesystem accepting it. Without this the scanner takes its
-        # 0600 fallback, the mode stops matching an ordinary create, and the arm reds against a
-        # correct implementation on a filesystem it was never claiming to cover.
-        _probe_fd = os.open(str(reports_dir), os.O_TMPFILE | os.O_RDWR, 0o600)
-        os.close(_probe_fd)
-    except OSError as exc:
-        pytest.skip(f"this filesystem rejects O_TMPFILE ({exc.strerror}); the unnamed-probe "
-                    "property is not measurable here")
-    # NOT capped: _report_mode returns what an ordinary create produces. The "other" cap belongs
-    # to _install_posix_acl_policy, which is the caller; asserting it here would pin the cap to
-    # the wrong function and let the real one drop it silently.
-    expected = _ordinary_create_mode(reports_dir)
-
-    monkeypatch.setattr(module.os, "open", racing_open)
-    got = module._report_mode(str(reports_dir / "scan_report.txt"), str(reports_dir))
-
-    assert opens, "CONTROL: the instrument saw no open() at all, so this arm measured nothing"
-    assert victim.exists(), (
-        "the probe deleted a file it did not create: a rename onto the probe's name puts a "
-        "stranger's inode where the unlink is aimed, and unique naming does not close that")
-    assert victim.read_text(encoding="utf-8") == "SOMEONE ELSE FILE", "and must not rewrite it"
-    # Asserting the POSITIVE property. An earlier draft asserted `got != 0o606`, the victim's
-    # mode — which fails against a correct scanner whenever an ordinary create legitimately
-    # produces 0606 (umask 060), and blames a substitution that never happened.
-    assert got == expected, (
-        f"the contract came back as {got:04o} where an ordinary create in this directory gives "
-        f"{expected:04o}. A probe that stats a NAME reports whatever was standing at that name.")
-    # Necessary is not sufficient. os.open(dir, O_RDONLY) plus the umask formula returns the same
-    # number on a directory with NO default ACL, publishes a pathname, and would sail past the
-    # assertion above. The property is that no directory entry is ever created, so pin the flag
-    # that makes that true.
-    # An O_TMPFILE open names the DIRECTORY, not a file in it, so both shapes count: the
-    # directory itself (the unnamed case) and any entry within it (the named case this forbids).
-    # The property is that no NAMED entry is created, not that the directory is never opened.
-    # Requiring every open here to carry O_TMPFILE also forbade a plain O_RDONLY open of the
-    # directory — an openat anchor, which is the descriptor-anchored direction this code should
-    # be free to move in. An arm that penalises the improvement it wants is worse than no arm.
-    named = [(p, f) for p, f in opens if os.path.dirname(p) == str(reports_dir)]
-    assert not named, (
-        f"a NAMED entry was opened in the reports directory: {[(p, oct(f)) for p, f in named]}. "
-        "Matching an ordinary create's mode does not establish that no name was published, and "
-        "the name is the whole hazard")
-    on_dir = [(p, f) for p, f in opens if p == str(reports_dir)]
-    assert any(f & os.O_TMPFILE == os.O_TMPFILE for _, f in on_dir), (
-        f"no unnamed file was ever created: {[(p, oct(f)) for p, f in on_dir]}. The mode matching "
-        "an ordinary create is necessary and not sufficient")
-
-
 def test_a_report_with_no_acl_does_not_inherit_the_directorys_default(tmp_path: Path) -> None:
     """Absence of an ACL is a policy, not an absence of one.
 
@@ -2064,20 +1921,23 @@ def test_the_staged_report_is_never_wider_than_the_policy_being_installed(tmp_pa
     staged.write_text("scan_gate: REFUSED input-error\n", encoding="utf-8")
     staged.chmod(0o600)
 
-    real_chmod = module.os.chmod
+    # The mode call moved from a pathname chmod to fchmod on the held descriptor at round
+    # seventeen, so the observation moved with it. Reading the mode back through os.fstat(fd)
+    # rather than by name is the point: a name can be swapped between the call and the readback,
+    # which is the defect this whole move closes.
+    real_fchmod = module.os.fchmod
     seen: list[int] = []
 
-    def watching_chmod(path, mode, *args, **kwargs):
-        result = real_chmod(path, mode, *args, **kwargs)
-        if str(path) == str(staged):
-            seen.append(stat.S_IMODE(os.stat(path).st_mode))
+    def watching_fchmod(fd, mode, *args, **kwargs):
+        result = real_fchmod(fd, mode, *args, **kwargs)
+        seen.append(stat.S_IMODE(os.fstat(fd).st_mode))
         return result
 
-    module.os.chmod = watching_chmod
+    module.os.fchmod = watching_fchmod
     try:
-        module._install_posix_acl_policy(str(rp), str(staged))
+        install_policy(module, rp, staged)
     finally:
-        module.os.chmod = real_chmod
+        module.os.fchmod = real_fchmod
 
     assert seen, "CONTROL: no chmod on the staged file was observed, so nothing was measured"
     wider = [oct(m) for m in seen if m & 0o077]
@@ -2108,7 +1968,7 @@ def test_a_refusal_that_cannot_publish_replaces_the_stale_clean(tmp_path: Path, 
     rp = reports_dir / "scan_report.txt"
     rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
 
-    def refuses(src, dst):
+    def refuses(src, dst_fd, dst):
         raise OSError("report-permission-preservation-failed")
 
     monkeypatch.setattr(module, "_install_posix_acl_policy", refuses)
@@ -2154,44 +2014,58 @@ def test_a_recoverable_group_difference_is_repaired_rather_than_refused(tmp_path
     staged.chmod(0o600)
 
     real_stat = module.os.stat
+    real_fstat = module.os.fstat
     other_gid = os.getgid() + 1
+    staged_ino = staged.stat().st_ino
 
     chowns: list[dict] = []
     # The simulated chown MOVES the simulated group, exactly where a real one would. An earlier
     # draft made the post-repair verification succeed as soon as ANY chown was recorded, so
     # chowning the WRONG FILE passed the arm — measured by the round-6 reviewer, which ran
-    # chown(src, ...) against these assertions and watched them go green.
-    simulated_gid: dict[str, int] = {str(rp): other_gid}
+    # chown(src, ...) against these assertions and watched them go green. The identity assertion
+    # is now on the INODE behind the descriptor, which is strictly harder to fake than a path
+    # string: a descriptor pointing at the old report fails it.
+    simulated_path_gid: dict[str, int] = {str(rp): other_gid}
+    simulated_fd_gid: dict[int, int] = {}
 
     def stat_with_a_different_group(path, *args, **kwargs):
         st = real_stat(path, *args, **kwargs)
-        gid = simulated_gid.get(str(path))
+        gid = simulated_path_gid.get(str(path))
         if gid is not None:
             return os.stat_result(tuple(st)[:5] + (gid,) + tuple(st)[6:])
         return st
 
-    def recording_chown(path, uid, gid, *args, follow_symlinks=True, **kwargs):
-        chowns.append({"path": str(path), "uid": uid, "gid": gid,
-                       "follow_symlinks": follow_symlinks})
-        simulated_gid[str(path)] = gid            # a real chown needs a second group a test lacks
+    def fstat_with_a_different_group(fd, *args, **kwargs):
+        st = real_fstat(fd, *args, **kwargs)
+        gid = simulated_fd_gid.get(fd)
+        if gid is not None:
+            return os.stat_result(tuple(st)[:5] + (gid,) + tuple(st)[6:])
+        return st
+
+    def recording_fchown(fd, uid, gid, *args, **kwargs):
+        chowns.append({"ino": real_fstat(fd).st_ino, "uid": uid, "gid": gid})
+        simulated_fd_gid[fd] = gid                # a real chown needs a second group a test lacks
+
+    def forbidden_chown(*args, **kwargs):
+        raise AssertionError(
+            "the repair used a PATHNAME chown; a name can be swapped for a symlink between the "
+            "regular-file check and the call, and the descriptor is what cannot be")
 
     monkeypatch.setattr(module.os, "stat", stat_with_a_different_group)
-    monkeypatch.setattr(module.os, "chown", recording_chown)
-    module._install_posix_acl_policy(str(rp), str(staged))
+    monkeypatch.setattr(module.os, "fstat", fstat_with_a_different_group)
+    monkeypatch.setattr(module.os, "fchown", recording_fchown)
+    monkeypatch.setattr(module.os, "chown", forbidden_chown)
+    install_policy(module, rp, staged)
 
     assert chowns, (
         "CONTROL: no chown was attempted, so the repair path was never entered and this arm "
         "would pass against an implementation that simply ignored the group")
-    assert chowns[0]["path"] == str(staged), (
-        f"the repair chowned {chowns[0]['path']!r}, not the staged file. Repairing the OLD report "
-        "instead would satisfy every other assertion here while changing the artifact this "
-        "function was asked to leave alone")
+    assert chowns[0]["ino"] == staged_ino, (
+        f"the repair chowned inode {chowns[0]['ino']}, not the staged file's {staged_ino}. "
+        "Repairing the OLD report instead would satisfy every other assertion here while "
+        "changing the artifact this function was asked to leave alone")
     assert chowns[0]["uid"] == -1 and chowns[0]["gid"] == other_gid, (
         f"the repair must set the OLD group and leave the owner alone, got {chowns[0]!r}")
-    assert chowns[0]["follow_symlinks"] is False, (
-        "the repair followed symlinks. Every other metadata call in this helper passes "
-        "follow_symlinks=False; os.chown defaults to True, so a dst that became a symlink after "
-        "the regular-file check would have its TARGET regrouped")
 
 
 def test_a_refusal_preserves_the_findings_it_supersedes(tmp_path: Path, monkeypatch) -> None:
@@ -2294,14 +2168,14 @@ def test_a_group_that_cannot_be_repaired_raises_rather_than_publishing(tmp_path:
             return os.stat_result(tuple(st)[:5] + (other_gid,) + tuple(st)[6:])
         return st
 
-    def failing_chown(path, uid, gid, *args, **kwargs):
+    def failing_fchown(fd, uid, gid, *args, **kwargs):
         raise PermissionError(1, "not a member of that group")
 
     monkeypatch.setattr(module.os, "stat", stat_with_a_different_group)
-    monkeypatch.setattr(module.os, "chown", failing_chown)
+    monkeypatch.setattr(module.os, "fchown", failing_fchown)
 
     with pytest.raises(OSError) as caught:
-        module._install_posix_acl_policy(str(rp), str(staged))
+        install_policy(module, rp, staged)
     assert "report-permission-preservation-failed" in str(caught.value), (
         f"an unrepairable group must refuse, got {caught.value!r}")
     assert stat.S_IMODE(staged.stat().st_mode) & 0o077 == 0, (
@@ -2850,7 +2724,7 @@ def test_an_acl_that_grants_other_is_stripped_rather_than_refused(tmp_path: Path
         pytest.skip(f"the filesystem refused an ACL entry: {seeded.stderr.strip()[:80]}")
     assert _acl(staged) is not None, "CONTROL: the staged file carries an ACL to strip"
 
-    module._install_posix_acl_policy(str(rp), str(staged))
+    install_policy(module, rp, staged)
 
     mode = stat.S_IMODE(staged.stat().st_mode)
     assert not mode & 0o077, (
@@ -2907,26 +2781,26 @@ def test_a_planted_existing_report_cannot_widen_the_findings_it_is_replaced_by(
 
 @pytest.mark.parametrize("acl,label", [("u::r,g::-,o::-", "owner-read-only"),
                                        ("u::-,g::-,o::-", "no-access")])
-def test_a_failed_mode_probe_does_not_discard_a_stricter_directory_policy(
+def test_a_directory_policy_cannot_publish_a_report_its_owner_cannot_read(
         tmp_path: Path, acl: str, label: str) -> None:
-    """The cross-product the gate asked for: a restrictive directory AND an unusable probe.
+    """The cross-product the gate asked for, kept and turned around.
 
-    _report_mode measures what an ordinary create here produces — except when its unnamed
-    O_TMPFILE probe is unsupported, where it returns a GUESSED 0o600. A guess cannot preserve a
-    restriction it never measured, so intersecting with it published 0600 where the directory's
-    real answer was 0400, and 0600 where it was 0000. Reproduced by the gate with the probe forced
-    to fail; the filesystem, the ACL and the writer were otherwise real.
+    It was built around _report_mode, a probe that measured what an ordinary create in the report
+    directory produces and returned a GUESSED 0o600 when its unnamed O_TMPFILE attempt was
+    unsupported. Round seventeen deleted the probe: under a constant published mode there is
+    nothing left to discover, and a function whose docstring described a caller that no longer
+    existed is the defect the previous two rounds were spent on.
 
-    The staged mkstemp inode is the measured answer: mkstemp is itself an ordinary create in this
-    directory, so its mode already carries the default ACL and the umask, with no probe involved.
-    Intersecting with it cannot widen anything and rescues exactly the discarded restriction.
+    The CONFIGURATIONS it exercised are the valuable part and they stay. A directory whose default
+    ACL grants the owner read only, or nothing at all, is exactly where the old intersection
+    published findings at 0400 and 0000. Both now publish 0600 and both are readable.
     """
     if os.geteuid() == 0:
         pytest.skip("root ignores mode bits; this needs an unprivileged writer")
     if shutil.which("setfacl") is None:
         pytest.skip("setfacl is not installed; the default-ACL contract cannot be measured here")
     driver = make_tool(tmp_path)
-    module = import_driver(driver, "failed_probe_%s" % label)
+    module = import_driver(driver, "locked_out_%s" % label)
     staging = tmp_path / "staging"
     reports_dir = staging / "_reports"
     reports_dir.mkdir(parents=True)
@@ -2935,42 +2809,28 @@ def test_a_failed_mode_probe_does_not_discard_a_stricter_directory_policy(
     if applied.returncode != 0:
         pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
 
-    real_open = module.os.open
-    tmpfile_flag = getattr(os, "O_TMPFILE", 0)
-    refused: list[int] = []
-
-    def probe_refusing_open(path, flags, *args, **kwargs):
-        # (flags & O_TMPFILE) == O_TMPFILE, not a bare AND. O_TMPFILE is 0o20200000 and INCLUDES
-        # O_DIRECTORY (0o200000), so a bare AND matches every plain directory open too — which
-        # made this injector refuse the report directory's own O_DIRECTORY handle and red the arm
-        # for a reason that has nothing to do with the probe it exists to fault.
-        if tmpfile_flag and (flags & tmpfile_flag) == tmpfile_flag:
-            refused.append(flags)
-            raise OSError(errno.EOPNOTSUPP, "O_TMPFILE unsupported (injected)")
-        return real_open(path, flags, *args, **kwargs)
-
-    module.os.open = probe_refusing_open
-    try:
-        module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
-                                            "generic_key_assignment", "contents")])
-    finally:
-        module.os.open = real_open
-
-    if not refused:
-        pytest.skip("this build never attempted an O_TMPFILE probe; nothing was made to fail")
-
-    rp = reports_dir / "scan_report.txt"
-    got = stat.S_IMODE(rp.stat().st_mode)
     reference = reports_dir / ".ordinary_reference"
     fd = os.open(str(reference), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     os.close(fd)
-    expected = stat.S_IMODE(reference.stat().st_mode)
+    inherited = stat.S_IMODE(reference.stat().st_mode)
     reference.unlink()
+    if inherited & 0o400 and inherited & 0o200:
+        pytest.skip(f"this filesystem gave an ordinary create {inherited:04o} despite {acl!r}; "
+                    "the owner is not locked out here, so there is nothing to measure")
 
-    assert got == expected, (
-        f"with the probe unusable the report landed {got:04o}, but this directory actually gives "
-        f"{expected:04o} to a private create. A guessed 0600 discarded the restriction the "
-        "directory had already applied; the staged inode carries it without guessing")
+    module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                        "generic_key_assignment", "contents")])
+
+    rp = reports_dir / "scan_report.txt"
+    got = stat.S_IMODE(rp.stat().st_mode)
+    assert got == 0o600, (
+        f"a private create in this directory lands at {inherited:04o} and the findings report "
+        f"came out at {got:04o}; the published mode is a constant, not a term intersected with "
+        "whatever the directory would have handed an ordinary file")
+    assert rp.read_text(encoding="utf-8"), (
+        f"the findings report is not readable by the uid that wrote it. An ordinary create here "
+        f"gives {inherited:04o} — this is the outcome the constant exists to prevent")
+
 
 
 @pytest.mark.parametrize("umask_val", [0o022, 0o002, 0o000])
@@ -3205,7 +3065,7 @@ def test_the_refusal_fallback_strips_an_inherited_acl_too(tmp_path: Path) -> Non
         pytest.skip("this filesystem does not hand a new file the directory default ACL")
 
     # Force the ordinary policy install to fail so the FALLBACK is what publishes.
-    def refusing_policy(src, dst):
+    def refusing_policy(src, dst_fd, dst):
         raise OSError(errno.EIO, "report-permission-preservation-failed")
     module._install_posix_acl_policy = refusing_policy
 
@@ -3260,3 +3120,237 @@ def test_a_write_and_traverse_report_directory_still_publishes(tmp_path: Path,
         f"a {dmode:04o} report directory refused the publish, but its owner can create there — "
         "the hardening turned a working configuration into a refusal, which is a stale-CLEAN "
         "consequence rather than a permission limit")
+
+
+# =============================================================================================
+# GROUP 22 — the seventeenth round. A policy expressed as an INTERSECTION cannot tell
+# "narrower because the operator wants it narrower" from "narrower because the umask removed
+# the owner's OWN bits", and the second one publishes an artifact nobody can open.
+#
+# The cold leg measured all of this on the box:
+#
+#   umask 0400 -> mkstemp gives 0200 -> `staged & 0600` publishes the findings at 0200. That
+#   report carries the class, path and line of every secret found, and the operator who just
+#   asked what the scanner found cannot read it. Python's own tempfile documentation calls
+#   mkstemp "readable and writable only by the creating user ID"; under that umask it is false.
+#
+#   umask 0277 with no _reports -> makedirs(mode=0o700) yields 0500, and 0600/0700 yield
+#   0100/0000 -> the next mkstemp raises EACCES -> the scan refuses a tree whose owner can
+#   write it perfectly well. Round fourteen's availability regression again, moved from the
+#   hardening path into the creation path.
+#
+# Removing an owner's own bits from a file that owner still owns buys NO confidentiality — the
+# uid can restore them whenever it likes — so the intersection was paying an availability cost
+# for nothing. ONE RULE replaces it: the report is published at exactly 0600, the report
+# directory keeps owner rwx, and group and other are what the confidentiality argument was
+# always actually about.
+#
+# The same round found the mode call reachable through a swapped pathname. Every other metadata
+# call in the policy installer passes follow_symlinks=False; os.chmod on this platform cannot
+# (os.chmod is not in os.supports_follow_symlinks, and follow_symlinks=False raises
+# NotImplementedError, which is not an OSError and would escape the refusal writer). So the one
+# call that could not refuse to follow was being made on a name the scanner had already stopped
+# holding a descriptor for — a chmod gadget on any file this uid can chmod. It is made on the
+# descriptor now, and the staged name is checked to still BE that descriptor's inode before the
+# publish.
+# =============================================================================================
+
+
+class _SwapAfterWrite:
+    """Wraps the writer object so an interleave fires the instant the body is written.
+
+    The seam is ``os.fdopen``, which the publication path calls in every revision of this file,
+    so an arm built on it measures the BEHAVIOUR on either side of the repair rather than a
+    changed signature. A test that can only fail with a TypeError is not a proof.
+    """
+
+    def __init__(self, wrapped, swap):
+        self._wrapped = wrapped
+        self._swap = swap
+
+    def __enter__(self):
+        self._wrapped.__enter__()
+        return self
+
+    def write(self, data):
+        return self._wrapped.write(data)
+
+    def __exit__(self, *exc):
+        result = self._wrapped.__exit__(*exc)
+        self._swap()
+        return result
+
+
+@pytest.mark.parametrize("mask", [0o400, 0o200, 0o600])
+def test_a_umask_that_masks_owner_bits_still_publishes_a_readable_report(
+    tmp_path: Path, mask: int
+) -> None:
+    """REPAIRED: the published report is owner-readable whatever the umask masked.
+
+    The report directory is pre-created 0700 so this arm measures the FILE rule alone; the
+    directory rule has its own arm below.
+    """
+    driver = make_tool(tmp_path, name="tool_%o" % mask)
+    module = import_driver(driver, "umask_owner_%o" % mask)
+    staging = tmp_path / "staging"
+    (staging / "_reports").mkdir(parents=True)
+    (staging / "_reports").chmod(0o700)
+
+    old = os.umask(mask)
+    try:
+        module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                            "generic_key_assignment", "contents")])
+    finally:
+        os.umask(old)
+
+    report = staging / REPORT_REL
+    mode = stat.S_IMODE(report.stat().st_mode)
+    assert mode == 0o600, (
+        f"REPAIRED: umask {mask:04o} published the findings report at {mode:04o}; owner-only "
+        "means the owner can READ it, and an unopenable report is not a published one"
+    )
+    assert report.read_text(encoding="utf-8"), (
+        "REPAIRED: the report must be openable by the uid that just wrote it"
+    )
+
+
+@pytest.mark.parametrize("mask", [0o277, 0o600, 0o700])
+def test_a_umask_that_masks_owner_bits_does_not_refuse_a_writable_tree(
+    tmp_path: Path, mask: int
+) -> None:
+    """REPAIRED: creating the report directory under a restrictive umask must not refuse.
+
+    A CONTROL creates a file directly in the staging tree under the same umask first, so a
+    failure here is the publication path's and not the fixture's.
+    """
+    driver = make_tool(tmp_path, name="tool_%o" % mask)
+    module = import_driver(driver, "umask_dir_%o" % mask)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    old = os.umask(mask)
+    try:
+        control = staging / "control.txt"
+        control_fd = os.open(str(control), os.O_CREAT | os.O_WRONLY, 0o600)
+        os.close(control_fd)
+        assert control.exists(), (
+            f"CONTROL: umask {mask:04o} must still allow an ordinary create in the staging tree "
+            "— if this fails the fixture is wrong, not the scanner"
+        )
+        module.write_report(str(staging), [])
+    finally:
+        os.umask(old)
+
+    assert (staging / REPORT_REL).exists(), (
+        f"REPAIRED: umask {mask:04o} made the publication path refuse a tree its owner can "
+        "write; os.makedirs is umask-masked, so mode=0o700 never arrived as 0700"
+    )
+    dmode = stat.S_IMODE((staging / "_reports").stat().st_mode)
+    assert dmode & 0o700 == 0o700, (
+        f"REPAIRED: the report directory came out {dmode:04o}; the scanner cannot publish into "
+        "a directory it cannot itself write, list and traverse"
+    )
+    assert not dmode & 0o022, (
+        f"CONTROL: the report directory came out {dmode:04o}; restoring the owner's bits must "
+        "not hand group or other the write that lets them forge a report"
+    )
+    # These fixtures deliberately create files and directories the umask stripped to 0000, which
+    # the temp-directory cleaner cannot then remove — it leaves undeletable garbage under /tmp and
+    # warns on every later run. Restoring the modes is the fixture's own mess to clear up.
+    for child in sorted(staging.rglob("*"), reverse=True):
+        child.chmod(0o700 if child.is_dir() else 0o600)
+
+
+def test_the_policy_mode_call_cannot_be_redirected_onto_a_file_outside_the_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REPAIRED: a staged name swapped for a symlink must not mutate the symlink's target.
+
+    Measured on the old path: os.chmod(dst, mode) with no follow_symlinks took a 0644 victim to
+    0600 and only THEN raised, because the verifying stat read the symlink's own mode. The
+    publish failed, the hits were destroyed, and a file outside the scanned tree was left
+    permanently mode-mutated.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "chmod_gadget")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+
+    victim = tmp_path / "victim_outside_the_tree.txt"
+    victim.write_text("not the scanner's file\n", encoding="utf-8")
+    victim.chmod(0o644)
+
+    def swap() -> None:
+        staged = [p for p in reports.iterdir() if p.name.startswith(".scan_report_")]
+        assert staged, "fixture: the staged temporary file was not found to swap"
+        target = staged[0]
+        target.unlink()
+        target.symlink_to(victim)
+
+    real_fdopen = os.fdopen
+
+    def swapping_fdopen(*args, **kwargs):
+        return _SwapAfterWrite(real_fdopen(*args, **kwargs), swap)
+
+    monkeypatch.setattr(module.os, "fdopen", swapping_fdopen)
+
+    try:
+        module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                            "generic_key_assignment", "contents")])
+    except Exception:
+        pass
+
+    assert stat.S_IMODE(victim.stat().st_mode) == 0o644, (
+        "REPAIRED: the policy mode call followed the swapped name and changed the mode of a "
+        "file outside the scanned tree — a chmod gadget on anything this uid can chmod"
+    )
+    assert victim.read_text(encoding="utf-8") == "not the scanner's file\n", (
+        "CONTROL: the victim's CONTENT was never in play; if this fires the fixture is wrong"
+    )
+    report = staging / REPORT_REL
+    assert not report.is_symlink(), (
+        "REPAIRED: the swapped name was published as the report, so the canonical report path "
+        "is now a symlink pointing outside the tree"
+    )
+
+
+@pytest.mark.parametrize("mask", [0o277, 0o022])
+def test_a_replacement_and_a_new_report_publish_the_same_mode(
+    tmp_path: Path, mask: int
+) -> None:
+    """REPAIRED: ONE RULE means both branches land on the same number.
+
+    The existing-report branch computed the staged inode's mode and then discarded it, so under
+    umask 0277 a replacement published 0600 while a new report in the same directory under the
+    same umask published 0400. Two branches, two rules, one docstring claiming otherwise.
+    """
+    driver = make_tool(tmp_path, name="tool_%o" % mask)
+    module = import_driver(driver, "one_rule_%o" % mask)
+
+    modes = {}
+    for label in ("new", "replacement"):
+        staging = tmp_path / ("staging_" + label)
+        reports = staging / "_reports"
+        reports.mkdir(parents=True)
+        reports.chmod(0o700)
+        if label == "replacement":
+            existing = reports / "scan_report.txt"
+            existing.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+            existing.chmod(0o600)
+
+        old = os.umask(mask)
+        try:
+            module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                                "generic_key_assignment", "contents")])
+        finally:
+            os.umask(old)
+        modes[label] = stat.S_IMODE((reports / "scan_report.txt").stat().st_mode)
+
+    assert modes["new"] == modes["replacement"], (
+        f"REPAIRED: umask {mask:04o} published a new report at {modes['new']:04o} and a "
+        f"replacement at {modes['replacement']:04o}; the docstring says ONE RULE, BOTH BRANCHES"
+    )
+    assert modes["new"] == 0o600, (
+        f"REPAIRED: the one rule is 0600 and both branches published {modes['new']:04o}"
+    )
