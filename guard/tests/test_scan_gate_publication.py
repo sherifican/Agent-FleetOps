@@ -5108,3 +5108,119 @@ def test_staged_findings_survive_the_staged_name_being_unlinked(tmp_path: Path) 
         "held descriptor when quarantine gave up on them, and the descriptor was then closed. "
         "A function that cannot take custody by NAME must copy the bytes out before the last "
         "reference goes")
+
+
+# =============================================================================================
+# GROUP 37 — the twenty-eighth round. Preservation stops asking a NAME and holds the inode.
+#
+# Three legs across two providers converged on one sentence, independently and with no shared
+# premise: this module moved every piece of metadata work onto held descriptors in rounds
+# eighteen to twenty-three, and preservation was left asking a pathname whether the policy is on
+# "the inode we actually hold". A name lookup is not a hold. The cold leg wrote the prescription
+# out: after the link, open the slot O_PATH, require its fstat to equal the inode that was
+# preserved, and do the narrowing and the classification THROUGH that descriptor.
+#
+# This does not make the path race-free and the limits section does not claim it does. What it
+# removes is the whole family in which the module ACTS ON THE WRONG INODE — narrows a planted
+# file and reports the policy installed, or reads a planted status line and releases findings it
+# never preserved. Those are the sequences where a name swap converts this scanner into the thing
+# that destroys the evidence.
+# =============================================================================================
+
+
+def test_a_slot_swapped_after_the_link_does_not_release_the_findings(tmp_path: Path) -> None:
+    """REPAIRED: classification must describe the inode that was preserved, not the name."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "slot_swapped_status_line")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    rp = reports / "scan_report.txt"
+    rp.write_text("aws\tkey\tassignment\tdocs/swapped.md:5\n", encoding="utf-8")
+
+    real_link = module.os.link
+    swapped: list[str] = []
+
+    def link_then_a_writer_replaces_the_slot(src, dst, *args, **kwargs):
+        result = real_link(src, dst, *args, **kwargs)
+        if not swapped:
+            swapped.append(dst)
+            # THE SWAP: the slot name now holds somebody else's STATUS LINE. Read by name, that
+            # says "this is not findings, release the slot and authorize the replacement" — about
+            # a file this scan never preserved.
+            plant = reports / (str(dst) + ".plant")
+            plant.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+            os.replace(plant, reports / str(dst))
+        return result
+
+    module.os.link = link_then_a_writer_replaces_the_slot
+    try:
+        authorized = preserve_superseded(module, reports)
+    finally:
+        module.os.link = real_link
+
+    if not swapped:
+        pytest.skip("no link was made, so no slot could be swapped")
+    assert _findings_anywhere(reports, "docs/swapped.md:5"), (
+        "REPAIRED: the findings are gone. A planted status line at the slot name was classified "
+        "as THIS scan's preserved copy, the slot was released, and the replacement was authorized "
+        "over the only remaining name for the real findings")
+    assert authorized is False, (
+        "REPAIRED: the replacement was authorized on the strength of a file this scan never "
+        "preserved. The slot no longer held the inode that was linked into it")
+
+
+def test_a_slot_swapped_after_the_link_is_not_reported_as_narrowed(tmp_path: Path) -> None:
+    """REPAIRED: narrowing a planted file must not count as installing policy on our inode."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "slot_swapped_narrow")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    rp = reports / "scan_report.txt"
+    rp.write_text("aws\tkey\tassignment\tdocs/narrowed.md:8\n", encoding="utf-8")
+
+    real_link = module.os.link
+    swapped: list[str] = []
+
+    def link_then_swap_in_other_findings(src, dst, *args, **kwargs):
+        result = real_link(src, dst, *args, **kwargs)
+        if not swapped:
+            swapped.append(dst)
+            plant = reports / (str(dst) + ".plant")
+            plant.write_text("gcp\tkey\tassignment\tsrc/theirs.py:1\n", encoding="utf-8")
+            os.replace(plant, reports / str(dst))
+        return result
+
+    module.os.link = link_then_swap_in_other_findings
+    try:
+        authorized = preserve_superseded(module, reports)
+    finally:
+        module.os.link = real_link
+
+    if not swapped:
+        pytest.skip("no link was made, so no slot could be swapped")
+    assert authorized is False, (
+        "REPAIRED: the policy was installed on a planted file and reported as installed on the "
+        "preserved inode, which then authorized replacing the report")
+    assert _findings_anywhere(reports, "docs/narrowed.md:8"), (
+        "CONTROL: and the findings must still be reachable")
+
+
+def test_the_ordinary_preservation_path_is_unchanged(tmp_path: Path) -> None:
+    """CONTROL: with nobody swapping anything, preservation still preserves and authorizes."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "held_copy_ordinary")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    rp = reports / "scan_report.txt"
+    rp.write_text("aws\tkey\tassignment\tdocs/plain.md:2\n", encoding="utf-8")
+    rp.chmod(0o644)
+
+    assert preserve_superseded(module, reports) is True, (
+        "CONTROL: the undisturbed path must still authorize the replacement — if this fails the "
+        "anchoring broke preservation rather than anchoring it")
+    kept = [p for p in reports.iterdir() if p.name.startswith("scan_report.superseded")]
+    assert kept, "CONTROL: and the findings must actually be preserved"
+    assert "docs/plain.md:2" in kept[0].read_text(encoding="utf-8")
+    if os.geteuid() != 0:
+        assert not stat.S_IMODE(kept[0].stat().st_mode) & 0o077, (
+            "CONTROL: narrowing through the descriptor must still reach the mode")

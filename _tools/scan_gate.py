@@ -1123,6 +1123,85 @@ def write_report(staging, hits):
 _STATUS_LINE_PREFIX = b"scan_gate: "
 
 
+def _open_held_copy(dirfd, name, expect):
+    """Open NAME and return a descriptor ONLY if it still refers to the inode we preserved.
+
+    This is the hold that preservation never had. Three review legs, across two providers and
+    with no shared premise, arrived at the same sentence about this path: rounds eighteen to
+    twenty-three moved every metadata operation onto a held descriptor so that a name in the
+    report directory could not be the object of a chmod or a replace, and preservation went on
+    asking a NAME whether the policy was on "the inode we actually hold". A name lookup is not a
+    hold, and the legs reproduced what that costs — a planted file narrowed and reported as our
+    preserved copy, a planted status line read as our classification and the findings released.
+
+    Returns (fd, via_proc), or (None, False) when the name is gone, is not a regular file, or is
+    no longer the inode it was linked to. O_PATH where available, for the reasons the narrowing
+    already documents: it needs no read permission and it cannot wait on a FIFO.
+
+    What this does NOT do is make the path race-free, and the limits section says so plainly. The
+    descriptor pins an INODE. Whether some directory entry still names that inode at the instant
+    a later syscall runs is a different question, and POSIX offers no way to bind the two.
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    opath = getattr(os, "O_PATH", 0)
+    via_proc = bool(opath) and _PROC_FD_DIR is not None
+    flags = (opath if via_proc else (os.O_RDONLY | nonblock)) | nofollow
+    try:
+        fd = os.open(name, flags, dir_fd=dirfd)
+    except OSError:
+        return None, False
+    try:
+        got = os.fstat(fd)
+    except OSError:
+        _close_quietly(fd)
+        return None, False
+    if not stat.S_ISREG(got.st_mode) or (got.st_dev, got.st_ino) != (expect.st_dev, expect.st_ino):
+        _close_quietly(fd)
+        return None, False
+    return fd, via_proc
+
+
+def _read_prefix_held(fd, via_proc, count):
+    """Read the first COUNT bytes of the inode behind FD, without naming it again."""
+    if via_proc:
+        nonblock = getattr(os, "O_NONBLOCK", 0)
+        try:
+            rfd = os.open("%s/%d" % (_PROC_FD_DIR, fd), os.O_RDONLY | nonblock)
+        except OSError:
+            return None
+        try:
+            return os.read(rfd, count)
+        except OSError:
+            return None
+        finally:
+            _close_quietly(rfd)
+    try:
+        return os.pread(fd, count, 0)
+    except OSError:
+        return None
+
+
+def _narrow_held_copy(fd, via_proc):
+    """The narrowing, on an inode already held. See _narrow_kept_copy for why each step is here."""
+    target = "%s/%d" % (_PROC_FD_DIR, fd) if via_proc else fd
+    if _XATTR_SUPPORTED:
+        try:
+            _strip_acl_by_fd(fd)
+        except OSError as exc:
+            if exc.errno not in _ACL_ABSENT:
+                try:
+                    os.chmod(target, _REPORT_MODE)
+                except OSError:
+                    pass
+                return False
+    try:
+        os.chmod(target, _REPORT_MODE)
+    except OSError:
+        return False
+    return True
+
+
 def _narrow_kept_copy(dirfd, name):
     """Narrow a preserved findings report to owner-only, and strip any ACL it carries.
 
@@ -1272,6 +1351,18 @@ def _preserve_superseded(dirfd, report_name):
         linked = candidate
         break
 
+    held_fd, held_via_proc = (None, False)
+    if linked is not None:
+        held_fd, held_via_proc = _open_held_copy(dirfd, linked, previous)
+        if held_fd is None:
+            # THE SLOT IS NO LONGER THE INODE WE LINKED INTO IT. Something replaced that name
+            # between the link and this open. Everything downstream — the narrowing, the
+            # classification, the decision to release the slot — would be describing a file this
+            # scan never preserved, which is exactly the sequence three legs reproduced. Nothing
+            # is unlinked (the name is not ours to remove now, and round twenty-six is why that
+            # matters) and the replacement is declined, so the findings stay where they are.
+            return False
+
     if linked is not None:
         # NARROW THE PRESERVED COPY. The slot is a SECOND published name inside the untrusted
         # tree, and a hard link keeps the old inode's mode and ACL by definition — which is the
@@ -1293,7 +1384,7 @@ def _preserve_superseded(dirfd, report_name):
         # the gate demonstrated a substitution. A reserved name asserts that the retained
         # report's access policy; if it does not, this call has to decide that below rather than
         # hand the caller an authorization built on a strip that was refused.
-        narrowed = _narrow_kept_copy(dirfd, linked)
+        narrowed = _narrow_held_copy(held_fd, held_via_proc)
 
     # Classify only AFTER the link, so a failed read cannot prevent preservation — and classify
     # THROUGH THE LINK, not through report_path. The two names described the same inode at link
@@ -1305,25 +1396,41 @@ def _preserve_superseded(dirfd, report_name):
     # between the link and this read leaves the classification describing a DIFFERENT inode from
     # the one that was preserved, and a status line verdict then unlinks the findings just kept.
     # An independent review leg supplied that interleaving; this reads the inode we actually hold.
-    classify_name = linked if linked is not None else report_name
-    try:
-        _nofollow = getattr(os, "O_NOFOLLOW", 0)
-        # O_NONBLOCK so a name that has become a FIFO cannot stop this. A non-blocking FIFO read
-        # returns nothing, the report is then classified as findings, and treating an unreadable
-        # report as findings is already this function's documented safe direction.
-        _nonblock = getattr(os, "O_NONBLOCK", 0)
-        _cfd = os.open(classify_name, os.O_RDONLY | _nofollow | _nonblock, dir_fd=dirfd)
+    _slot_has_another_name = False
+    if held_fd is not None:
+        # READ THROUGH THE DESCRIPTOR. A held inode cannot be swapped under a read, which is the
+        # difference between classifying what we preserved and classifying what someone left at
+        # the name. The link count is read here too, from the same descriptor, because releasing
+        # a slot is a destructive act and it needs to know whether this is the last name.
+        _prefix = _read_prefix_held(held_fd, held_via_proc, len(_STATUS_LINE_PREFIX))
+        is_status_line = _prefix == _STATUS_LINE_PREFIX
         try:
-            is_status_line = os.read(_cfd, len(_STATUS_LINE_PREFIX)) == _STATUS_LINE_PREFIX
-        finally:
-            _close_quietly(_cfd)
-    except OSError:
-        is_status_line = False            # cannot tell: assume findings, the costly case
+            _slot_has_another_name = os.fstat(held_fd).st_nlink >= 2
+        except OSError:
+            _slot_has_another_name = False
+        _close_quietly(held_fd)
+        held_fd = None
+    else:
+        try:
+            _nofollow = getattr(os, "O_NOFOLLOW", 0)
+            # O_NONBLOCK so a name that has become a FIFO cannot stop this. A non-blocking FIFO
+            # read returns nothing, the report is then classified as findings, and treating an
+            # unreadable report as findings is this function's documented safe direction.
+            _nonblock = getattr(os, "O_NONBLOCK", 0)
+            _cfd = os.open(report_name, os.O_RDONLY | _nofollow | _nonblock, dir_fd=dirfd)
+            try:
+                is_status_line = os.read(_cfd, len(_STATUS_LINE_PREFIX)) == _STATUS_LINE_PREFIX
+            finally:
+                _close_quietly(_cfd)
+        except OSError:
+            is_status_line = False        # cannot tell: assume findings, the costly case
 
     if is_status_line:
         # A CLEAN or REFUSED report is not worth a slot, and parking one there was measured
-        # blocking a real findings report from ever being kept. Give the slot back.
-        if linked is not None:
+        # blocking a real findings report from ever being kept. Give the slot back — but ONLY
+        # while another name still reaches the inode. If this slot is the last one, releasing it
+        # destroys the file to reclaim a name, which is the trade round twenty-six refused.
+        if linked is not None and _slot_has_another_name:
             try:
                 os.unlink(linked, dir_fd=dirfd)
             except OSError:
