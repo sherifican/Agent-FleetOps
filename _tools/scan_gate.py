@@ -606,6 +606,39 @@ def _harden_report_dir(reports_dir, restore_owner=False):
     return fd
 
 
+def _makedirs_owner_only(path):
+    """Create a directory chain in which EVERY component is owner-only.
+
+    os.makedirs applies its mode argument to the LAST component only; every ancestor it creates
+    takes the default 0o777 masked by the umask. A cold review leg measured the consequence at
+    umask 0: the scanner created world-writable ancestors and then carefully placed an owner-only
+    report directory inside them. An ancestor anyone can write is an ancestor anyone can RENAME,
+    which puts the whole directory-identity problem back one level up — and the hardening that
+    removes group and other write from _reports never looked above it.
+
+    mkdir is umask-masked too, so each component is chmod'd after creation rather than trusted to
+    arrive at the requested mode. Only components this call actually creates are touched: an
+    existing ancestor is the operator's and is left exactly as it is.
+    """
+    missing = []
+    cursor = path
+    while cursor and not os.path.isdir(cursor):
+        missing.append(cursor)
+        parent = os.path.dirname(cursor)
+        if parent == cursor:
+            break
+        cursor = parent
+    for component in reversed(missing):
+        try:
+            os.mkdir(component, _REPORT_DIR_MODE)
+        except FileExistsError:
+            continue                      # somebody else got there first; not ours to re-mode
+        try:
+            os.chmod(component, _REPORT_DIR_MODE)
+        except OSError:
+            pass
+
+
 def _close_quietly(fd):
     """Close a descriptor without letting the close itself become the failure being reported."""
     try:
@@ -673,7 +706,7 @@ def write_report(staging, hits):
         if not os.path.isdir(reports_dir):
             raise
     except FileNotFoundError:
-        os.makedirs(reports_dir, mode=_REPORT_DIR_MODE, exist_ok=True)
+        _makedirs_owner_only(reports_dir)
         created = True
     if not os.path.isdir(reports_dir):
         raise ScanRefused("report-path-unsafe '_reports'")
@@ -1015,6 +1048,17 @@ def _write_refusal_report(staging, refusal):
         return
     try:
         _publish_refusal(dirfd, refusal)
+    except Exception:
+        # THE CONTRACT IS ABSOLUTE, and it was not. This function is called to REPORT a failure
+        # and must never displace it, but its inner guard caught only (OSError, UnicodeError) —
+        # and classification calls str() on the refusal object, which runs arbitrary code. A cold
+        # review leg raised ValueError from an exception's __str__ and watched it escape the one
+        # function in this file that is not allowed to raise, taking the original refusal with it.
+        # The exit code still carries the refusal, which is the channel that actually matters;
+        # what must not happen is this writer replacing it with an error of its own.
+        # BaseException is deliberately NOT caught: a KeyboardInterrupt or SystemExit is not a
+        # refusal to report, and swallowing those would be a different bug.
+        pass
     finally:
         _close_quietly(dirfd)
 
@@ -1039,7 +1083,13 @@ def _publish_refusal(dirfd, refusal):
         if isinstance(refusal, (OSError, UnicodeError)):
             reason_class = "input-error"
         else:
-            msg = str(refusal)
+            # str() on an exception runs whatever __str__ it has. Guarded so that an
+            # unrenderable refusal still produces a REPORT with a class, rather than skipping
+            # the publish entirely and leaving a stale CLEAN standing beside the failure.
+            try:
+                msg = str(refusal)
+            except Exception:
+                msg = ""
             reason_class = msg.split(" ", 1)[0].rstrip(";:,.")
             if not reason_class or not re.fullmatch(r"[a-z][a-z0-9\-]*", reason_class):
                 reason_class = "unclassified"

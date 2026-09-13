@@ -3695,3 +3695,81 @@ def test_the_refusal_fallback_sets_the_mode_through_the_descriptor(tmp_path: Pat
     assert "tempfile.mkstemp" not in fallback, (
         "the refusal writer still stages through mkstemp, which resolves its directory by NAME "
         "and so cannot be anchored to the validated descriptor")
+
+
+# =============================================================================================
+# GROUP 26 — two holes in the EDGES, both from the cold leg's review of the previous state.
+#
+#   F6. The refusal writer's contract is "never raises" — it is called to REPORT a failure and
+#       must not displace it. Its guard catches (OSError, UnicodeError). But it calls str() on
+#       the refusal object to classify it, and str() on an arbitrary exception can raise anything
+#       at all. A ValueError out of __str__ escapes the one function in this file that is not
+#       allowed to raise, and the original refusal is lost with it.
+#
+#   F8. os.makedirs applies its mode argument to the LAST component only. Every ancestor it
+#       creates takes the default 0o777 masked by the umask, so at umask 0 the scanner creates a
+#       WORLD-WRITABLE ancestor and then carefully puts an owner-only report directory inside it.
+#       Anyone local can rename that ancestor. The hardening that removes group and other write
+#       from _reports never looked one level up.
+# =============================================================================================
+
+
+class _RefusalWhoseStrRaises(Exception):
+    """A refusal that cannot be rendered. str() on an exception runs arbitrary user code."""
+
+    def __str__(self):
+        raise ValueError("this refusal cannot be rendered")
+
+
+def test_a_refusal_that_cannot_be_rendered_does_not_escape_the_writer(tmp_path: Path) -> None:
+    """REPAIRED: the never-raises contract holds even when classification itself explodes."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "unrenderable_refusal")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    rp = reports / "scan_report.txt"
+    rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+
+    # CONTROL: the fixture really does raise where the writer will call it.
+    with pytest.raises(ValueError):
+        str(_RefusalWhoseStrRaises())
+
+    module._write_refusal_report(str(staging), _RefusalWhoseStrRaises())
+
+    assert rp.read_text(encoding="utf-8").startswith("scan_gate: REFUSED"), (
+        "REPAIRED: a refusal whose str() raised escaped the writer, so the stale CLEAN survived "
+        "beside the failure and the original refusal was displaced by a ValueError")
+
+
+def test_creating_the_report_tree_does_not_leave_a_world_writable_ancestor(
+    tmp_path: Path
+) -> None:
+    """REPAIRED: every directory the scanner creates is owner-only, not just the last one."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "ancestor_modes")
+    # The staging tree does not exist yet, so the publication path has to build the chain.
+    staging = tmp_path / "missing" / "deeper" / "staging"
+
+    old = os.umask(0)
+    try:
+        module.write_report(str(staging), [])
+    finally:
+        os.umask(old)
+
+    assert (staging / REPORT_REL).exists(), "CONTROL: nothing was published, so nothing to check"
+    wide = []
+    probe = staging / "_reports"
+    while True:
+        mode = stat.S_IMODE(probe.stat().st_mode)
+        if mode & 0o022:
+            wide.append(f"{probe.name}={mode:04o}")
+        if probe == tmp_path or probe.parent == probe:
+            break
+        probe = probe.parent
+    assert not wide, (
+        f"the scanner created group- or other-writable directories at {wide}. os.makedirs gives "
+        "its mode to the LAST component only; an ancestor anyone can write is an ancestor anyone "
+        "can rename, with the owner-only report directory still sitting inside it")
