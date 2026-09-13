@@ -626,11 +626,21 @@ def _harden_report_dir(reports_dir, restore_owner=False, parent_fd=None):
     try:
         target = "/proc/self/fd/%d" % fd if via_proc else fd
         mode = stat.S_IMODE(os.stat(target).st_mode if via_proc else os.fstat(fd).st_mode)
-        # Restoration is withheld from a directory that is not empty. It is not proof that this
-        # is the inode we created — the gate was explicit that a same-uid actor with write on the
-        # parent can still substitute one — but it confines any widening to something with nothing
-        # in it, so a populated directory swapped into the name is never opened up.
-        _restore = restore_owner and _looks_freshly_created(fd, via_proc)
+        # RESTORATION IS AUTHORIZED BY CREATION, AND BY NOTHING ELSE. Round nineteen added an
+        # emptiness probe on top, reasoning that it confined widening to a directory with nothing
+        # in it. The gate refuted that: the probe fell back to st_nlink when the directory could
+        # not be listed, and a populated directory has the same link count as an empty one, so the
+        # probe authorized exactly what it was added to prevent. Worse, removing the fallback and
+        # keeping the probe broke the umask case it was sitting next to — a directory this tool
+        # had just created at 0100 cannot be listed either, so restoration was withheld from the
+        # very directory it exists for, and the publish then failed EACCES inside it.
+        #
+        # So the probe is gone. `restore_owner` means this call's own mkdir returned success, and
+        # a FileExistsError never sets it. The residual the gate named stands and is not papered
+        # over: a same-uid actor who substitutes the inode between that mkdir and the open of it
+        # gets owner bits on a directory of their own. A creation flag cannot identify an inode,
+        # and nothing short of a trusted parent closes it.
+        _restore = restore_owner
         want = ((mode | _REPORT_DIR_MODE) if _restore else mode) & ~0o022
         if mode != want:
             os.chmod(target, want)
@@ -682,28 +692,6 @@ def _open_dir_nofollow(name, parent_fd):
         return os.open(name, opath | flags, dir_fd=parent_fd), True
 
 
-def _looks_freshly_created(fd, via_proc):
-    """Cheap evidence that nothing has been put in this directory yet.
-
-    Used only to decide whether owner bits may be RESTORED. It is not proof of identity and is not
-    claimed to be: a directory listing answers it where the directory can be read, and st_nlink
-    answers it where it cannot. What it buys is that a populated directory substituted for the one
-    we created is never widened — the widening is confined to something empty.
-    """
-    try:
-        if via_proc:
-            if _PROC_FD_DIR is None:
-                return False
-            return not os.listdir("%s/%d" % (_PROC_FD_DIR, fd))
-        return not os.listdir(fd)
-    except OSError:
-        try:
-            st = os.fstat(fd)
-        except OSError:
-            return False
-        return stat.S_ISDIR(st.st_mode) and st.st_nlink <= 2
-
-
 def _makedirs_owner_only(path):
     """Create a directory chain in which EVERY component is owner-only, resolving each step
     against a HELD DESCRIPTOR rather than a pathname.
@@ -745,10 +733,12 @@ def _makedirs_owner_only(path):
             name = os.path.basename(component)
             if not name:
                 continue
+            made = False
             try:
                 os.mkdir(name, _REPORT_DIR_MODE, dir_fd=fd)
+                made = True
             except FileExistsError:
-                pass                      # somebody else got there first; not ours to re-mode
+                pass                      # somebody else got there first
             except OSError:
                 return
             try:
@@ -756,13 +746,25 @@ def _makedirs_owner_only(path):
             except OSError:
                 return
             try:
-                if via_proc:
-                    if _PROC_FD_DIR is not None:
-                        os.chmod("%s/%d" % (_PROC_FD_DIR, child), _REPORT_DIR_MODE)
-                else:
-                    os.fchmod(child, _REPORT_DIR_MODE)
-            except OSError:
-                pass
+                # ONLY A COMPONENT THIS CALL ACTUALLY CREATED. The comment on the branch above
+                # used to say "not ours to re-mode" and then execution fell straight through to
+                # the chmod anyway — the gate injected a competing mkdir that left an operator's
+                # POPULATED 0500 directory here, and the remaining code took it to 0700. A comment
+                # is not a control-flow statement, which is the whole lesson of this round.
+                if made:
+                    try:
+                        if via_proc:
+                            if _PROC_FD_DIR is not None:
+                                os.chmod("%s/%d" % (_PROC_FD_DIR, child), _REPORT_DIR_MODE)
+                        else:
+                            os.fchmod(child, _REPORT_DIR_MODE)
+                    except OSError:
+                        pass
+            except BaseException:
+                # The child is open and the loop has not taken ownership of it yet. An interrupt
+                # between the open and the handover leaked it; the gate counted the descriptor.
+                _close_quietly(child)
+                raise
             _close_quietly(fd)
             fd = child
     finally:
@@ -1163,8 +1165,13 @@ def _preserve_superseded(dirfd, report_name):
 
 def _write_refusal_report(staging, refusal):
     """Best-effort: replace an EXISTING report with a single REFUSED line, so that a stale CLEAN
-    does not survive beside an rc 2 wherever this function can reach it. Never raises; the
-    original refusal still propagates. Writes through a temporary file in the real
+    does not survive beside an rc 2 wherever this function can reach it.
+
+    NEVER RAISES AN ERROR, and never blocks — the two halves of a contract whose point is that
+    this function must not displace the failure it was called to report. The gate asked for the
+    boundary to be stated: it does NOT catch KeyboardInterrupt or SystemExit. A cancellation is
+    not a refusal to report, and swallowing one would be a different defect. The original refusal
+    still propagates. Writes through a temporary file in the real
     <staging>/_reports directory, atomically put in place with os.replace.
 
     "Creates nothing when no report exists" stood here and was not quite true; the cold leg

@@ -135,6 +135,40 @@ permissions of a file it did not create, if that file shares an inode with a fin
 inside the tree you asked it to scan. It only ever moves in the narrowing direction, one `chmod`
 undoes it, and the alternative is republishing the findings to whoever holds the other name.
 
+## What this scanner does NOT promise
+
+Three rounds of adversarial review converged on a set of claims that were wider than anything in
+this position can deliver. They are stated here as limits rather than quietly left as bugs,
+because an overstated guarantee is worse than an absent one.
+
+**A held descriptor pins an inode, not a place in the tree.** The scanner opens `_reports/`,
+validates it, and performs every later operation against that descriptor — which stops the name
+being re-resolved through a symlink. It does NOT stop the directory itself being renamed. Review
+moved the hardened directory outside the supplied root between validation and publication and the
+report was written into it, still owner-only, still the directory that was checked, now somewhere
+else. **Precondition: the staging tree and its ancestors must not be writable by anyone you are
+defending against.** Hardening `_reports/` to 0700 does nothing about a 0777 directory above it,
+and this tool does not modify ancestors it was not asked to create.
+
+**Findings are protected from a REFUSAL, not from a later clean scan.** A refusal never replaces a
+findings report without preserving it first. But a SUCCESSFUL scan ends the generation: it
+publishes its own result and sweeps the reserved names, including preserved findings from an
+earlier run. Running the scanner again on a cleaned tree therefore discards the previous run's
+evidence, deliberately — a report directory describes one scan, not a history. If you need the
+history, copy it out.
+
+**Preservation capacity is finite.** There are eight preservation names and eight quarantine
+names. If every one is occupied by something the scanner may not remove — a populated directory,
+a file owned by somebody else — preservation fails, and the scanner then declines to replace the
+findings rather than destroying them. That is the safe direction, but it means a planted set of
+names can stop the report being updated. Occupancy is a denial of service against publication,
+never a way to make the scanner destroy evidence.
+
+**"Never raises" means never raises an error. It does not mean uninterruptible.** The refusal
+writer will not let its own failure displace the failure it was called to report, and it will not
+block. It does not catch `KeyboardInterrupt` or `SystemExit`, and it should not: a cancellation is
+not a refusal to report, and swallowing one would be a different defect.
+
 **These gates are STAGING-side, not CI.** Public CI runs the hermetic suite, the guard layer,
 `ref_gate.py` and `readme_guard.sh` only. `wall_check.py` and `scan_gate.py` run here, before a
 batch is pushed — that is the point: a secret is caught before it lands, not after. `wall_check.py`

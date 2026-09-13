@@ -4216,3 +4216,112 @@ def test_the_refusal_fallback_checks_the_staged_inode_before_replacing(tmp_path:
     assert fallback.count("os.replace(") == 1, (
         "CONTROL: the fallback should contain exactly one publish; if this changed, the arm above "
         "may be inspecting the wrong region")
+
+
+# =============================================================================================
+# GROUP 30 — the twenty-first round. The gate refuted a claim I made in round nineteen's own
+# commit message, and it was right.
+#
+# I wrote that withholding restoration from a non-empty directory "confines any widening to
+# something with nothing in it". It does not, for two reasons the gate measured:
+#
+#   a. `_makedirs_owner_only` caught FileExistsError, executed `pass` under a comment reading
+#      "not ours to re-mode", and then opened and chmod'd the directory anyway. The comment did
+#      not control execution. A competing mkdir left an operator's populated 0500 directory, and
+#      the remaining code took it to 0700.
+#
+#   b. `_looks_freshly_created` fell back to `st_nlink <= 2` when it could not list the
+#      directory. Measured here: a populated directory containing a regular file has st_nlink 2,
+#      exactly like an empty one, because regular files do not add child-directory links. The
+#      fallback cannot return the right answer — it is a check that cannot fail, applied to
+#      authorize widening.
+#
+# The rule that replaces it: a failed inspection never authorizes widening, and only a component
+# this call actually CREATED is re-moded.
+# =============================================================================================
+
+
+def test_a_populated_directory_is_never_widened_by_the_ancestor_helper(tmp_path: Path) -> None:
+    """REPAIRED: losing the creation race must not hand us the right to re-mode what is there."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "eexist_no_widen")
+    target = tmp_path / "absent" / "staging"
+
+    real_mkdir = module.os.mkdir
+    raced: list[str] = []
+
+    def mkdir_losing_the_race(name, mode=0o777, *args, **kwargs):
+        # Somebody else creates it first, populates it, and sets a mode of their own. Our mkdir
+        # then raises FileExistsError — the branch whose comment claims it leaves things alone.
+        if os.path.basename(str(name)) == "staging" and not raced:
+            raced.append(str(name))
+            dir_fd = kwargs.get("dir_fd")
+            real_mkdir(name, 0o700, *args, **kwargs)
+            opened = os.open(str(name), os.O_RDONLY | os.O_DIRECTORY, dir_fd=dir_fd)
+            try:
+                fd = os.open("operator_data.txt", os.O_CREAT | os.O_WRONLY, 0o600, dir_fd=opened)
+                os.close(fd)
+                os.chmod("operator_data.txt", 0o600, dir_fd=opened)
+            finally:
+                os.close(opened)
+            os.chmod(str(name), 0o500, dir_fd=dir_fd)
+            raise FileExistsError(errno.EEXIST, "somebody got there first")
+        return real_mkdir(name, mode, *args, **kwargs)
+
+    module.os.mkdir = mkdir_losing_the_race
+    try:
+        module._makedirs_owner_only(str(target))
+    finally:
+        module.os.mkdir = real_mkdir
+
+    assert raced, "CONTROL: the race never fired, so nothing about FileExistsError was measured"
+    mode = stat.S_IMODE(target.stat().st_mode)
+    try:
+        assert mode == 0o500, (
+            f"REPAIRED: a directory this call did NOT create, already holding somebody's data, "
+            f"was re-moded from 0500 to {mode:04o}. The FileExistsError branch said it was not "
+            "ours to re-mode and then re-moded it anyway")
+    finally:
+        target.chmod(0o700)
+
+
+def test_a_pre_existing_directory_is_never_widened_however_it_looks(tmp_path: Path) -> None:
+    """REPAIRED: restoration follows CREATION, so what a directory looks like cannot authorize it.
+
+    Round nineteen asked "does it look empty?" and answered with st_nlink when it could not list.
+    Measured on this filesystem, a directory holding a regular file has st_nlink 2 exactly like an
+    empty one, so the probe authorized the widening it was added to prevent. The question was
+    wrong, not just its answer: what matters is whether THIS call created the directory, and a
+    FileExistsError means it did not.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "preexisting_not_widened")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    (reports / "operator_data.txt").write_text("OPERATOR DATA\n", encoding="utf-8")
+
+    # CONTROL: the premise the refuted probe rested on, asserted rather than assumed.
+    assert reports.stat().st_nlink <= 2, (
+        "CONTROL: this filesystem gives a populated directory more than 2 links, so the link-count "
+        "confusion this arm is about is not reachable here")
+
+    reports.chmod(0o500)                   # readable and searchable, NOT writable
+    try:
+        try:
+            module.write_report(str(staging), [])
+        except Exception:
+            pass                           # refusing an unusable directory is correct; widening is not
+        mode = stat.S_IMODE(reports.stat().st_mode)
+    finally:
+        reports.chmod(0o700)
+
+    assert mode == 0o500, (
+        f"REPAIRED: a pre-existing directory holding somebody's data went from 0500 to {mode:04o}. "
+        "This call did not create it, so its owner bits were never this tool's to restore")
+    assert (reports / "operator_data.txt").read_text(encoding="utf-8") == "OPERATOR DATA\n", (
+        "CONTROL: the operator's file must be untouched")
