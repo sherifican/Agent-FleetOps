@@ -4555,3 +4555,104 @@ def test_the_refusal_docstring_does_not_describe_a_guard_it_no_longer_has(tmp_pa
         "the refusal being reported; the guard became `except Exception` two rounds ago")
     assert "scoped to the errors this can expect" not in doc, (
         "and it still describes an OSError/UnicodeError-only guard that the code no longer has")
+
+
+# =============================================================================================
+# GROUP 33 — the twenty-fourth round. The same defect, in a second helper, two rounds later.
+#
+# Round nineteen fixed `_preserve_superseded` treating an lstat error as "the file is absent",
+# because failing to INSPECT something is not evidence about what it is. Round twenty-three then
+# introduced `_staged_holds_evidence`, which converts an fstat error into False — and its caller
+# reads False as "there is nothing here worth keeping" and UNLINKS a stage holding real findings.
+#
+# The gate's phrase for it is the one to keep: unknown metadata authorizes deletion. One injected
+# EIO on the held descriptor, after an ACL-strip denial has already sent the staged findings down
+# the retention path, and the evidence is gone — measured finding_copies_after_refusal=0 against
+# a no-injection control that retained them.
+#
+# The rule, stated once so it is not rewritten a third time: a question this code cannot answer
+# never authorizes destruction. `hits` being non-empty and the body having been written are facts
+# already in hand; an fstat that fails changes neither.
+# =============================================================================================
+
+
+def test_an_unreadable_stage_is_kept_rather_than_deleted(tmp_path: Path) -> None:
+    """REPAIRED: a failed size check must not be read as 'nothing worth keeping'."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "stage_fstat_eio")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    try:
+        os.mkfifo(str(reports / "scan_report.txt"))
+    except (OSError, AttributeError):
+        pytest.skip("this platform cannot create a FIFO; the retention path is not reachable here")
+
+    real_removexattr = module.os.removexattr
+    real_fstat = module.os.fstat
+    denied: list[str] = []
+    faults: list[int] = []
+
+    def removexattr_denied(path, *args, **kwargs):
+        denied.append(str(path))
+        raise PermissionError(errno.EPERM, "strip denied (injected)")
+
+    def fstat_one_eio(fd, *args, **kwargs):
+        # Exactly one failure, and only after the strip has been denied — the moment the staged
+        # findings are on the retention path and their size is about to decide their fate.
+        if denied and not faults:
+            faults.append(errno.EIO)
+            raise OSError(errno.EIO, "injected metadata failure")
+        return real_fstat(fd, *args, **kwargs)
+
+    module.os.removexattr = removexattr_denied
+    module.os.fstat = fstat_one_eio
+    try:
+        with pytest.raises(Exception):
+            module.write_report(str(staging), NEW_HIT)
+    finally:
+        module.os.removexattr = real_removexattr
+        module.os.fstat = real_fstat
+
+    if not denied:
+        pytest.skip("this build attempted no ACL strip; the retention path was not entered")
+    assert faults, (
+        "CONTROL: the metadata fault never fired, so this arm measured the no-injection case and "
+        "would pass against code that deletes on an unanswerable question")
+    assert _findings_anywhere(reports, "docs/example.md:12"), (
+        "REPAIRED: one unanswerable fstat deleted the staged findings. Unknown metadata must "
+        "never authorize destruction — `hits` was non-empty and the body was already written, "
+        "and a failed size check changes neither of those facts")
+
+
+def test_the_no_injection_control_retains_the_stage(tmp_path: Path) -> None:
+    """CONTROL for the arm above: with only the strip denied, the findings are retained."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "stage_fstat_control")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    try:
+        os.mkfifo(str(reports / "scan_report.txt"))
+    except (OSError, AttributeError):
+        pytest.skip("this platform cannot create a FIFO")
+
+    real_removexattr = module.os.removexattr
+    denied: list[str] = []
+
+    def removexattr_denied(path, *args, **kwargs):
+        denied.append(str(path))
+        raise PermissionError(errno.EPERM, "strip denied (injected)")
+
+    module.os.removexattr = removexattr_denied
+    try:
+        with pytest.raises(Exception):
+            module.write_report(str(staging), NEW_HIT)
+    finally:
+        module.os.removexattr = real_removexattr
+
+    if not denied:
+        pytest.skip("this build attempted no ACL strip")
+    assert _findings_anywhere(reports, "docs/example.md:12"), (
+        "CONTROL: with nothing but the strip denied the findings must survive; if this fails the "
+        "fixture is wrong and the injected arm proves nothing")

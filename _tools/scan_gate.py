@@ -474,23 +474,41 @@ def _unpublished_slot_names():
 
 
 def _staged_holds_evidence(fd, hits):
-    """True when the staged file is a findings report with bytes actually on disk.
+    """Whether deleting the staged file would destroy anything. Answers conservatively.
 
-    The caller uses this to decide whether deleting the staged file destroys anything. A staged
-    CLEAN is not evidence, and a zero-length file is a failure that preceded the write.
+    A staged CLEAN is not evidence and answers False. A zero-length file is a failure that
+    preceded the write and answers False. Everything else answers True — including the case where
+    the size cannot be read at all.
+
+    THAT LAST CLAUSE IS THE WHOLE POINT, and it is the second time this file has needed it. Round
+    nineteen fixed `_preserve_superseded` treating an lstat error as "the file is absent"; this
+    helper then converted an fstat error into False, and its caller reads False as "nothing worth
+    keeping" and unlinks. The gate named it exactly — unknown metadata authorizes deletion — and
+    measured one injected EIO destroying a staged findings report that a no-injection control
+    retained.
+
+    A question this code cannot answer never authorizes destruction. `hits` being non-empty and
+    the body having been written are facts already in hand; an fstat that fails changes neither.
+    The cost of being wrong in this direction is a leftover temporary file. The cost of being
+    wrong in the other direction is the evidence.
     """
     if not hits:
         return False
     try:
         return os.fstat(fd).st_size > 0
     except OSError:
-        return False
+        return True
 
 
 def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
     """Keep a staged findings report the publish could not complete. Answer whether it was kept.
 
-    A False answer means the caller should remove the staged file, and that is the ordinary case.
+    A False answer means THIS FUNCTION DID NOT TAKE CUSTODY of the staged file — nothing more. It
+    does not mean the file should be removed, and the gate required that distinction to be written
+    down rather than inferred. The caller decides separately, from _staged_holds_evidence, whether
+    removing it would destroy anything: a staged CLEAN or an empty stage is removed, staged
+    findings are left where they are. False is returned both when there is nothing worth keeping
+    and when there IS and no reserved name would take it.
 
     WHY THIS EXISTS. Every failure path out of write_report used to unlink the staged temporary,
     and `_write_refusal_report` runs next holding only the EXCEPTION — it never receives `hits`
@@ -1206,7 +1224,8 @@ def _write_refusal_report(staging, refusal):
     relearning.
 
     "Creates nothing when no report exists" stood here and was not quite true; the cold leg
-    caught it. The existence test is os.path.lexists, which a DANGLING SYMLINK satisfies — so at
+    caught it. The existence test is an os.lstat that does not follow, which a DANGLING SYMLINK
+    satisfies — it was os.path.lexists when the note was written — so at
     a report name pointing nowhere this function unlinks the link and creates a regular file
     holding a REFUSED line, where write_report would have refused the same state outright. The
     two writers therefore disagree about whether a symlink is a report, and this one is the
@@ -1303,9 +1322,12 @@ def _write_refusal_report(staging, refusal):
     except Exception:
         # THE CONTRACT IS ABSOLUTE, and it was not. This function is called to REPORT a failure
         # and must never displace it, but its inner guard caught only (OSError, UnicodeError) —
-        # and classification calls str() on the refusal object, which runs arbitrary code. A cold
-        # review leg raised ValueError from an exception's __str__ and watched it escape the one
-        # function in this file that is not allowed to raise, taking the original refusal with it.
+        # and classification USED TO call str() on the refusal object, which runs arbitrary code.
+        # A cold review leg raised ValueError from an exception's __str__ and watched it escape
+        # the one function in this file that is not allowed to raise, taking the original refusal
+        # with it. That rendering is gone as of round twenty-three; this catch remains because a
+        # publication body can still fail in ordinary ways, and it is the catch, not the removal,
+        # that keeps such a failure from displacing the refusal.
         # The exit code still carries the refusal, which is the channel that actually matters;
         # what must not happen is this writer replacing it with an error of its own.
         # BaseException is deliberately NOT caught: a KeyboardInterrupt or SystemExit is not a
@@ -1329,9 +1351,11 @@ def _publish_refusal(dirfd, refusal):
     # classification itself is what failed.
     reason_class = "unclassified"
     try:
-        # Classified INSIDE the guarded block. str() on a refusal is not guaranteed to succeed,
-        # and out here a failure would propagate from a function whose whole job is to not let the
-        # report writer displace the refusal it was called to report.
+        # Classified INSIDE the guarded block. The original reason was that str() on a refusal is
+        # not guaranteed to succeed; that call no longer exists, and the placement is still right
+        # for a plainer one — everything here, classification included, must sit where a failure
+        # cannot propagate out of a function whose whole job is to not displace the refusal it was
+        # called to report.
         if isinstance(refusal, (OSError, UnicodeError)):
             reason_class = "input-error"
         else:
