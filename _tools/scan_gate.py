@@ -262,7 +262,7 @@ _REPORT_DIR_MODE = 0o700
 
 # Reaching an INODE that is already open, for the calls that take no fd. Populated once rather
 # than probed per call, and None where /proc is not mounted.
-_PROC_FD_DIR = "/proc/self/fd" if os.path.isdir("/proc/self/fd") else None
+_PROC_FD_DIR = next((_d for _d in ("/proc/self/fd", "/dev/fd") if os.path.isdir(_d)), None)
 
 # POSIX-ACL extended attributes are a LINUX API. Elsewhere os.getxattr does not merely fail, it
 # does not EXIST — and AttributeError is not an OSError, so it would escape a function documented
@@ -286,22 +286,26 @@ _ACL_ABSENT = frozenset(
     if code is not None)
 
 
-def _strip_acl_by_fd(fd, fallback_path):
+def _strip_acl_by_fd(fd):
     """Remove the POSIX access ACL from the inode behind ``fd``.
 
-    os.removexattr is not in os.supports_fd on this platform, so the inode is reached through
-    /proc/self/fd — the same indirection _harden_report_dir already uses to read the mode of an
-    O_PATH directory handle. Where /proc is absent this falls back to the pathname with
-    follow_symlinks=False, which acts on a swapped symlink ITSELF rather than on its target, so
-    the fallback cannot reach outside the directory either.
+    os.removexattr takes neither a descriptor nor a dir_fd, so the inode is reached through the
+    kernel's descriptor directory — /proc/self/fd on Linux, /dev/fd on the BSDs — which is the
+    same indirection _harden_report_dir uses to read the mode of an O_PATH directory handle.
+
+    THE PATHNAME FALLBACK IS GONE. It joined a name onto the report directory, and round eighteen
+    exists because a name joined onto that directory can be made to resolve somewhere else. Where
+    neither descriptor directory exists this raises ENOSYS instead, which the caller turns into a
+    refusal: publishing a report while an inherited ACL is still on it would satisfy the mode
+    contract and break the access one, and refusing is loud where a silent widening is not. No
+    platform we run on takes that branch, and an adopter who hits it should hear about it.
     """
-    if _PROC_FD_DIR is not None:
-        os.removexattr("%s/%d" % (_PROC_FD_DIR, fd), ACL_XATTR)
-    else:
-        os.removexattr(fallback_path, ACL_XATTR, follow_symlinks=False)
+    if _PROC_FD_DIR is None:
+        raise OSError(errno.ENOSYS, "report-acl-strip-unreachable")
+    os.removexattr("%s/%d" % (_PROC_FD_DIR, fd), ACL_XATTR)
 
 
-def _install_posix_acl_policy(src, dst_fd, dst):
+def _install_posix_acl_policy(dirfd, src_name, dst_fd, dst_name):
     """Install the report's access policy on the staged file, before it is ever published.
 
     ONE RULE, BOTH BRANCHES, ONE NUMBER: the report is published at exactly 0600. Owner read and
@@ -370,7 +374,7 @@ def _install_posix_acl_policy(src, dst_fd, dst):
         staged = os.fstat(dst_fd)
 
         try:
-            old = os.stat(src, follow_symlinks=False)
+            old = os.lstat(src_name, dir_fd=dirfd)
         except FileNotFoundError:
             # A NEW report. There is nothing to preserve and nothing to probe: the mode is the
             # constant, the same one a replacement lands with.
@@ -395,7 +399,7 @@ def _install_posix_acl_policy(src, dst_fd, dst):
         # it after would open exactly the window this ordering exists to close.
         if _XATTR_SUPPORTED:
             try:
-                _strip_acl_by_fd(dst_fd, dst)
+                _strip_acl_by_fd(dst_fd)
             except OSError as exc:
                 if exc.errno not in _ACL_ABSENT:
                     raise
@@ -430,8 +434,18 @@ _SUPERSEDED_SLOTS = 8
 # successful publication, and nothing you care about should live at this name.
 _UNPUBLISHED_NAME = "scan_report.unpublished.txt"
 
+# The canonical report's BASENAME. Every operation in the publication path names it relative to
+# the validated directory descriptor rather than joining it onto a path that can be re-resolved.
+_REPORT_NAME = "scan_report.txt"
 
-def _quarantine_unpublished(reports_dir, tmp_path, fd, hits):
+# Staged-name generation, standing in for tempfile.mkstemp, which cannot be anchored to a
+# descriptor. Same alphabet and length mkstemp uses; the attempt count is mkstemp's TMP_MAX-ish
+# bound expressed plainly, and running out is an error rather than a silent reuse.
+_STAGE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789_"
+_STAGE_ATTEMPTS = 64
+
+
+def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
     """Keep a staged findings report the publish could not complete. Answer whether it was kept.
 
     A False answer means the caller should remove the staged file, and that is the ordinary case.
@@ -464,28 +478,38 @@ def _quarantine_unpublished(reports_dir, tmp_path, fd, hits):
         held = os.fstat(fd)
         if held.st_size == 0:
             return False
-        named = os.stat(tmp_path, follow_symlinks=False)
+        named = os.lstat(tmp_name, dir_fd=dirfd)
         if (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino):
             return False
         os.fchmod(fd, _REPORT_MODE)
-        os.replace(tmp_path, os.path.join(reports_dir, _UNPUBLISHED_NAME))
+        os.replace(tmp_name, _UNPUBLISHED_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
     except OSError:
         return False
     return True
 
 
-def _superseded_slots(reports_dir, include_unpublished=False):
-    """Every name the preserved copy may occupy, in the order they are tried.
+def _superseded_slot_names(include_unpublished=False):
+    """Every BASENAME the preserved copy may occupy, in the order they are tried.
+
+    Basenames, not paths: the publication path names everything relative to the validated
+    directory descriptor, so a path joined onto `reports_dir` would be exactly the re-resolution
+    round eighteen exists to remove.
 
     include_unpublished adds the quarantine name, which is NOT a preservation slot and is never
     linked into — it is only ever swept. Preservation must not try to link findings into it,
     because a scan that could not publish already owns that name.
     """
-    yield os.path.join(reports_dir, "scan_report.superseded.txt")
+    yield "scan_report.superseded.txt"
     for n in range(1, _SUPERSEDED_SLOTS):
-        yield os.path.join(reports_dir, "scan_report.superseded.%d.txt" % n)
+        yield "scan_report.superseded.%d.txt" % n
     if include_unpublished:
-        yield os.path.join(reports_dir, _UNPUBLISHED_NAME)
+        yield _UNPUBLISHED_NAME
+
+
+def _superseded_slots(reports_dir, include_unpublished=False):
+    """The same names joined onto a directory path, for callers that hold one rather than an fd."""
+    for name in _superseded_slot_names(include_unpublished):
+        yield os.path.join(reports_dir, name)
 
 
 def _harden_report_dir(reports_dir, restore_owner=False):
@@ -566,17 +590,69 @@ def _harden_report_dir(reports_dir, restore_owner=False):
                 # cause; letting mkstemp raise EACCES two lines later does not.
                 raise ScanRefused("report-dir-unsafe '_reports'")
     except OSError as exc:
+        _close_quietly(fd)
         raise ScanRefused("report-dir-unsafe '_reports'") from exc
-    finally:
+    except BaseException:
+        _close_quietly(fd)
+        raise
+    # THE DESCRIPTOR IS RETURNED OPEN, and it is the whole point of round eighteen. Closing it
+    # here and then naming the directory again is what let a substitution between the hardening
+    # and the publish redirect everything that followed onto an attacker's directory: the gate
+    # reproduced a report published OUTSIDE the scanned tree, over a file it did not own, with a
+    # preservation slot outside the tree deleted on the way. Every later operation in the
+    # publication path is performed relative to THIS descriptor, so they all reach the directory
+    # that was validated rather than whatever the name resolves to by then. The caller owns it and
+    # must close it.
+    return fd
+
+
+def _close_quietly(fd):
+    """Close a descriptor without letting the close itself become the failure being reported."""
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def _stage_report(dirfd, body):
+    """Create the staged report INSIDE the validated directory and write the body into it.
+
+    This replaces tempfile.mkstemp, which resolves its directory by NAME and so cannot be anchored
+    to a descriptor. The name is generated the same way mkstemp generates one and the create is
+    O_EXCL, so an occupied name is retried rather than trusted; O_NOFOLLOW means a symlink planted
+    at a guessed name is refused outright instead of followed.
+
+    The mode argument is 0o600 and is umask-masked exactly as mkstemp's is, which does not matter:
+    the policy installer sets the published mode through this descriptor before anything is
+    published under it.
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow
+    last = None
+    for _ in range(_STAGE_ATTEMPTS):
+        name = ".scan_report_" + "".join(
+            _STAGE_ALPHABET[b % len(_STAGE_ALPHABET)] for b in os.urandom(8))
         try:
-            os.close(fd)
-        except OSError:
-            pass
+            fd = os.open(name, flags, 0o600, dir_fd=dirfd)
+        except FileExistsError as exc:
+            last = exc
+            continue
+        try:
+            with os.fdopen(fd, "w", closefd=False) as handle:
+                handle.write(body)
+        except BaseException:
+            _close_quietly(fd)
+            try:
+                os.unlink(name, dir_fd=dirfd)
+            except OSError:
+                pass
+            raise
+        return fd, name
+    raise OSError(errno.EEXIST, "report-staging-name-unavailable") from last
 
 
 def write_report(staging, hits):
     reports_dir = os.path.join(staging, "_reports")
-    report_path = os.path.join(reports_dir, "scan_report.txt")
 
     if os.path.islink(reports_dir):
         raise ScanRefused("report-path-unsafe '_reports'")
@@ -601,80 +677,90 @@ def write_report(staging, hits):
         created = True
     if not os.path.isdir(reports_dir):
         raise ScanRefused("report-path-unsafe '_reports'")
-    _harden_report_dir(reports_dir, restore_owner=created)
-
-    if os.path.islink(report_path):
-        raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
-
-    if not hits:
-        body = "scan_gate: CLEAN\n"
-    else:
-        body = "".join(f"{cls}\t{name}\t{surface}\t{rel}:{i}\n" for rel, i, cls, name, surface in hits)
-
-    fd, tmp_path = tempfile.mkstemp(dir=reports_dir, prefix=".scan_report_")
+    dirfd = _harden_report_dir(reports_dir, restore_owner=created)
     try:
-        # THE DESCRIPTOR STAYS OPEN ACROSS THE POLICY INSTALL. Writing the body and then naming the
-        # file again to set its metadata is what let a swapped name receive the mode call; the
-        # policy installer carries the measurement. closefd=False hands the buffering to the file
-        # object without handing it the descriptor's lifetime.
-        with os.fdopen(fd, "w", closefd=False) as f:
-            f.write(body)
-        # mkstemp is umask-masked, so what it creates is not reliably owner-readable — at umask
-        # 0400 it is 0200. The whole access policy is installed while the file is still private,
-        # so no reader ever observes either the directory's inherited policy or the umask's.
-        _install_posix_acl_policy(report_path, fd, tmp_path)
-        # The staged NAME must still be the inode the policy was just installed on. This does not
-        # close the window before os.replace — that is the directory-identity residual the adopter
-        # notes record — but it turns a single deterministic swap into a refusal rather than a
-        # publish, and it refuses BEFORE anything is moved onto the canonical name.
-        _named = os.stat(tmp_path, follow_symlinks=False)
-        _held = os.fstat(fd)
-        if (_named.st_dev, _named.st_ino) != (_held.st_dev, _held.st_ino):
-            raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
-        os.replace(tmp_path, report_path)
-        # A fresh scan has just published a report, so anything preserved from an EARLIER
-        # generation is stale. Leaving it meant the sibling slot stayed occupied and the next
-        # refusal could not keep the findings this run produced — measured: an old report's hits
-        # held the slot while the current ones were destroyed. A planted name had the same effect
-        # permanently, which made refusing to overwrite into a denial-of-preservation. The slot
-        # belongs to one report generation, and this is where that generation ends.
-        # The unpublished name belongs to the generation that could not publish, so a run that
-        # HAS published ends it along with the preservation slots. Leaving it would stand a stale
-        # findings file beside a current report with nothing to say which run either came from.
-        for _superseded in _superseded_slots(reports_dir, include_unpublished=True):
-            try:
-                os.unlink(_superseded)
-            except IsADirectoryError:
-                # A directory at that name cannot be unlinked, and gate review reproduced one
-                # blocking every later preservation permanently. An EMPTY one is removable; a
-                # populated one is somebody else's data and is left alone.
+        # EVERY NAME FROM HERE IS RELATIVE TO dirfd, and that is the whole of round eighteen. The
+        # directory this descriptor refers to is the one that was validated; the pathname
+        # `reports_dir` may by now resolve somewhere else entirely. The gate reproduced exactly
+        # that: a substitution immediately after the hardening published the findings OVER a file
+        # outside the scanned tree and deleted an outside preservation slot on the way past, with
+        # every in-function check still passing because each one re-resolved the same swapped name.
+        try:
+            _existing = os.lstat(_REPORT_NAME, dir_fd=dirfd)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'") from exc
+        else:
+            if stat.S_ISLNK(_existing.st_mode):
+                raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
+
+        if not hits:
+            body = "scan_gate: CLEAN\n"
+        else:
+            body = "".join(f"{cls}\t{name}\t{surface}\t{rel}:{i}\n"
+                           for rel, i, cls, name, surface in hits)
+
+        fd, tmp_name = _stage_report(dirfd, body)
+        try:
+            # THE STAGED DESCRIPTOR STAYS OPEN ACROSS THE POLICY INSTALL. Writing the body and
+            # then naming the file again to set its metadata is what let a swapped name receive
+            # the mode call; the policy installer carries that measurement.
+            _install_posix_acl_policy(dirfd, _REPORT_NAME, fd, tmp_name)
+            # The staged NAME must still be the inode the policy was installed on. The gate was
+            # right that a pathname recheck ALONE introduces another race window — it reproduced
+            # a forged publish through one. What changed is the word alone: the directory is now
+            # held, so the only writer who can still win this race is one who can already create
+            # inside the scanner's own report directory, which the hardening removes from group
+            # and other. It narrows the window; it does not close it, and renameat would
+            # otherwise publish a planted symlink under the canonical name.
+            _named = os.lstat(tmp_name, dir_fd=dirfd)
+            _held = os.fstat(fd)
+            if (_named.st_dev, _named.st_ino) != (_held.st_dev, _held.st_ino):
+                raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
+            os.replace(tmp_name, _REPORT_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
+            # A fresh scan has just published a report, so anything preserved from an EARLIER
+            # generation is stale. Leaving it meant the sibling slot stayed occupied and the next
+            # refusal could not keep the findings this run produced — measured: an old report's
+            # hits held the slot while the current ones were destroyed. A planted name had the
+            # same effect permanently, which made refusing to overwrite into a
+            # denial-of-preservation. The slot belongs to one report generation, and this is
+            # where that generation ends. The unpublished name belongs to the generation that
+            # could not publish, and a run that HAS published ends that one too.
+            for _name in _superseded_slot_names(include_unpublished=True):
                 try:
-                    os.rmdir(_superseded)
+                    os.unlink(_name, dir_fd=dirfd)
+                except IsADirectoryError:
+                    # A directory at that name cannot be unlinked, and gate review reproduced one
+                    # blocking every later preservation permanently. An EMPTY one is removable; a
+                    # populated one is somebody else's data and is left alone.
+                    try:
+                        os.rmdir(_name, dir_fd=dirfd)
+                    except OSError:
+                        pass
                 except OSError:
                     pass
-            except OSError:
-                pass
-    except BaseException:
-        # KEEP THE FINDINGS if there are any and they made it to disk. Unlinking here destroyed
-        # the hits this scan had just written, and the refusal that follows cannot carry them.
-        if not _quarantine_unpublished(reports_dir, tmp_path, fd, hits):
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-        raise
+        except BaseException:
+            # KEEP THE FINDINGS if there are any and they made it to disk. Unlinking here
+            # destroyed the hits this scan had just written, and the refusal that follows cannot
+            # carry them.
+            if not _quarantine_unpublished(dirfd, tmp_name, fd, hits):
+                try:
+                    os.unlink(tmp_name, dir_fd=dirfd)
+                except OSError:
+                    pass
+            raise
+        finally:
+            _close_quietly(fd)
     finally:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        _close_quietly(dirfd)
 
 
 # Every status report this tool writes begins with these bytes; a findings report never does.
 _STATUS_LINE_PREFIX = b"scan_gate: "
 
 
-def _narrow_kept_copy(linked):
+def _narrow_kept_copy(dirfd, name):
     """Narrow a preserved findings report to owner-only, and strip any ACL it carries.
 
     A hard link keeps the old inode's mode and ACL by definition — which is the point when
@@ -705,22 +791,34 @@ def _narrow_kept_copy(linked):
     better than no preserved copy at all.
     """
     try:
-        _kept = stat.S_IMODE(os.lstat(linked).st_mode)
+        _kept = stat.S_IMODE(os.lstat(name, dir_fd=dirfd).st_mode)
     except OSError:
         return
     if _XATTR_SUPPORTED:
+        # Opened relative to the held directory and O_NOFOLLOW, so the strip reaches the inode
+        # that was preserved rather than whatever the name resolves to now. Opening can fail on a
+        # copy whose own owner bits are clear; that is a best-effort loss of the strip and must
+        # not cost the cap below, which is the half that always applies.
+        _nofollow = getattr(os, "O_NOFOLLOW", 0)
         try:
-            os.removexattr(linked, ACL_XATTR, follow_symlinks=False)
+            _fd = os.open(name, os.O_RDONLY | _nofollow, dir_fd=dirfd)
         except OSError:
-            pass                          # best effort, and INDEPENDENT of the cap below
+            _fd = None
+        if _fd is not None:
+            try:
+                _strip_acl_by_fd(_fd)
+            except OSError:
+                pass                      # best effort, and INDEPENDENT of the cap below
+            finally:
+                _close_quietly(_fd)
     if _kept & 0o077:
         try:
-            os.chmod(linked, _kept & 0o600)
+            os.chmod(name, _kept & 0o600, dir_fd=dirfd)
         except OSError:
             pass
 
 
-def _preserve_superseded(reports_dir, report_path):
+def _preserve_superseded(dirfd, report_name):
     """Keep the report about to be replaced, and say whether replacing it is now safe.
 
     Returns True when the caller may replace the report, False when replacing it would destroy
@@ -749,16 +847,16 @@ def _preserve_superseded(reports_dir, report_path):
     authorization boundary.
     """
     try:
-        previous = os.lstat(report_path)
+        previous = os.lstat(report_name, dir_fd=dirfd)
     except OSError:
         return True                       # nothing there; nothing to lose
     if not stat.S_ISREG(previous.st_mode):
         return True                       # not a regular file; not ours to preserve
 
     linked = None
-    for candidate in _superseded_slots(reports_dir):
+    for candidate in _superseded_slot_names():
         try:
-            os.link(report_path, candidate)
+            os.link(report_name, candidate, src_dir_fd=dirfd, dst_dir_fd=dirfd)
         except OSError:
             continue                      # occupied, unusable, or unsupported — try the next
         linked = candidate
@@ -777,7 +875,7 @@ def _preserve_superseded(reports_dir, report_path):
         # about to be replaced, and narrowing a report nobody should have been able to read is
         # safe in the interim. If preservation is refused and the report stays, it stays narrower
         # than it was, which is the direction that cannot hurt.
-        _narrow_kept_copy(linked)
+        _narrow_kept_copy(dirfd, linked)
 
     # Classify only AFTER the link, so a failed read cannot prevent preservation — and classify
     # THROUGH THE LINK, not through report_path. The two names described the same inode at link
@@ -785,10 +883,14 @@ def _preserve_superseded(reports_dir, report_path):
     # between the link and this read leaves the classification describing a DIFFERENT inode from
     # the one that was preserved, and a status line verdict then unlinks the findings just kept.
     # An independent review leg supplied that interleaving; this reads the inode we actually hold.
-    classify_path = linked if linked is not None else report_path
+    classify_name = linked if linked is not None else report_name
     try:
-        with open(classify_path, "rb") as handle:
-            is_status_line = handle.read(len(_STATUS_LINE_PREFIX)) == _STATUS_LINE_PREFIX
+        _nofollow = getattr(os, "O_NOFOLLOW", 0)
+        _cfd = os.open(classify_name, os.O_RDONLY | _nofollow, dir_fd=dirfd)
+        try:
+            is_status_line = os.read(_cfd, len(_STATUS_LINE_PREFIX)) == _STATUS_LINE_PREFIX
+        finally:
+            _close_quietly(_cfd)
     except OSError:
         is_status_line = False            # cannot tell: assume findings, the costly case
 
@@ -797,7 +899,7 @@ def _preserve_superseded(reports_dir, report_path):
         # blocking a real findings report from ever being kept. Give the slot back.
         if linked is not None:
             try:
-                os.unlink(linked)
+                os.unlink(linked, dir_fd=dirfd)
             except OSError:
                 pass
         return True
@@ -815,9 +917,9 @@ def _preserve_superseded(reports_dir, report_path):
     # lstat does not follow. st_ino is unique only within a filesystem, so st_dev travels with
     # it. A hard link is by definition a regular file, so a directory or a device at the name
     # cannot pass either.
-    for candidate in _superseded_slots(reports_dir):
+    for candidate in _superseded_slot_names():
         try:
-            kept = os.lstat(candidate)
+            kept = os.lstat(candidate, dir_fd=dirfd)
         except OSError:
             continue
         if (stat.S_ISREG(kept.st_mode)
@@ -827,7 +929,7 @@ def _preserve_superseded(reports_dir, report_path):
             # failed that time — stayed wide for every run afterwards. The gate ruled it blocking,
             # and it is the same defect as the one below in a place the eye skips: the publish
             # about to happen is owner-only, and the second name beside it was not.
-            _narrow_kept_copy(candidate)
+            _narrow_kept_copy(dirfd, candidate)
             return True                   # already preserved by an earlier call; oldest wins
     return False                          # findings, and no slot would take them
 
@@ -908,12 +1010,24 @@ def _write_refusal_report(staging, refusal):
     # displace the refusal it was called to report — but then nothing is published either, which
     # the caller already treats as the report being unavailable.
     try:
-        _harden_report_dir(reports_dir)
+        dirfd = _harden_report_dir(reports_dir)
     except (ScanRefused, OSError):
         return
+    try:
+        _publish_refusal(dirfd, refusal)
+    finally:
+        _close_quietly(dirfd)
 
-    report_path = os.path.join(reports_dir, "scan_report.txt")
-    if not os.path.lexists(report_path):
+
+def _publish_refusal(dirfd, refusal):
+    """The refusal writer's body, with the validated directory descriptor already in hand.
+
+    Split out at round eighteen so the descriptor has exactly one owner and one close, rather
+    than a return path through the middle of a function that must never raise.
+    """
+    try:
+        os.lstat(_REPORT_NAME, dir_fd=dirfd)
+    except OSError:
         return
     # Bound before the guarded block so the fallback below always has a class to write, even when
     # classification itself is what failed.
@@ -929,31 +1043,33 @@ def _write_refusal_report(staging, refusal):
             reason_class = msg.split(" ", 1)[0].rstrip(";:,.")
             if not reason_class or not re.fullmatch(r"[a-z][a-z0-9\-]*", reason_class):
                 reason_class = "unclassified"
-        if os.path.islink(report_path):
-            os.unlink(report_path)
+        try:
+            if stat.S_ISLNK(os.lstat(_REPORT_NAME, dir_fd=dirfd).st_mode):
+                os.unlink(_REPORT_NAME, dir_fd=dirfd)
+        except OSError:
+            pass
         # Before EITHER publish attempt, so the ordinary path is covered and not just the
         # fallback. A False verdict means the report holds findings that could not be kept, and
         # destroying evidence is worse than leaving a report that says "there are secrets here".
         # The refusal still reaches the caller through the exit code, which is the channel that
         # actually carries it.
-        if not _preserve_superseded(reports_dir, report_path):
+        if not _preserve_superseded(dirfd, _REPORT_NAME):
             return
-        fd, tmp_path = tempfile.mkstemp(dir=reports_dir, prefix=".scan_report_")
+        fd, tmp_name = _stage_report(dirfd, f"scan_gate: REFUSED {reason_class}\n")
         try:
             # Same descriptor discipline as write_report: the fd stays open across the policy
-            # install so no metadata call here is made on a name that can be swapped.
-            with os.fdopen(fd, "w", closefd=False) as f:
-                f.write(f"scan_gate: REFUSED {reason_class}\n")
+            # install so no metadata call here is made on a name that can be swapped, and every
+            # name is relative to the directory that was validated.
             # The refusal report is the one a reader needs most, so it gets the same contract.
-            _install_posix_acl_policy(report_path, fd, tmp_path)
-            _named = os.stat(tmp_path, follow_symlinks=False)
+            _install_posix_acl_policy(dirfd, _REPORT_NAME, fd, tmp_name)
+            _named = os.lstat(tmp_name, dir_fd=dirfd)
             _held = os.fstat(fd)
             if (_named.st_dev, _named.st_ino) != (_held.st_dev, _held.st_ino):
                 raise OSError(errno.EIO, "report-staged-name-diverged")
-            os.replace(tmp_path, report_path)
+            os.replace(tmp_name, _REPORT_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
         except BaseException:
             try:
-                os.unlink(tmp_path)
+                os.unlink(tmp_name, dir_fd=dirfd)
             except OSError:
                 pass
             raise
@@ -989,10 +1105,8 @@ def _write_refusal_report(staging, refusal):
         # promise a write on a filesystem refusing writes, and it is the EXIT CODE, not the
         # report, that says this scan refused.
         try:
-            fd, tmp_path = tempfile.mkstemp(dir=reports_dir, prefix=".scan_report_")
+            fd, tmp_name = _stage_report(dirfd, f"scan_gate: REFUSED {reason_class}\n")
             try:
-                with os.fdopen(fd, "w") as f:
-                    f.write(f"scan_gate: REFUSED {reason_class}\n")
                 # Strip any inherited ACL here too. This fallback runs when the ordinary policy
                 # install failed, and it used to ASSIGN 0600 and stop.
                 #
@@ -1014,18 +1128,20 @@ def _write_refusal_report(staging, refusal):
                 # makes that impossible rather than merely currently harmless.
                 if _XATTR_SUPPORTED:
                     try:
-                        os.removexattr(tmp_path, ACL_XATTR, follow_symlinks=False)
+                        _strip_acl_by_fd(fd)
                     except OSError as exc:
                         if exc.errno not in _ACL_ABSENT:
                             raise
-                os.chmod(tmp_path, 0o600)
-                os.replace(tmp_path, report_path)
+                os.fchmod(fd, _REPORT_MODE)
+                os.replace(tmp_name, _REPORT_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
             except BaseException:
                 try:
-                    os.unlink(tmp_path)
+                    os.unlink(tmp_name, dir_fd=dirfd)
                 except OSError:
                     pass
                 raise
+            finally:
+                _close_quietly(fd)
         except (OSError, UnicodeError):
             pass
 

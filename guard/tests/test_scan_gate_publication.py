@@ -131,14 +131,28 @@ def install_policy(module, report_path: Path, staged: Path) -> None:
     The installer stopped taking the staged file by NAME at round seventeen. A pathname is what a
     swapped symlink can occupy, and os.chmod on this platform cannot decline to follow one — it is
     not in os.supports_follow_symlinks, and follow_symlinks=False raises NotImplementedError,
-    which is not an OSError. Every arm that calls the installer directly goes through here so no
-    arm can quietly keep measuring the pathname contract after the code stopped offering it.
+    which is not an OSError. Round eighteen moved the DIRECTORY behind a descriptor as well, so the
+    installer takes the validated directory fd and basenames: a path joined onto the report
+    directory is exactly what a substituted directory re-resolves. Every arm that calls the
+    installer directly goes through here, so no arm can quietly keep measuring a contract the code
+    stopped offering.
     """
+    dirfd = os.open(str(staged.parent), os.O_RDONLY | os.O_DIRECTORY)
     fd = os.open(str(staged), os.O_RDONLY)
     try:
-        module._install_posix_acl_policy(str(report_path), fd, str(staged))
+        module._install_posix_acl_policy(dirfd, report_path.name, fd, staged.name)
     finally:
         os.close(fd)
+        os.close(dirfd)
+
+
+def preserve_superseded(module, reports_dir: Path, report_name: str = "scan_report.txt") -> bool:
+    """Call preservation the way the publication path does: against the held directory fd."""
+    dirfd = os.open(str(reports_dir), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        return module._preserve_superseded(dirfd, report_name)
+    finally:
+        os.close(dirfd)
 
 
 def make_tool(tmp_path: Path, source: str | None = None, name: str = "tool") -> Path:
@@ -1968,7 +1982,7 @@ def test_a_refusal_that_cannot_publish_replaces_the_stale_clean(tmp_path: Path, 
     rp = reports_dir / "scan_report.txt"
     rp.write_text("scan_gate: CLEAN\n", encoding="utf-8")
 
-    def refuses(src, dst_fd, dst):
+    def refuses(dirfd, src_name, dst_fd, dst_name):
         raise OSError("report-permission-preservation-failed")
 
     monkeypatch.setattr(module, "_install_posix_acl_policy", refuses)
@@ -2013,7 +2027,7 @@ def test_a_recoverable_group_difference_is_repaired_rather_than_refused(tmp_path
     staged.write_text("scan_gate: REFUSED input-error\n", encoding="utf-8")
     staged.chmod(0o600)
 
-    real_stat = module.os.stat
+    real_lstat = module.os.lstat
     real_fstat = module.os.fstat
     other_gid = os.getgid() + 1
     staged_ino = staged.stat().st_ino
@@ -2025,12 +2039,18 @@ def test_a_recoverable_group_difference_is_repaired_rather_than_refused(tmp_path
     # chown(src, ...) against these assertions and watched them go green. The identity assertion
     # is now on the INODE behind the descriptor, which is strictly harder to fake than a path
     # string: a descriptor pointing at the old report fails it.
-    simulated_path_gid: dict[str, int] = {str(rp): other_gid}
+    # Keyed by BOTH spellings: round eighteen made the installer read the old report as
+    # os.lstat(BASENAME, dir_fd=...), and a fixture keyed only on the full path stopped applying
+    # silently — the repair path was never entered and only this arm's CONTROL noticed.
+    simulated_path_gid: dict[str, int] = {str(rp): other_gid, rp.name: other_gid}
     simulated_fd_gid: dict[int, int] = {}
 
-    def stat_with_a_different_group(path, *args, **kwargs):
-        st = real_stat(path, *args, **kwargs)
-        gid = simulated_path_gid.get(str(path))
+    def lstat_with_a_different_group(path, *args, **kwargs):
+        # Round eighteen made the installer read the old report as os.lstat(BASENAME, dir_fd=...),
+        # so a fixture keyed on the full path silently stopped applying and the repair path was
+        # never entered at all. The arm's own CONTROL caught that, which is what it is for.
+        st = real_lstat(path, *args, **kwargs)
+        gid = simulated_path_gid.get(str(path)) or simulated_path_gid.get(os.path.basename(str(path)))
         if gid is not None:
             return os.stat_result(tuple(st)[:5] + (gid,) + tuple(st)[6:])
         return st
@@ -2051,7 +2071,7 @@ def test_a_recoverable_group_difference_is_repaired_rather_than_refused(tmp_path
             "the repair used a PATHNAME chown; a name can be swapped for a symlink between the "
             "regular-file check and the call, and the descriptor is what cannot be")
 
-    monkeypatch.setattr(module.os, "stat", stat_with_a_different_group)
+    monkeypatch.setattr(module.os, "lstat", lstat_with_a_different_group)
     monkeypatch.setattr(module.os, "fstat", fstat_with_a_different_group)
     monkeypatch.setattr(module.os, "fchown", recording_fchown)
     monkeypatch.setattr(module.os, "chown", forbidden_chown)
@@ -2159,19 +2179,19 @@ def test_a_group_that_cannot_be_repaired_raises_rather_than_publishing(tmp_path:
     staged.write_text("scan_gate: REFUSED input-error\n", encoding="utf-8")
     staged.chmod(0o600)
 
-    real_stat = module.os.stat
+    real_lstat = module.os.lstat
     other_gid = os.getgid() + 1
 
-    def stat_with_a_different_group(path, *args, **kwargs):
-        st = real_stat(path, *args, **kwargs)
-        if str(path) == str(rp):
+    def lstat_with_a_different_group(path, *args, **kwargs):
+        st = real_lstat(path, *args, **kwargs)
+        if str(path) in (str(rp), rp.name):
             return os.stat_result(tuple(st)[:5] + (other_gid,) + tuple(st)[6:])
         return st
 
     def failing_fchown(fd, uid, gid, *args, **kwargs):
         raise PermissionError(1, "not a member of that group")
 
-    monkeypatch.setattr(module.os, "stat", stat_with_a_different_group)
+    monkeypatch.setattr(module.os, "lstat", lstat_with_a_different_group)
     monkeypatch.setattr(module.os, "fchown", failing_fchown)
 
     with pytest.raises(OSError) as caught:
@@ -2601,7 +2621,7 @@ def test_the_classification_reads_the_inode_it_preserved_not_the_name(tmp_path: 
 
     module.os = _SwapAtLink()
     try:
-        kept = module._preserve_superseded(str(reports_dir), str(rp))
+        kept = preserve_superseded(module, reports_dir, rp.name)
     finally:
         module.os = real_os
 
@@ -3065,7 +3085,7 @@ def test_the_refusal_fallback_strips_an_inherited_acl_too(tmp_path: Path) -> Non
         pytest.skip("this filesystem does not hand a new file the directory default ACL")
 
     # Force the ordinary policy install to fail so the FALLBACK is what publishes.
-    def refusing_policy(src, dst_fd, dst):
+    def refusing_policy(dirfd, src_name, dst_fd, dst_name):
         raise OSError(errno.EIO, "report-permission-preservation-failed")
     module._install_posix_acl_policy = refusing_policy
 
@@ -3411,7 +3431,7 @@ def test_a_copy_found_already_preserved_is_narrowed_rather_than_left_wide(tmp_pa
         "CONTROL: the preserved copy starts wide — it is one inode with the report, so if this "
         "is not 0644 the fixture never built the state the arm is about")
 
-    assert module._preserve_superseded(str(reports_dir), str(report_path)) is True, (
+    assert preserve_superseded(module, reports_dir, report_path.name) is True, (
         "CONTROL: with the findings already preserved this must answer True; a False here means "
         "the arm measured a refusal path instead of the already-preserved branch")
 
@@ -3447,7 +3467,7 @@ def test_a_failed_acl_strip_does_not_skip_the_mode_cap(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(module.os, "removexattr", refusing_removexattr)
 
-    assert module._preserve_superseded(str(reports_dir), str(report_path)) is True, (
+    assert preserve_superseded(module, reports_dir, report_path.name) is True, (
         "CONTROL: preservation must still succeed; a strip that cannot run is not a reason to "
         "destroy the evidence")
 
@@ -3577,3 +3597,101 @@ def test_a_later_successful_publish_clears_the_unpublished_findings(tmp_path: Pa
     assert not stale.exists(), (
         "a successful publish left the previous generation's unpublished findings in place; the "
         "reserved names belong to one report generation, and this is where that generation ends")
+
+
+# =============================================================================================
+# GROUP 25 — the eighteenth round. The directory was validated and then named again.
+#
+# Every earlier round anchored a FILE: the staged descriptor is held across the metadata install,
+# the mode goes on with fchmod, the ACL strip reaches the inode through /proc/self/fd. None of it
+# helped, because the DIRECTORY those names were resolved in was still a pathname. The gate leg
+# reproduced the consequence and I reproduced it independently before changing anything:
+#
+#   harden `_reports`, then replace it with a symlink to a directory outside the scanned tree.
+#   The findings were published OVER an external file the scanner does not own, and an external
+#   `scan_report.superseded.txt` was deleted by the generation sweep on the way past. Every check
+#   inside write_report still passed, because each one re-resolved the same substituted name.
+#
+# The gate's fix direction was explicit: hold the validated directory identity through creation,
+# metadata installation, replacement, preservation and cleanup, and anchor operations to that
+# identity — a late pathname recheck alone introduces another race window. That is what this
+# round does. `_harden_report_dir` now RETURNS the descriptor it validated, and every name in the
+# publication path is resolved relative to it.
+#
+# What is NOT claimed: that the window before os.replace is gone. renameat still takes names, and
+# a writer who can create inside the report directory can still swap the staged name. What
+# changed is who that writer can be — the hardening removes write from group and other, so the
+# race needs the scanner's own uid, and a same-uid attacker owns the tree anyway.
+# =============================================================================================
+
+
+def test_a_directory_substituted_after_hardening_cannot_redirect_the_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REPAIRED: publication follows the validated DIRECTORY, not the name it was found under."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "dir_identity")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+
+    outside = tmp_path / "outside_the_tree"
+    outside.mkdir()
+    external = outside / "scan_report.txt"
+    external.write_text("SOMEONE ELSE'S FILE\n", encoding="utf-8")
+    external_slot = outside / "scan_report.superseded.txt"
+    external_slot.write_text("SOMEONE ELSE'S PRESERVED FILE\n", encoding="utf-8")
+
+    real_harden = module._harden_report_dir
+
+    def harden_then_substitute(path, restore_owner=False):
+        dirfd = real_harden(path, restore_owner)
+        # The substitution lands in the window the gate identified: after validation, before a
+        # single one of the publication path's names has been resolved.
+        os.rename(str(reports), str(staging / "moved_aside"))
+        os.symlink(str(outside), str(reports))
+        return dirfd
+
+    monkeypatch.setattr(module, "_harden_report_dir", harden_then_substitute)
+    module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                        "generic_key_assignment", "contents")])
+
+    assert external.read_text(encoding="utf-8") == "SOMEONE ELSE'S FILE\n", (
+        "REPAIRED: the findings were published OVER a file outside the scanned tree. The "
+        "directory was validated and then named again, so every later name resolved through the "
+        "substitution")
+    assert external_slot.exists(), (
+        "REPAIRED: the generation sweep deleted a file outside the scanned tree, because the "
+        "superseded slot names were joined onto a path rather than resolved against the "
+        "descriptor that was checked")
+    published = staging / "moved_aside" / "scan_report.txt"
+    assert published.exists(), (
+        "the report did not land in the directory that was actually validated; anchoring must "
+        "redirect the publish back to the real directory, not merely refuse")
+    assert stat.S_IMODE(published.stat().st_mode) == 0o600, (
+        "and it must still land under the one mode rule")
+
+
+def test_the_refusal_fallback_sets_the_mode_through_the_descriptor(tmp_path: Path) -> None:
+    """REPAIRED: the last-resort publish must not be the one pathname chmod left standing.
+
+    The cold leg put it exactly: the fallback `os.chmod(tmp_path, 0o600)` was the chmod gadget the
+    primary path had been rewritten to close, and the refusal writer's own identity check is typed
+    as OSError — so CATCHING the primary path's refusal is what routes into the fallback. The two
+    defects composed: win the race the primary path detects, and the recovery hands you a
+    pathname chmod.
+    """
+    source = SCANNER.read_text(encoding="utf-8")
+    # Anchored on a symbol that exists on BOTH sides of the change. An earlier draft indexed from
+    # _publish_refusal, which round eighteen introduced — so on the previous commit the arm died
+    # with "substring not found" instead of reporting the gadget. A test that can only fail
+    # because a name is missing has not measured the behaviour it is named for.
+    fallback = source[source.index("def _write_refusal_report"):]
+    assert "os.chmod(tmp_path" not in fallback, (
+        "the refusal writer still chmods a staged PATHNAME; on this platform os.chmod cannot "
+        "decline to follow a symlink, so that call is reachable as a gadget")
+    assert "os.fchmod(fd, _REPORT_MODE)" in fallback, (
+        "the fallback must set the mode through the descriptor it already holds")
+    assert "tempfile.mkstemp" not in fallback, (
+        "the refusal writer still stages through mkstemp, which resolves its directory by NAME "
+        "and so cannot be anchored to the validated descriptor")

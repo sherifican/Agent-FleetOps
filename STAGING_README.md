@@ -76,6 +76,19 @@ scanner CREATED the directory on this run it also restores the owner's own `rwx`
 is umask-masked and a directory the scanner cannot write is one it cannot publish into at all. A
 `_reports/` that already existed is left with the owner bits its operator gave it.
 
+**The report directory is held OPEN, not looked up twice.** The scanner validates `_reports/`
+once, keeps the descriptor, and resolves every later name — the staged file, the canonical report,
+the preservation slots, the sweep — relative to that descriptor. Without this, replacing `_reports/`
+with a symlink after it was checked redirected the whole publish: review reproduced a findings
+report written OVER a file outside the scanned tree, with an outside file deleted by the cleanup
+on the way past, while every check inside the scanner still passed because each one re-resolved
+the substituted name.
+
+What that does NOT promise: the final rename still takes names, so a writer who can create files
+inside `_reports/` can still swap the staged name in the instant before it. The hardening above is
+what bounds this — group and other lose write, so the race needs the scanner's own uid, and an
+attacker with that already owns the tree.
+
 There is deliberately no sharing opt-in. If you need a report readable by another account, copy it
 out of the staging tree to a location you control, rather than asking the scanner to publish it
 wider.
