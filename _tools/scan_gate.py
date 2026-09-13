@@ -249,18 +249,25 @@ def _current_umask():
     return mask
 
 def _report_mode(report_path, reports_dir):
-    """The mode the committed report must land with.
+    """A CANDIDATE mode, subject to the caller's cap. NOT the mode the report lands with.
 
-    mkstemp creates at 0600 and os.replace preserves the source mode, so the temporary file's mode
-    becomes the artifact's mode unless it is set deliberately. What to set it TO is a contract, not
-    a constant. Replacing an existing report must not change who can read or write it, so that
-    file's current mode wins. For a NEW report the answer is whatever an ordinary create in this
-    same directory produces — asking the filesystem rather than computing from the umask is what
-    makes a default ACL inherit correctly, since a umask formula cannot see one.
+    That distinction is the correction: an earlier revision of this docstring called the return
+    value "the mode the committed report must land with", and it is not. The caller intersects it
+    with 0600 and with the staged inode's own mode, so this function can only ever propose
+    something the caller then narrows. It cannot widen anything, and nothing here decides the
+    published policy on its own.
 
-    When the measurement cannot be taken at all the answer is 0600, not a computed guess. A umask
-    formula cannot see a directory's default ACL: round-5 review measured it publishing 0664 where
-    an ordinary create gives 0640. Narrower than intended is a permission error somebody can see;
+    What it proposes: for an EXISTING report, that file's current mode, since replacing a report
+    should not change who can read or write it — the caller narrows that so "other" gains nothing,
+    because the report being replaced sits in the untrusted tree. For a NEW report, whatever an
+    ordinary create in this same directory produces. Asking the filesystem rather than computing
+    from the umask is what lets a default ACL inherit at all, since a umask formula cannot see one.
+
+    When the measurement cannot be taken the answer is 0600 — a GUESS, and labelled one here
+    because the gate found it silently discarding stricter policy: with the unnamed probe forced
+    to fail, a u::r,g::-,o::- directory published 0600 where 0400 was its real answer. The caller
+    now intersects with the staged inode, which carries that policy without guessing, so the guess
+    can no longer widen the result. Narrower than intended is a permission error somebody can see;
     wider than intended is a disclosure nobody does.
     """
     try:
@@ -372,11 +379,11 @@ def _install_posix_acl_policy(src, dst):
             # umask 0 it was 0666 in a 0777 directory. This report lists the CLASS, PATH and LINE
             # of every secret found. An ordinary file it is not.
             #
-            # So "other" is capped off unconditionally. Group access still follows the directory,
-            # because a shared group directory is an explicit choice somebody made; "other" is
-            # what you get by default without choosing anything. This only ever narrows: a policy
-            # that already denies other is unchanged, which is why the default-ACL arm still
-            # measures inheritance rather than this cap.
+            # HISTORICAL, and wrong — kept only because the sentence below answers it. Round ten
+            # capped "other" alone, arguing that group access expressed a sharing decision. The
+            # gate refused that reasoning: an ordinary create grants the process's PRIMARY GROUP
+            # access with no setgid directory, no default ACL, and nobody having decided
+            # anything. The rule is now owner-only, and what follows is the current policy.
             # & 0o600: never WIDER than owner-only, and narrower where the directory says so.
             #
             # The gate rejected the weaker rule this replaced. Capping only "other" assumed group
@@ -390,7 +397,27 @@ def _install_posix_acl_policy(src, dst):
             # still wins, because the probe returns that stricter mode and the mask cannot widen
             # it. What is gone is the old promise of EXACT ordinary-create inheritance, which the
             # gate correctly called a contract this commit breaks rather than preserves.
-            os.chmod(dst, _report_mode(src, os.path.dirname(dst)) & 0o600)
+            # Three sources, intersected, because each one can be wrong on its own:
+            #
+            #   _report_mode   what an ordinary create in this directory produces — EXCEPT that
+            #                  it returns a guessed 0o600 when its unnamed probe is unsupported,
+            #                  and a guess cannot preserve a restriction it never measured. The
+            #                  gate reproduced that: a u::r,g::-,o::- default ACL with the probe
+            #                  forced to fail published 0600 where 0400 was the directory's
+            #                  actual answer, and u::-,g::-,o::- published 0600 where 0000 was.
+            #   0o600          the confidentiality cap: a report naming the class, path and line
+            #                  of every secret found gets no default audience.
+            #   staged         what the directory ACTUALLY gave the private mkstemp inode. This
+            #                  is not a guess at any point: mkstemp is itself an ordinary create
+            #                  in this directory, so its mode already carries the default ACL and
+            #                  the umask. It is the failed-probe answer, measured rather than
+            #                  assumed.
+            #
+            # Intersection cannot widen, so adding a term can only ever tighten the result, and
+            # the stricter-wins arm still proves the directory is consulted rather than the value
+            # being hard-coded.
+            staged = stat.S_IMODE(os.stat(dst, follow_symlinks=False).st_mode)
+            os.chmod(dst, _report_mode(src, os.path.dirname(dst)) & 0o600 & staged)
             return
 
         current = os.stat(dst, follow_symlinks=False)

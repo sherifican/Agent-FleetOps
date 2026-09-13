@@ -1430,12 +1430,11 @@ def test_the_report_is_left_readable_like_an_ordinary_file(tmp_path: Path) -> No
 def test_a_refusal_report_is_readable_too(tmp_path: Path) -> None:
     """The refusal path is the one a reader needs MOST, and it has its own mkstemp call.
 
-    An ordinary create is the right answer for the DIRECTORY's explicit policy and the wrong one
-    as a bare fallback: with no default ACL the mode comes from the umask, and review measured a
-    findings report published 0644 at the ordinary login umask and 0666 at umask 0. The report
-    lists the class, path and line of every secret found, so "other" is capped off. This arm
-    therefore compares against an ordinary create MINUS other access; the default-ACL sibling
-    still measures real inheritance, because a policy that already denies other is untouched.
+    Round eleven superseded the other-only cap this arm was first rewritten for. A new report is
+    OWNER-ONLY: the gate refused the argument that group access expresses a sharing decision,
+    since an ordinary create grants the primary group access with nobody deciding anything. So the
+    assertion is no longer "an ordinary create minus other" — it is that nothing beyond the owner
+    is granted, while a directory policy stricter than 0600 still wins by intersection.
     """
     driver = make_tool(tmp_path)
     staging = make_staging(tmp_path)
@@ -1517,12 +1516,11 @@ def test_replacing_a_report_preserves_the_mode_it_already_had(tmp_path: Path, pr
 def test_a_new_report_lands_where_an_ordinary_create_in_that_directory_lands(tmp_path: Path) -> None:
     """Covers the default-ACL case without needing to know whether one is present.
 
-    An ordinary create is the right answer for the DIRECTORY's explicit policy and the wrong one
-    as a bare fallback: with no default ACL the mode comes from the umask, and review measured a
-    findings report published 0644 at the ordinary login umask and 0666 at umask 0. The report
-    lists the class, path and line of every secret found, so "other" is capped off. This arm
-    therefore compares against an ordinary create MINUS other access; the default-ACL sibling
-    still measures real inheritance, because a policy that already denies other is untouched.
+    Round eleven superseded the other-only cap this arm was first rewritten for. A new report is
+    OWNER-ONLY: the gate refused the argument that group access expresses a sharing decision,
+    since an ordinary create grants the primary group access with nobody deciding anything. So the
+    assertion is no longer "an ordinary create minus other" — it is that nothing beyond the owner
+    is granted, while a directory policy stricter than 0600 still wins by intersection.
     """
     if os.geteuid() == 0:
         pytest.skip("root ignores mode bits; this needs an unprivileged writer")
@@ -2923,8 +2921,75 @@ def test_a_planted_existing_report_cannot_widen_the_findings_it_is_replaced_by(
                                         "generic_key_assignment", "contents")])
 
     mode = stat.S_IMODE(rp.stat().st_mode)
-    assert not mode & stat.S_IROTH, (
+    # EVERY other bit, not just read. The gate ran a mutant that capped other-READ alone and this
+    # arm stayed green, because 0666 & ~0o004 still clears write in the fixtures it had. A cap
+    # asserted only on the bit the fixture happens to exercise is not a cap.
+    assert not mode & 0o007, (
         f"a report planted at {planted:04o} caused the findings to be republished at {mode:04o}: "
-        "the tree being scanned chose who may read the secrets found in it")
+        "the tree being scanned chose who may read or write the secrets found in it")
     assert mode & stat.S_IRUSR and mode & stat.S_IWUSR, (
         f"and the owner must keep read and write, not be locked out at {mode:04o}")
+
+
+@pytest.mark.parametrize("acl,label", [("u::r,g::-,o::-", "owner-read-only"),
+                                       ("u::-,g::-,o::-", "no-access")])
+def test_a_failed_mode_probe_does_not_discard_a_stricter_directory_policy(
+        tmp_path: Path, acl: str, label: str) -> None:
+    """The cross-product the gate asked for: a restrictive directory AND an unusable probe.
+
+    _report_mode measures what an ordinary create here produces — except when its unnamed
+    O_TMPFILE probe is unsupported, where it returns a GUESSED 0o600. A guess cannot preserve a
+    restriction it never measured, so intersecting with it published 0600 where the directory's
+    real answer was 0400, and 0600 where it was 0000. Reproduced by the gate with the probe forced
+    to fail; the filesystem, the ACL and the writer were otherwise real.
+
+    The staged mkstemp inode is the measured answer: mkstemp is itself an ordinary create in this
+    directory, so its mode already carries the default ACL and the umask, with no probe involved.
+    Intersecting with it cannot widen anything and rescues exactly the discarded restriction.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    if shutil.which("setfacl") is None:
+        pytest.skip("setfacl is not installed; the default-ACL contract cannot be measured here")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "failed_probe_%s" % label)
+    staging = tmp_path / "staging"
+    reports_dir = staging / "_reports"
+    reports_dir.mkdir(parents=True)
+    applied = subprocess.run(["setfacl", "-d", "-m", acl, str(reports_dir)],
+                             capture_output=True, text=True)
+    if applied.returncode != 0:
+        pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
+
+    real_open = module.os.open
+    tmpfile_flag = getattr(os, "O_TMPFILE", 0)
+    refused: list[int] = []
+
+    def probe_refusing_open(path, flags, *args, **kwargs):
+        if tmpfile_flag and flags & tmpfile_flag:
+            refused.append(flags)
+            raise OSError(errno.EOPNOTSUPP, "O_TMPFILE unsupported (injected)")
+        return real_open(path, flags, *args, **kwargs)
+
+    module.os.open = probe_refusing_open
+    try:
+        module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                            "generic_key_assignment", "contents")])
+    finally:
+        module.os.open = real_open
+
+    if not refused:
+        pytest.skip("this build never attempted an O_TMPFILE probe; nothing was made to fail")
+
+    rp = reports_dir / "scan_report.txt"
+    got = stat.S_IMODE(rp.stat().st_mode)
+    reference = reports_dir / ".ordinary_reference"
+    fd = os.open(str(reference), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    os.close(fd)
+    expected = stat.S_IMODE(reference.stat().st_mode)
+    reference.unlink()
+
+    assert got == expected, (
+        f"with the probe unusable the report landed {got:04o}, but this directory actually gives "
+        f"{expected:04o} to a private create. A guessed 0600 discarded the restriction the "
+        "directory had already applied; the staged inode carries it without guessing")
