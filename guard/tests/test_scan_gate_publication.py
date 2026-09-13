@@ -3644,8 +3644,8 @@ def test_a_directory_substituted_after_hardening_cannot_redirect_the_publish(
 
     real_harden = module._harden_report_dir
 
-    def harden_then_substitute(path, restore_owner=False):
-        dirfd = real_harden(path, restore_owner)
+    def harden_then_substitute(path, restore_owner=False, parent_fd=None):
+        dirfd = real_harden(path, restore_owner, parent_fd)
         # The substitution lands in the window the gate identified: after validation, before a
         # single one of the publication path's names has been resolved.
         os.rename(str(reports), str(staging / "moved_aside"))
@@ -3773,3 +3773,310 @@ def test_creating_the_report_tree_does_not_leave_a_world_writable_ancestor(
         f"the scanner created group- or other-writable directories at {wide}. os.makedirs gives "
         "its mode to the LAST component only; an ancestor anyone can write is an ancestor anyone "
         "can rename, with the owner-only report directory still sitting inside it")
+
+
+# =============================================================================================
+# GROUP 27 — the nineteenth round. Two findings from the publication gate, both measured there
+# with an injected fault AND a no-injection control, and both reproduced here before the fix.
+#
+#   F1. `_preserve_superseded` caught EVERY OSError from its opening lstat and answered True,
+#       under a comment reading "nothing there; nothing to lose". An EIO or a transient EACCES is
+#       not evidence that the file is absent — it is evidence that we could not look. Answering
+#       True authorizes the caller to replace the findings without preserving them. The gate
+#       injected one EIO and one EACCES into that single call, left every other call real, and
+#       watched the old findings disappear; its no-injection control kept them.
+#
+#   F5. My own regression from round seventeen. The hardening verifies the post-chmod mode
+#       against a fixed 0700 even when restoration was NOT requested, so a pre-existing 0322
+#       directory — which the hardening itself narrows to 0300 — is then refused for lacking
+#       owner read. A directory ALREADY at 0300 skips that branch and publishes. The scanner
+#       therefore accepted or refused the same effective directory depending on where it started.
+# =============================================================================================
+
+
+def test_an_unreadable_report_is_not_treated_as_an_absent_one(tmp_path: Path) -> None:
+    """REPAIRED: failing to INSPECT the report is not a finding that it is gone."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "lstat_error_preserve")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    rp = reports / "scan_report.txt"
+    rp.write_text("aws\tkey\tassignment\tdocs/secret.md:4\n", encoding="utf-8")
+
+    real_lstat = module.os.lstat
+    fired: list[int] = []
+
+    def lstat_that_cannot_look(path, *args, **kwargs):
+        # Keyed on the CALLER, not on a call index. The refusal writer inspects this same name
+        # twice before preservation ever runs — an existence check and a symlink check — so an
+        # injection keyed on "the first lstat of scan_report.txt" lands on the existence check,
+        # which returns early and leaves the findings intact for the wrong reason. The arm then
+        # passes against the unfixed code. Measured: that is exactly what the first draft did.
+        caller = sys._getframe(1).f_code.co_name
+        if caller == "_preserve_superseded" and not fired:
+            fired.append(errno.EIO)
+            raise OSError(errno.EIO, "injected inspection failure")
+        return real_lstat(path, *args, **kwargs)
+
+    module.os.lstat = lstat_that_cannot_look
+    try:
+        module._write_refusal_report(str(staging), module.ScanRefused("fixture-refusal"))
+    finally:
+        module.os.lstat = real_lstat
+
+    assert fired, (
+        "CONTROL: the injection never fired, so this arm measured an ordinary run and would pass "
+        "against an implementation that ignores inspection errors entirely")
+    surviving = rp.read_text(encoding="utf-8") if rp.exists() else ""
+    preserved = [p for p in reports.iterdir() if p.name.startswith("scan_report.superseded")]
+    kept = "docs/secret.md:4" in surviving or any(
+        "docs/secret.md:4" in p.read_text(encoding="utf-8") for p in preserved)
+    assert kept, (
+        "REPAIRED: an lstat that could not look answered 'nothing there; nothing to lose', and "
+        "the findings were replaced by a refusal line without ever being preserved")
+
+
+def test_a_no_injection_control_run_preserves_the_findings(tmp_path: Path) -> None:
+    """CONTROL for the arm above: with nothing injected, the ordinary path keeps the evidence."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "lstat_error_control")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    rp = reports / "scan_report.txt"
+    rp.write_text("aws\tkey\tassignment\tdocs/secret.md:4\n", encoding="utf-8")
+
+    module._write_refusal_report(str(staging), module.ScanRefused("fixture-refusal"))
+
+    preserved = [p for p in reports.iterdir() if p.name.startswith("scan_report.superseded")]
+    assert any("docs/secret.md:4" in p.read_text(encoding="utf-8") for p in preserved), (
+        "CONTROL: the ordinary refusal path must preserve the findings it replaces; if this fails "
+        "the fixture is wrong and the injected arm above proves nothing")
+
+
+@pytest.mark.parametrize("start", [0o300, 0o322, 0o332, 0o700])
+def test_a_usable_report_directory_is_not_refused_for_lacking_owner_read(
+    tmp_path: Path, start: int
+) -> None:
+    """REPAIRED: the hardening must judge the mode it asked for, not a fixed 0700.
+
+    0o300 already published before this round; 0o322 is the SAME effective directory once group
+    and other write are removed, and it was refused. Whether the scanner accepted a directory
+    depended on which side of its own narrowing it started.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path, name="tool_%o" % start)
+    module = import_driver(driver, "usable_dir_%o" % start)
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    reports.chmod(start)
+    try:
+        canary = ".canary_probe"
+        fd = os.open(str(reports / canary), os.O_CREAT | os.O_WRONLY, 0o600)
+        os.close(fd)
+        os.unlink(str(reports / canary))
+    except OSError:
+        reports.chmod(0o700)
+        pytest.skip(f"this filesystem does not allow creating in a {start:04o} directory")
+
+    try:
+        module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                            "generic_key_assignment", "contents")])
+        published = (reports / "scan_report.txt").exists()
+        final = stat.S_IMODE(reports.stat().st_mode)
+    finally:
+        reports.chmod(0o700)
+
+    assert published, (
+        f"a {start:04o} report directory was refused, but its owner can create there — the "
+        "post-chmod check demanded owner read that restoration never asked for")
+    assert not final & 0o022, (
+        f"and the directory kept group or other write at {final:04o}, which is the one thing the "
+        "hardening exists to remove")
+
+
+# =============================================================================================
+# GROUP 28 — the nineteenth round, quarantine. Round seventeen added a place to KEEP findings a
+# publish could not complete. The gate found it destroys evidence in both directions.
+#
+#   F2a. The quarantine name can be BLOCKED — a populated directory sitting at it, which cannot
+#        be removed and is not ours to remove. Quarantine then fails, and the caller's cleanup
+#        unlinks the staged findings. The run that was supposed to be protected loses its hits
+#        because somebody else's data was in the way.
+#
+#   F2b. Quarantine used a REPLACING rename onto one fixed name. An earlier run's kept findings
+#        were silently overwritten by a later run's. A mechanism whose whole purpose is not
+#        losing evidence was overwriting evidence.
+#
+#   F4.  The quarantined file got fchmod but no ACL strip, because the failure that sends us here
+#        happens BEFORE the ordinary installer's strip. At 0600 the mask suppresses named entries,
+#        so this is not an immediate read leak — but the retained evidence does not meet the same
+#        ACL-free policy as the published report, and one chmod re-arms it.
+# =============================================================================================
+
+
+def _findings_anywhere(reports: Path, needle: str) -> bool:
+    """True if any regular file under the report directory still carries the marker."""
+    for path in reports.rglob("*"):
+        if path.is_file():
+            try:
+                if needle in path.read_text(encoding="utf-8"):
+                    return True
+            except (OSError, UnicodeDecodeError):
+                continue
+    return False
+
+
+def _fifo_at_report(reports: Path) -> None:
+    try:
+        os.mkfifo(str(reports / "scan_report.txt"))
+    except (OSError, AttributeError):
+        pytest.skip("this platform cannot create a FIFO; the refusal state is not reachable here")
+
+
+NEW_HIT = [("docs/example.md", 12, "SECRET", "generic_key_assignment", "contents")]
+
+
+def test_a_blocked_quarantine_name_does_not_cost_this_run_its_findings(tmp_path: Path) -> None:
+    """REPAIRED: somebody else's data in the way must not cost us the evidence."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quarantine_blocked")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    _fifo_at_report(reports)
+    blocker = reports / "scan_report.unpublished.txt"
+    blocker.mkdir()
+    (blocker / "keep").write_text("OPERATOR DATA\n", encoding="utf-8")
+
+    with pytest.raises(Exception):
+        module.write_report(str(staging), NEW_HIT)
+
+    assert (blocker / "keep").read_text(encoding="utf-8") == "OPERATOR DATA\n", (
+        "CONTROL: the blocking directory's contents must be untouched; this scanner does not "
+        "remove a populated directory it did not create")
+    assert _findings_anywhere(reports, "docs/example.md:12"), (
+        "REPAIRED: the quarantine name was occupied, so the cleanup deleted the staged findings. "
+        "A name being unavailable is not a reason to destroy the evidence it was going to hold")
+
+
+def test_an_earlier_quarantined_report_is_not_replaced_by_a_later_one(tmp_path: Path) -> None:
+    """REPAIRED: preserving THIS run's evidence must not destroy an earlier run's."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quarantine_no_clobber")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    earlier = reports / "scan_report.unpublished.txt"
+    earlier.write_text("aws\tkey\tassignment\tdocs/older.md:1\n", encoding="utf-8")
+    _fifo_at_report(reports)
+
+    with pytest.raises(Exception):
+        module.write_report(str(staging), NEW_HIT)
+
+    assert _findings_anywhere(reports, "docs/older.md:1"), (
+        "REPAIRED: an earlier run's quarantined findings were overwritten by this run's. A "
+        "replacing rename onto one fixed name makes the evidence store destroy evidence")
+    assert _findings_anywhere(reports, "docs/example.md:12"), (
+        "and this run's findings must be kept too, under a name of their own")
+
+
+def test_quarantined_findings_carry_no_inherited_acl(tmp_path: Path) -> None:
+    """REPAIRED: retained evidence meets the same ACL-free policy as a published report."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    if shutil.which("setfacl") is None:
+        pytest.skip("setfacl is not installed; the ACL contract cannot be measured here")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quarantine_acl")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    applied = subprocess.run(["setfacl", "-d", "-m", f"u:{os.geteuid()}:rw,o::r", str(reports)],
+                             capture_output=True, text=True)
+    if applied.returncode != 0:
+        pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
+    probe = reports / ".inherit_probe"
+    probe.write_text("x", encoding="utf-8")
+    inherits = _acl(probe) is not None
+    probe.unlink()
+    if not inherits:
+        pytest.skip("this filesystem does not hand a new file the directory default ACL")
+
+    _fifo_at_report(reports)
+    with pytest.raises(Exception):
+        module.write_report(str(staging), NEW_HIT)
+
+    kept = [p for p in reports.rglob("*")
+            if p.is_file() and "docs/example.md:12" in p.read_text(encoding="utf-8")]
+    assert kept, "CONTROL: nothing was retained, so there is no artifact to check"
+    assert _acl(kept[0]) is None, (
+        f"the retained findings at {kept[0].name} still carry the directory's inherited ACL: the "
+        "failure that sends us here happens before the ordinary installer's strip, so quarantine "
+        "has to do its own")
+
+
+def test_creating_an_ancestor_cannot_change_the_mode_of_a_substituted_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REPAIRED: the last pathname pair in the publication path, found by both review legs.
+
+    Creating the missing staging chain did pathname `mkdir` followed by pathname `chmod`. The gate
+    injected a rename-and-symlink between those two calls; the chmod then landed on a directory
+    OUTSIDE the supplied tree and publication followed it there. The cold leg reached the same
+    helper from the other side — creating through an intermediate symlink. Each component is now
+    created relative to the descriptor of the one above it and its mode set through a descriptor,
+    so a name substituted underneath us is refused rather than followed.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores mode bits; this needs an unprivileged writer")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "ancestor_swap")
+    outside = tmp_path / "outside_the_tree"
+    outside.mkdir()
+    (outside / "sentinel").write_text("OUTSIDE DATA\n", encoding="utf-8")
+    outside.chmod(0o755)
+    staging = tmp_path / "absent" / "staging"
+
+    real_mkdir = module.os.mkdir
+    fired: list[str] = []
+
+    def mkdir_then_substitute(name, mode=0o777, *args, **kwargs):
+        # Keyed on the BASENAME and tolerant of both call shapes. The previous implementation
+        # created components by full pathname with no dir_fd; this one creates a basename relative
+        # to a held descriptor. An injection written against only the new shape never fires on the
+        # old code, and the arm then fails on its own control instead of on the behaviour — which
+        # is exactly what the first draft of this arm did.
+        real_mkdir(name, mode, *args, **kwargs)
+        if not fired and os.path.basename(str(name)) == "staging":
+            fired.append(str(name))
+            dir_fd = kwargs.get("dir_fd")
+            moved = str(name) + "_moved"
+            if dir_fd is None:
+                os.rename(str(name), moved)
+                os.symlink(str(outside), str(name))
+            else:
+                os.rename(str(name), moved, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+                os.symlink(str(outside), str(name), dir_fd=dir_fd)
+
+    monkeypatch.setattr(module.os, "mkdir", mkdir_then_substitute)
+    try:
+        module.write_report(str(staging), [("docs/example.md", 12, "SECRET",
+                                            "generic_key_assignment", "contents")])
+    except Exception:
+        pass
+
+    assert fired, (
+        "CONTROL: the substitution never fired, so this arm measured an ordinary run and proves "
+        "nothing about what happens when the name changes underneath the helper")
+    mode = stat.S_IMODE(outside.stat().st_mode)
+    assert mode == 0o755, (
+        f"REPAIRED: a directory outside the supplied tree was chmod'd to {mode:04o}. The helper "
+        "created by name and then set the mode by name, so the substituted symlink was followed")
+    assert not (outside / "_reports").exists(), (
+        "REPAIRED: the report directory was created outside the supplied tree entirely")
+    assert (outside / "sentinel").read_text(encoding="utf-8") == "OUTSIDE DATA\n", (
+        "CONTROL: the outside directory's contents were never in play")

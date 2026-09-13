@@ -434,6 +434,14 @@ _SUPERSEDED_SLOTS = 8
 # successful publication, and nothing you care about should live at this name.
 _UNPUBLISHED_NAME = "scan_report.unpublished.txt"
 
+# A SET of quarantine names, for the same reason preservation needed one. A single name can be
+# OCCUPIED — by a populated directory that cannot be removed and is not ours to remove, or by an
+# EARLIER run's kept findings, which must not be overwritten to make room for this run's. The gate
+# measured both: an operator's directory at the name cost this run its hits, and a replacing
+# rename onto the name destroyed the previous run's. A store whose purpose is not losing evidence
+# was losing evidence in both directions.
+_UNPUBLISHED_SLOTS = 8
+
 # The canonical report's BASENAME. Every operation in the publication path names it relative to
 # the validated directory descriptor rather than joining it onto a path that can be re-resolved.
 _REPORT_NAME = "scan_report.txt"
@@ -443,6 +451,27 @@ _REPORT_NAME = "scan_report.txt"
 # bound expressed plainly, and running out is an error rather than a silent reuse.
 _STAGE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789_"
 _STAGE_ATTEMPTS = 64
+
+
+def _unpublished_slot_names():
+    """Every BASENAME a retained findings report may occupy, in the order they are tried."""
+    yield _UNPUBLISHED_NAME
+    for n in range(1, _UNPUBLISHED_SLOTS):
+        yield "scan_report.unpublished.%d.txt" % n
+
+
+def _staged_holds_evidence(fd, hits):
+    """True when the staged file is a findings report with bytes actually on disk.
+
+    The caller uses this to decide whether deleting the staged file destroys anything. A staged
+    CLEAN is not evidence, and a zero-length file is a failure that preceded the write.
+    """
+    if not hits:
+        return False
+    try:
+        return os.fstat(fd).st_size > 0
+    except OSError:
+        return False
 
 
 def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
@@ -472,20 +501,41 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
     descriptor's inode, for the same reason the publish path does both: this runs inside an
     untrusted directory, and it runs when something has already gone wrong.
     """
-    if not hits:
+    if not _staged_holds_evidence(fd, hits):
         return False
     try:
         held = os.fstat(fd)
-        if held.st_size == 0:
-            return False
         named = os.lstat(tmp_name, dir_fd=dirfd)
         if (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino):
             return False
+        # THE SAME ACCESS POLICY AS A PUBLISHED REPORT. The failure that sends us here happens
+        # BEFORE the ordinary installer's ACL strip, so retained evidence was arriving with the
+        # directory's inherited ACL still on it. At 0600 the mask suppresses named entries, so
+        # this was never an immediate read leak — but one chmod re-arms them, and evidence does
+        # not get a weaker rule than the report it stands in for.
+        if _XATTR_SUPPORTED:
+            try:
+                _strip_acl_by_fd(fd)
+            except OSError:
+                pass                      # best effort, and independent of the cap below
         os.fchmod(fd, _REPORT_MODE)
-        os.replace(tmp_name, _UNPUBLISHED_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
     except OSError:
         return False
-    return True
+
+    # EXCLUSIVE, never replacing. os.link refuses an occupied name, so an earlier run's kept
+    # findings cannot be overwritten to make room for this run's, and a populated directory at
+    # one name simply moves us to the next rather than costing anyone their evidence.
+    for candidate in _unpublished_slot_names():
+        try:
+            os.link(tmp_name, candidate, src_dir_fd=dirfd, dst_dir_fd=dirfd)
+        except OSError:
+            continue                      # occupied, unusable, or unsupported — try the next
+        try:
+            os.unlink(tmp_name, dir_fd=dirfd)
+        except OSError:
+            pass                          # the evidence is linked; a leftover stage is harmless
+        return True
+    return False
 
 
 def _superseded_slot_names(include_unpublished=False):
@@ -503,7 +553,8 @@ def _superseded_slot_names(include_unpublished=False):
     for n in range(1, _SUPERSEDED_SLOTS):
         yield "scan_report.superseded.%d.txt" % n
     if include_unpublished:
-        yield _UNPUBLISHED_NAME
+        for name in _unpublished_slot_names():
+            yield name
 
 
 def _superseded_slots(reports_dir, include_unpublished=False):
@@ -512,7 +563,7 @@ def _superseded_slots(reports_dir, include_unpublished=False):
         yield os.path.join(reports_dir, name)
 
 
-def _harden_report_dir(reports_dir, restore_owner=False):
+def _harden_report_dir(reports_dir, restore_owner=False, parent_fd=None):
     """Remove group and other WRITE from the report directory, without following a symlink.
 
     Directory write permission, not file mode, is what governs unlink and create. os.makedirs
@@ -562,32 +613,39 @@ def _harden_report_dir(reports_dir, restore_owner=False):
     # O_PATH opens the directory without requiring read, but an O_PATH descriptor cannot be
     # fchmod'd, so the mode is reached through its /proc/self/fd entry. Both handles are still
     # O_NOFOLLOW, so neither can be swapped onto a symlink after the check.
+    # Relative to a held parent where the caller has one — that is what stops the name being
+    # substituted between the create and this open. Where it does not (the refusal writer, which
+    # creates nothing), the pathname form is used and the directory is still opened O_NOFOLLOW.
+    _name = "_reports" if parent_fd is not None else reports_dir
     fd = None
     via_proc = False
     try:
-        fd = os.open(reports_dir, os.O_RDONLY | os.O_DIRECTORY | nofollow)
-    except OSError:
-        if opath:
-            try:
-                fd = os.open(reports_dir, opath | os.O_DIRECTORY | nofollow)
-                via_proc = True
-            except OSError as exc:
-                raise ScanRefused("report-dir-unsafe '_reports'") from exc
-        else:
-            raise ScanRefused("report-dir-unsafe '_reports'")
+        fd, via_proc = _open_dir_nofollow(_name, parent_fd)
+    except OSError as exc:
+        raise ScanRefused("report-dir-unsafe '_reports'") from exc
     try:
         target = "/proc/self/fd/%d" % fd if via_proc else fd
         mode = stat.S_IMODE(os.stat(target).st_mode if via_proc else os.fstat(fd).st_mode)
-        want = ((mode | _REPORT_DIR_MODE) if restore_owner else mode) & ~0o022
+        # Restoration is withheld from a directory that is not empty. It is not proof that this
+        # is the inode we created — the gate was explicit that a same-uid actor with write on the
+        # parent can still substitute one — but it confines any widening to something with nothing
+        # in it, so a populated directory swapped into the name is never opened up.
+        _restore = restore_owner and _looks_freshly_created(fd, via_proc)
+        want = ((mode | _REPORT_DIR_MODE) if _restore else mode) & ~0o022
         if mode != want:
             os.chmod(target, want)
             now = stat.S_IMODE(os.stat(target).st_mode if via_proc else os.fstat(fd).st_mode)
             if now & 0o022:
                 raise ScanRefused("report-dir-writable '_reports'")
-            if now & _REPORT_DIR_MODE != _REPORT_DIR_MODE:
-                # The owner's own bits could not be restored, so the publish that follows would
-                # fail inside a directory this tool is responsible for. Refusing here names the
-                # cause; letting mkstemp raise EACCES two lines later does not.
+            if _restore and now & _REPORT_DIR_MODE != _REPORT_DIR_MODE:
+                # Only when restoration was actually REQUESTED. Round seventeen checked against a
+                # fixed 0700 either way, which made this a regression rather than a guard: a
+                # pre-existing 0322 directory is narrowed by this very function to 0300 and was
+                # then refused for lacking owner read, while a directory already AT 0300 skipped
+                # the branch and published. The same effective directory was accepted or refused
+                # depending on which side of our own narrowing it started. Owner read is not
+                # needed to publish — create and traverse are — so it is not required of a
+                # directory the operator configured.
                 raise ScanRefused("report-dir-unsafe '_reports'")
     except OSError as exc:
         _close_quietly(fd)
@@ -606,37 +664,109 @@ def _harden_report_dir(reports_dir, restore_owner=False):
     return fd
 
 
+def _open_dir_nofollow(name, parent_fd):
+    """Open a directory relative to a held parent, never following a symlink at the last name.
+
+    Returns (fd, via_proc). The O_PATH fallback exists for a directory with write and search but
+    no read — round fourteen's availability case — and its mode is reached through the kernel's
+    descriptor directory because an O_PATH handle cannot be fchmod'd.
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    opath = getattr(os, "O_PATH", 0)
+    flags = os.O_DIRECTORY | nofollow
+    try:
+        return os.open(name, os.O_RDONLY | flags, dir_fd=parent_fd), False
+    except OSError:
+        if not opath:
+            raise
+        return os.open(name, opath | flags, dir_fd=parent_fd), True
+
+
+def _looks_freshly_created(fd, via_proc):
+    """Cheap evidence that nothing has been put in this directory yet.
+
+    Used only to decide whether owner bits may be RESTORED. It is not proof of identity and is not
+    claimed to be: a directory listing answers it where the directory can be read, and st_nlink
+    answers it where it cannot. What it buys is that a populated directory substituted for the one
+    we created is never widened — the widening is confined to something empty.
+    """
+    try:
+        if via_proc:
+            if _PROC_FD_DIR is None:
+                return False
+            return not os.listdir("%s/%d" % (_PROC_FD_DIR, fd))
+        return not os.listdir(fd)
+    except OSError:
+        try:
+            st = os.fstat(fd)
+        except OSError:
+            return False
+        return stat.S_ISDIR(st.st_mode) and st.st_nlink <= 2
+
+
 def _makedirs_owner_only(path):
-    """Create a directory chain in which EVERY component is owner-only.
+    """Create a directory chain in which EVERY component is owner-only, resolving each step
+    against a HELD DESCRIPTOR rather than a pathname.
 
-    os.makedirs applies its mode argument to the LAST component only; every ancestor it creates
-    takes the default 0o777 masked by the umask. A cold review leg measured the consequence at
-    umask 0: the scanner created world-writable ancestors and then carefully placed an owner-only
-    report directory inside them. An ancestor anyone can write is an ancestor anyone can RENAME,
-    which puts the whole directory-identity problem back one level up — and the hardening that
-    removes group and other write from _reports never looked above it.
+    Two findings met here, one from each review leg, and they are the same defect seen from
+    different sides. os.makedirs applies its mode argument to the last component only, so every
+    ancestor it created took the default 0o777 masked by the umask — measured at umask 0 as
+    world-writable ancestors wrapped around an owner-only report directory, which is an ancestor
+    anyone can RENAME. And the first repair for that did pathname mkdir followed by pathname
+    chmod: the gate injected a rename-and-symlink between those two calls and the chmod landed on
+    a directory outside the supplied tree, with publication following it there.
 
-    mkdir is umask-masked too, so each component is chmod'd after creation rather than trusted to
-    arrive at the requested mode. Only components this call actually creates are touched: an
-    existing ancestor is the operator's and is left exactly as it is.
+    So each component is created relative to the descriptor of the one above it, opened
+    O_NOFOLLOW, and its mode set through that descriptor. mkdir is umask-masked, so the mode is
+    applied after creation rather than trusted to arrive. Only components this call creates are
+    touched; an ancestor that already existed belongs to the operator and is left exactly as it is.
+
+    Best effort throughout: this runs before the publication path proper, and a failure here
+    surfaces as the ordinary report-write error the caller already handles.
     """
     missing = []
-    cursor = path
+    cursor = os.path.abspath(path)
     while cursor and not os.path.isdir(cursor):
         missing.append(cursor)
         parent = os.path.dirname(cursor)
         if parent == cursor:
             break
         cursor = parent
-    for component in reversed(missing):
-        try:
-            os.mkdir(component, _REPORT_DIR_MODE)
-        except FileExistsError:
-            continue                      # somebody else got there first; not ours to re-mode
-        try:
-            os.chmod(component, _REPORT_DIR_MODE)
-        except OSError:
-            pass
+    if not missing:
+        return
+
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(cursor, os.O_RDONLY | os.O_DIRECTORY | nofollow)
+    except OSError:
+        return
+    try:
+        for component in reversed(missing):
+            name = os.path.basename(component)
+            if not name:
+                continue
+            try:
+                os.mkdir(name, _REPORT_DIR_MODE, dir_fd=fd)
+            except FileExistsError:
+                pass                      # somebody else got there first; not ours to re-mode
+            except OSError:
+                return
+            try:
+                child, via_proc = _open_dir_nofollow(name, fd)
+            except OSError:
+                return
+            try:
+                if via_proc:
+                    if _PROC_FD_DIR is not None:
+                        os.chmod("%s/%d" % (_PROC_FD_DIR, child), _REPORT_DIR_MODE)
+                else:
+                    os.fchmod(child, _REPORT_DIR_MODE)
+            except OSError:
+                pass
+            _close_quietly(fd)
+            fd = child
+    finally:
+        _close_quietly(fd)
 
 
 def _close_quietly(fd):
@@ -690,27 +820,40 @@ def write_report(staging, hits):
     if os.path.islink(reports_dir):
         raise ScanRefused("report-path-unsafe '_reports'")
 
-    # Whether this call CREATED the directory decides whether its owner bits are this tool's to
-    # normalise; os.makedirs(exist_ok=True) cannot answer that, so the create is attempted first
-    # and the answer comes from which exception it raises.
-    created = False
+    # THE REPORT DIRECTORY IS CREATED AND OPENED RELATIVE TO A HELD PARENT DESCRIPTOR. Round
+    # eighteen anchored everything INSIDE the report directory and left its creation resolving by
+    # pathname, which the gate then reproduced: a hook that renamed the just-created directory
+    # aside and left a symlink at the name made the following pathname chmod land on a directory
+    # outside the supplied tree, and publication followed it there. Holding the parent and
+    # opening O_NOFOLLOW removes the symlink substitution; the mode repair is an fchmod on the
+    # descriptor rather than a chmod on a name that can be re-resolved.
+    if not os.path.isdir(staging):
+        _makedirs_owner_only(staging)
+    # The staging path itself is the root the caller gave us and is opened by name: it is the
+    # trust boundary, not something inside it. Everything BELOW it is descriptor-relative from
+    # here on. Hardening an ancestor the caller named would be a different decision and is not
+    # this function's to make.
+    _nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
-        os.mkdir(reports_dir, _REPORT_DIR_MODE)
-        created = True
-    except FileExistsError:
-        # Anything OTHER than a directory at this name is an ordinary report-write failure and
-        # must keep classifying as one. Catching the create's own exception to learn whether this
-        # call made the directory must not quietly re-badge a failure mode that predates it: a
-        # regular file at _reports was reported as report-write-error before this line existed,
-        # and two arms pin that name.
-        if not os.path.isdir(reports_dir):
-            raise
-    except FileNotFoundError:
-        _makedirs_owner_only(reports_dir)
-        created = True
-    if not os.path.isdir(reports_dir):
-        raise ScanRefused("report-path-unsafe '_reports'")
-    dirfd = _harden_report_dir(reports_dir, restore_owner=created)
+        parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY | _nofollow)
+    except OSError as exc:
+        raise ScanRefused("report-path-unsafe '_reports'") from exc
+    try:
+        created = False
+        try:
+            os.mkdir("_reports", _REPORT_DIR_MODE, dir_fd=parent_fd)
+            created = True
+        except FileExistsError:
+            # Anything OTHER than a directory at this name is an ordinary report-write failure and
+            # must keep classifying as one. Catching the create's own exception to learn whether
+            # this call made the directory must not quietly re-badge a failure mode that predates
+            # it: a regular file at _reports was reported as report-write-error before this line
+            # existed, and two arms pin that name.
+            if not os.path.isdir(reports_dir):
+                raise
+        dirfd = _harden_report_dir(reports_dir, restore_owner=created, parent_fd=parent_fd)
+    finally:
+        _close_quietly(parent_fd)
     try:
         # EVERY NAME FROM HERE IS RELATIVE TO dirfd, and that is the whole of round eighteen. The
         # directory this descriptor refers to is the one that was validated; the pathname
@@ -778,10 +921,17 @@ def write_report(staging, hits):
             # destroyed the hits this scan had just written, and the refusal that follows cannot
             # carry them.
             if not _quarantine_unpublished(dirfd, tmp_name, fd, hits):
-                try:
-                    os.unlink(tmp_name, dir_fd=dirfd)
-                except OSError:
-                    pass
+                # NOTHING TO KEEP, OR NOWHERE TO KEEP IT. A staged CLEAN carries no evidence and
+                # is removed. Staged FINDINGS that no quarantine name would take are LEFT WHERE
+                # THEY ARE: the staged name is inside the scanner's own reserved prefix, and a
+                # retained temporary holding real hits is strictly better than deleting them
+                # because every destination was occupied. The gate measured the alternative — a
+                # populated directory at the quarantine name cost a run its findings.
+                if not _staged_holds_evidence(fd, hits):
+                    try:
+                        os.unlink(tmp_name, dir_fd=dirfd)
+                    except OSError:
+                        pass
             raise
         finally:
             _close_quietly(fd)
@@ -881,8 +1031,21 @@ def _preserve_superseded(dirfd, report_name):
     """
     try:
         previous = os.lstat(report_name, dir_fd=dirfd)
+    except FileNotFoundError:
+        return True                       # CONFIRMED absent; nothing to lose
     except OSError:
-        return True                       # nothing there; nothing to lose
+        # COULD NOT LOOK. This answered True under a comment reading "nothing there; nothing to
+        # lose", and an EIO or a transient EACCES is not evidence that the file is gone — it is
+        # evidence that the question was not answered. Answering True authorizes the caller to
+        # replace a findings report without preserving it. The gate injected one EIO and one
+        # EACCES into this single call, left every other call real, and watched the findings
+        # disappear; its no-injection control kept them.
+        #
+        # Returning False rather than raising is deliberate. The caller treats False as "do not
+        # replace" and stops; raising here would be caught by the refusal writer's own guard and
+        # routed into a fallback that replaces the report anyway, which is the same destruction
+        # arriving by a longer path.
+        return False
     if not stat.S_ISREG(previous.st_mode):
         return True                       # not a regular file; not ours to preserve
 

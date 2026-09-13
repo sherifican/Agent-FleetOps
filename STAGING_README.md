@@ -102,6 +102,7 @@ of who wrote them:
     scan_report.superseded.txt
     scan_report.superseded.1.txt  …  scan_report.superseded.7.txt
     scan_report.unpublished.txt
+    scan_report.unpublished.1.txt  …  scan_report.unpublished.7.txt
 
 The numbered names became scanner-owned when the preservation slot was widened from one name to
 eight. Gate review measured an ordinary pre-existing file at `scan_report.superseded.1.txt` being
@@ -116,6 +117,14 @@ contained secrets was lost at exactly the moment it mattered. A staged CLEAN is 
 it is not evidence, and a file saying CLEAN beside an exit status of 2 tells a reader this tree
 passed. The kept file is `0600` like any other report, and the next successful publication removes
 it along with the preservation slots.
+
+There are eight of those names for the same reason there are eight preservation slots. One name
+can be OCCUPIED — by a populated directory that is not the scanner's to remove, or by an EARLIER
+run's kept findings — and review measured both failures: an operator's directory at the name cost
+a run its hits, and a replacing rename destroyed the previous run's. The names are now claimed
+exclusively and never overwritten. If every one of them is unavailable, the staged temporary
+holding the findings is LEFT IN PLACE under the scanner's reserved `.scan_report_` prefix rather
+than deleted; a leftover temporary holding real evidence is better than no evidence.
 
 A preserved copy is a HARD LINK to the report being replaced, not a duplicate of it, and the
 scanner narrows that inode to owner-only — otherwise preservation would keep exactly the exposure
