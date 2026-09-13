@@ -61,12 +61,34 @@ it buys is that a default ACL which would lock the owner out cannot produce find
 read.
 
 **A RETAINED findings file whose access policy could not be installed keeps its bytes and loses
-its reserved name.** The reserved `scan_report.unpublished.*` names mean "retained evidence,
-carrying the report's access policy". If the ACL strip is denied, that policy is not on the file,
-and linking it into a reserved name anyway would report a compliance that was never installed —
-review measured exactly that. The bytes stay at the scanner's staged `.scan_report_` name
-instead, which promises nothing. Preserving evidence outranks labelling it; claiming a policy it
-does not have does not.
+its reserved name.** Both families of reserved name — `scan_report.unpublished.*` and
+`scan_report.superseded.*` — mean "retained evidence, carrying the report's access policy". If the
+ACL strip is denied, that policy is not on the file, and treating it as policy-bearing anyway
+would report a compliance that was never installed — review measured exactly that. **What follows
+differs between the two families, because they are holding different things.**
+
+A QUARANTINED file is the only copy of this scan's findings, and its reserved name would survive
+beside a freshly published report and stand in for it. So it loses the name: the bytes stay at the
+scanner's staged `.scan_report_` name, which promises nothing.
+
+A SUPERSEDED file is a second NAME for the report that was about to be replaced, and there the
+denial **declines the replacement** instead: the findings stay at `scan_report.txt`, where they
+already were, and the refusal reaches the caller through the exit status. The reserved name is
+**kept**, deliberately. Removing it was this round's first shape, and it is wrong for a reason
+worth stating: a link is a second name only while the canonical name still reaches the inode, and
+in a hostile tree it may stop doing so between the link and the removal — at which point giving
+the name back destroys the findings. POSIX cannot express "remove this name only if it is not the
+last one", so the fix is not a better check. Keeping it costs nothing, because the replacement was
+declined: the inode goes on standing at the canonical name, so an ACL on the reserved name is an
+ACL already on the report itself. Both reserved families are deleted after any successful
+publication.
+
+Neither case costs a byte. Preserving evidence outranks labelling it; claiming a policy it does
+not have does not.
+
+The mode cap is applied to the inode either way. The cap and the strip have been independent since
+the seventeenth round, and a denied strip must not take the cap with it — that is a separate
+property from this one, and this rule does not weaken it.
 
 **Any POSIX ACL on the published report is REMOVED, never carried** — whether inherited from the
 directory or copied from the report being replaced. Be precise about what that buys, because an

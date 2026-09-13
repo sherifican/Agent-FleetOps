@@ -1045,9 +1045,12 @@ def _narrow_kept_copy(dirfd, name):
     asked to scan. Narrowing is the only direction it moves, an owner can undo it with one chmod,
     and the alternative is publishing the findings to whoever holds the other name.
 
-    Every step is best effort. Failing to narrow the kept copy must not destroy it: the canonical
-    publish still lands owner-only, and a preserved copy that could not be narrowed is strictly
-    better than no preserved copy at all.
+    RETURNS WHETHER THE POLICY IS ACTUALLY ON THE INODE, which is the whole of round twenty-six.
+    Every step here is still best effort in the sense that nothing raises and nothing is deleted —
+    but "best effort" was being read by the caller as "done". A denied strip was swallowed, this
+    function returned None either way, and a reserved name went on standing for a compliance that
+    had not been installed. The caller now decides what to do with the answer; failing to narrow
+    still destroys nothing.
     """
     # AN O_PATH HANDLE, WHICH ANSWERS THREE FINDINGS AT ONCE.
     #
@@ -1070,19 +1073,30 @@ def _narrow_kept_copy(dirfd, name):
     try:
         fd = os.open(name, flags, dir_fd=dirfd)
     except OSError:
-        return
+        return False
     try:
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
-                return                    # not a preserved report; not ours to re-mode
+                return False              # not a preserved report; not ours to re-mode
         except OSError:
-            return
+            return False
         target = "%s/%d" % (_PROC_FD_DIR, fd) if via_proc else fd
         if _XATTR_SUPPORTED:
             try:
                 _strip_acl_by_fd(fd)
-            except OSError:
-                pass                      # best effort, and INDEPENDENT of the cap below
+            except OSError as exc:
+                if exc.errno not in _ACL_ABSENT:
+                    # DENIED, which is not the same as ABSENT, and the two were one branch. The
+                    # cap below still runs — the two remain independent, exactly as round
+                    # seventeen established — but the answer this function returns tells the
+                    # truth about the strip, and its caller stops treating the copy as policy-
+                    # bearing. The quarantine path has drawn this line since round twenty-three;
+                    # preservation was never brought in line with it.
+                    try:
+                        os.chmod(target, _REPORT_MODE)
+                    except OSError:
+                        pass
+                    return False
         try:
             # THE REPORT MODE, not the planted mode narrowed. `_kept & 0o600` mapped 0044 to 0000
             # and left the only surviving copy of the findings unreadable by its owner. 0600 is
@@ -1090,7 +1104,8 @@ def _narrow_kept_copy(dirfd, name):
             # is what an evidence copy has to be.
             os.chmod(target, _REPORT_MODE)
         except OSError:
-            pass
+            return False
+        return True
     finally:
         _close_quietly(fd)
 
@@ -1166,7 +1181,11 @@ def _preserve_superseded(dirfd, report_name):
         # about to be replaced, and narrowing a report nobody should have been able to read is
         # safe in the interim. If preservation is refused and the report stays, it stays narrower
         # than it was, which is the direction that cannot hurt.
-        _narrow_kept_copy(dirfd, linked)
+        #
+        # The ANSWER is kept. A reserved name asserts that the retained inode carries the
+        # report's access policy; if it does not, this call has to decide that below rather than
+        # hand the caller an authorization built on a strip that was refused.
+        narrowed = _narrow_kept_copy(dirfd, linked)
 
     # Classify only AFTER the link, so a failed read cannot prevent preservation — and classify
     # THROUGH THE LINK, not through report_path. The two names described the same inode at link
@@ -1200,7 +1219,31 @@ def _preserve_superseded(dirfd, report_name):
         return True
 
     if linked is not None:
-        return True
+        if narrowed:
+            return True
+        # THE POLICY WAS DENIED ON THE INODE WE JUST RESERVED A NAME FOR, so the replacement is
+        # refused. Round twenty-three settled the shape for quarantine and preservation was left
+        # behind: a reserved name means "retained evidence, carrying the report's access policy",
+        # and a successful link was authorizing the caller to replace the canonical report while
+        # that retained inode still carried an ACL.
+        #
+        # THE NAME IS KEPT, and that half was wrong in this round's first shape. It gave the name
+        # back too, on the reasoning that a link is a second NAME for the report's own inode and
+        # so removing it removes no bytes. That sentence holds only while the canonical name still
+        # REACHES that inode, and this module exists because it may stop reaching it at any
+        # moment: take the report between the link and the forfeit and the reserved name is the
+        # only name left, so giving it back destroys the findings. A review leg aimed at that
+        # sentence and the arm reproduces it. POSIX has no way to ask for a name to be removed
+        # only if it is not the last one, so a check before the unlink would be a smaller window
+        # rather than a closed one.
+        #
+        # Not removing it costs nothing here, and this is where preservation genuinely differs
+        # from quarantine rather than merely lagging it. A quarantined name would survive BESIDE
+        # a freshly published report and stand in for it. This one does not: the replacement is
+        # declined, so the inode goes on standing at the canonical name, and an ACL on the
+        # reserved name is an ACL already on the report itself — not a channel this call opened.
+        # The scanner deletes both reserved families after any successful publication.
+        return False
 
     # Nothing could be linked. The findings may still be preserved already, by an earlier call
     # that linked them under one of these names — but ONLY a second directory entry for THIS
@@ -1224,8 +1267,15 @@ def _preserve_superseded(dirfd, report_name):
             # failed that time — stayed wide for every run afterwards. The gate ruled it blocking,
             # and it is the same defect as the one below in a place the eye skips: the publish
             # about to happen is owner-only, and the second name beside it was not.
-            _narrow_kept_copy(dirfd, candidate)
-            return True                   # already preserved by an earlier call; oldest wins
+            if _narrow_kept_copy(dirfd, candidate):
+                return True               # already preserved by an earlier call; oldest wins
+            # AND THE NAME STAYS. This copy is a second name for the SAME inode the report is
+            # standing on — the identity check above is what establishes that — so an ACL on it
+            # is an ACL already on the report itself, not a channel this call opened. Unlinking a
+            # name an earlier call reserved would destroy something to fix nothing. Declining the
+            # replacement is the half that matters: the wide inode is not left behind under a
+            # reserved name while an owner-only report takes its place.
+            return False
     return False                          # findings, and no slot would take them
 
 

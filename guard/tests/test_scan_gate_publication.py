@@ -3467,21 +3467,34 @@ def test_a_failed_acl_strip_does_not_skip_the_mode_cap(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(module.os, "removexattr", refusing_removexattr)
 
-    assert preserve_superseded(module, reports_dir, report_path.name) is True, (
-        "CONTROL: preservation must still succeed; a strip that cannot run is not a reason to "
-        "destroy the evidence")
+    # RESCOPED IN ROUND TWENTY-SIX, and the property it was written for is the one asserted below.
+    # This arm was authored against a version that answered True here, and it read that answer as
+    # "the evidence was not destroyed". Those are different claims, and round twenty-six separated
+    # them: a denied strip now forfeits the reserved name and DECLINES the replacement, so the
+    # findings stay where they already were — at the canonical name, under their own inode, with
+    # the mode cap applied. Nothing this arm was protecting is gone; the place to look for it
+    # moved. What the arm must NOT do is assert the old answer, because that answer is what
+    # authorized replacing a report whose retained copy carried a policy nobody installed.
+    assert preserve_superseded(module, reports_dir, report_path.name) is False, (
+        "REPAIRED: a denied strip still authorized the replacement, and the reserved name then "
+        "stood for an access policy that was refused")
 
     if not refused:
         pytest.skip("this build never attempted an ACL strip; nothing was made to fail")
 
-    slots = [Path(s) for s in module._superseded_slots(str(reports_dir))]
-    kept = [s for s in slots if s.exists()]
-    assert kept, "CONTROL: nothing was preserved, so there is no mode to assert on"
-    got = stat.S_IMODE(kept[0].stat().st_mode)
+    assert report_path.read_text(encoding="utf-8") == "aws\tkey\tassignment\tdocs/x.md:3\n", (
+        "CONTROL: the evidence must be intact — declining to preserve a SECOND name for an inode "
+        "costs no bytes, and this is the assertion the original True was standing in for")
+    got = stat.S_IMODE(report_path.stat().st_mode)
     assert not got & 0o077, (
-        f"REPAIRED: the ACL strip failed and took the mode cap down with it — the preserved copy "
-        f"is {got:04o}. A report nobody should have been able to read stayed group- and "
-        "other-readable because an unrelated call raised")
+        f"REPAIRED: the ACL strip failed and took the mode cap down with it — the findings are at "
+        f"{got:04o}. The strip and the cap are independent; a report nobody should have been able "
+        "to read stayed group- and other-readable because an unrelated call raised")
+    for s in (Path(x) for x in module._superseded_slots(str(reports_dir))):
+        if s.exists():
+            assert s.stat().st_ino == report_path.stat().st_ino, (
+                f"REPAIRED: {s.name} is a reserved name for an inode other than the report left "
+                "standing")
 
 
 # =============================================================================================
@@ -4781,3 +4794,136 @@ def test_a_partly_written_status_line_is_still_cleaned_up(tmp_path: Path) -> Non
                  if p.is_file() and p.name.startswith(".scan_report_")]
     assert not leftovers, (
         f"a partial status line was left behind as {leftovers}; only evidence is worth keeping")
+
+
+# =============================================================================================
+# GROUP 35 — the twenty-sixth round. The rule quarantine learned, applied to preservation.
+#
+# Round twenty-three established it for the quarantine path: a RESERVED name means "retained
+# evidence, carrying the report's access policy", so a file whose ACL strip was denied does not
+# get one. Preservation was never brought in line. It links the old findings into
+# scan_report.superseded.txt BEFORE installing the retained inode's policy, `_narrow_kept_copy`
+# swallows an ACL-removal error and returns nothing, and the successful link then authorizes
+# REPLACING the canonical report — while the copy standing in for it still carries an ACL.
+#
+# The fix costs nothing, because a preserved copy is a second NAME for the report's own inode. If
+# the policy cannot be installed, the link is removed and the replacement is declined: the bytes
+# are untouched at the canonical name, and no reserved name claims a compliance that was denied.
+# That is the same shape as the occupied-slots case — publication is denied, evidence never is.
+# =============================================================================================
+
+
+def test_a_preserved_copy_whose_policy_failed_does_not_authorize_replacement(
+    tmp_path: Path
+) -> None:
+    """REPAIRED: a reserved name is never given to a copy whose policy was denied."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "preserve_policy_denied")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    rp = reports / "scan_report.txt"
+    rp.write_text("aws\tkey\tassignment\tdocs/kept.md:9\n", encoding="utf-8")
+
+    real_removexattr = module.os.removexattr
+    denied: list[str] = []
+
+    def removexattr_denied(path, *args, **kwargs):
+        denied.append(str(path))
+        raise PermissionError(errno.EPERM, "strip denied (injected)")
+
+    module.os.removexattr = removexattr_denied
+    try:
+        authorized = preserve_superseded(module, reports)
+    finally:
+        module.os.removexattr = real_removexattr
+
+    if not denied:
+        pytest.skip("this build attempted no ACL strip; nothing was made to fail")
+
+    assert authorized is False, (
+        "REPAIRED: preservation reported success while the retained copy's access policy had "
+        "been denied, and that answer is what authorizes replacing the canonical report")
+    assert rp.read_text(encoding="utf-8") == "aws\tkey\tassignment\tdocs/kept.md:9\n", (
+        "CONTROL: the findings themselves must be untouched — a declined replacement leaves them "
+        "standing at the canonical name, which is where they already were")
+    # A RESERVED NAME MAY REMAIN, and it must be a second name for the report rather than a copy
+    # standing in for one. Removing it is what this round's first shape did, and an arm below
+    # reproduces the evidence loss that caused. What must NOT happen is the replacement.
+    for p in reports.iterdir():
+        if p.name.startswith("scan_report.superseded"):
+            assert p.stat().st_ino == rp.stat().st_ino, (
+                f"REPAIRED: {p.name} is a reserved name for a DIFFERENT inode than the report "
+                "that was left standing — it is holding something it did not preserve")
+
+
+def test_the_no_injection_control_authorizes_replacement(tmp_path: Path) -> None:
+    """CONTROL: with nothing denied, preservation succeeds and answers True."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "preserve_policy_ok")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    rp = reports / "scan_report.txt"
+    rp.write_text("aws\tkey\tassignment\tdocs/kept.md:9\n", encoding="utf-8")
+
+    assert preserve_superseded(module, reports) is True, (
+        "CONTROL: the ordinary path must preserve and authorize; if this fails the fixture is "
+        "wrong and the injected arm above proves nothing")
+    kept = [p for p in reports.iterdir() if p.name.startswith("scan_report.superseded")]
+    assert kept and "docs/kept.md:9" in kept[0].read_text(encoding="utf-8"), (
+        "CONTROL: and the preserved copy must actually hold the findings")
+
+
+def test_the_forfeit_must_not_remove_the_last_name_for_the_findings(tmp_path: Path) -> None:
+    """REPAIRED: giving back a reserved name must never be the act that destroys the evidence.
+
+    Round twenty-six's first shape unlinked the reserved name when the policy was denied, and
+    justified it in a comment: the link is a SECOND name for the report's own inode, so removing
+    it removes no bytes. That sentence is true only while the canonical name still reaches that
+    inode, and this module exists because the tree is hostile and a name can stop reaching an
+    inode at any moment. The review leg aimed at exactly that sentence before its provider killed
+    the run — it was testing "loss of that canonical link" — and the attack lands: unlink the
+    report between the link and the forfeit, and the forfeit removes the last name for the
+    findings. There is no race-free way to ask POSIX to remove a name ONLY IF it is not the last
+    one, so the answer is not a better check. It is to not remove it: the replacement is declined,
+    so the inode keeps standing at the canonical name where it already was, and an ACL on it is an
+    ACL already on that report, not a channel this call opened.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "forfeit_not_last_name")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    rp = reports / "scan_report.txt"
+    rp.write_text("aws\tkey\tassignment\tdocs/last.md:4\n", encoding="utf-8")
+
+    real_removexattr = module.os.removexattr
+    fired: list[str] = []
+
+    def removexattr_that_also_takes_the_report(path, *args, **kwargs):
+        # THE INTERLEAVING, injected where it actually occurs: this runs inside the narrowing,
+        # which is called AFTER the link and BEFORE any decision about it. The canonical name
+        # stops reaching the findings inode exactly there.
+        if not fired:
+            fired.append(str(path))
+            try:
+                os.unlink(rp)
+            except OSError:
+                pass
+        raise PermissionError(errno.EPERM, "strip denied (injected)")
+
+    module.os.removexattr = removexattr_that_also_takes_the_report
+    try:
+        authorized = preserve_superseded(module, reports)
+    finally:
+        module.os.removexattr = real_removexattr
+
+    if not fired:
+        pytest.skip("this build attempted no ACL strip; the interleaving never ran")
+
+    assert authorized is False, (
+        "CONTROL: a denied policy must not authorize the replacement, whatever else happened")
+    survivors = [p for p in reports.iterdir()
+                 if p.is_file() and "aws\tkey" in p.read_text(encoding="utf-8", errors="replace")]
+    assert survivors, (
+        "REPAIRED: the findings are gone. The canonical name was taken between the link and the "
+        "forfeit, which made the reserved name the ONLY name for the inode — and the forfeit "
+        "removed it. Declining to keep a name must never be the act that destroys the evidence")
