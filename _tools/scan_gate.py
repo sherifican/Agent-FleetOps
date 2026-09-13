@@ -818,7 +818,7 @@ def _close_quietly(fd):
         pass
 
 
-def _stage_report(dirfd, body):
+def _stage_report(dirfd, body, evidence=False):
     """Create the staged report INSIDE the validated directory and write the body into it.
 
     This replaces tempfile.mkstemp, which resolves its directory by NAME and so cannot be anchored
@@ -845,11 +845,34 @@ def _stage_report(dirfd, body):
             with os.fdopen(fd, "w", closefd=False) as handle:
                 handle.write(body)
         except BaseException:
+            # KEEP WHAT REACHED THE DISK, WHEN IT IS EVIDENCE. This cleanup predates every
+            # retention rule the file has since grown, and it sits where none of them can reach:
+            # the caller never receives this descriptor, so the quarantine path and the
+            # retain-the-stage rule cannot see these bytes at all. Here is the only chance to
+            # keep them.
+            #
+            # The gate fault-injected an EFBIG partway through a findings body — 128 bytes on
+            # disk, removed by this handler, no surviving copy. The cold leg had traced the same
+            # path statically five rounds earlier and said it had not fault-injected it; a traced
+            # defect with no reproduction attached is still a defect, and it read as lower
+            # priority only because it arrived without a measurement.
+            #
+            # A partial findings report is truncated evidence, which is worth a leftover file. It
+            # stays at the staged name, which promises nothing and claims nothing. A partial
+            # STATUS line is not evidence and is removed: half of "scan_gate: CLEAN" sitting
+            # beside a refusal is the confusion the rest of this file exists to prevent.
+            keep = evidence
+            if keep:
+                try:
+                    keep = os.fstat(fd).st_size > 0
+                except OSError:
+                    keep = True           # cannot tell; keeping is the direction that cannot lose
             _close_quietly(fd)
-            try:
-                os.unlink(name, dir_fd=dirfd)
-            except OSError:
-                pass
+            if not keep:
+                try:
+                    os.unlink(name, dir_fd=dirfd)
+                except OSError:
+                    pass
             raise
         return fd, name
     raise OSError(errno.EEXIST, "report-staging-name-unavailable") from last
@@ -912,7 +935,7 @@ def write_report(staging, hits):
             body = "".join(f"{cls}\t{name}\t{surface}\t{rel}:{i}\n"
                            for rel, i, cls, name, surface in hits)
 
-        fd, tmp_name = _stage_report(dirfd, body)
+        fd, tmp_name = _stage_report(dirfd, body, evidence=bool(hits))
         try:
             # THE CANONICAL NAME IS JUDGED AFTER THE FINDINGS ARE ON DISK, and the order is the
             # finding. This check used to sit above _stage_report, so a symlink planted at the

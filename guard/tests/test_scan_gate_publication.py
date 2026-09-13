@@ -4656,3 +4656,128 @@ def test_the_no_injection_control_retains_the_stage(tmp_path: Path) -> None:
     assert _findings_anywhere(reports, "docs/example.md:12"), (
         "CONTROL: with nothing but the strip denied the findings must survive; if this fails the "
         "fixture is wrong and the injected arm proves nothing")
+
+
+# =============================================================================================
+# GROUP 34 — the twenty-fifth round. A write that fails halfway, and a cleanup that removes what
+# it managed to write.
+#
+# `_stage_report` unlinks its own staged file on any write error. That cleanup predates every
+# retention rule this file has since grown: the caller never receives the descriptor, so the
+# quarantine path added in round seventeen and the retain-the-stage rule added in round nineteen
+# cannot see those bytes at all. A findings report interrupted partway through writing is deleted
+# by the function that wrote it.
+#
+# THE HISTORY IS THE POINT. The cold leg traced this statically in round nineteen and said so —
+# "examine _stage_report's own write-error cleanup separately... that write-error case was
+# statically traced, not fault-injected here". It was a static observation with no reproduction
+# attached, so it read as lower priority than the arms that came with measurements, and I did not
+# follow it up. Five rounds later the gate fault-injected it: an EFBIG partway through the body,
+# 128 bytes on disk, removed, finding_copies=0.
+#
+# A traced defect with no reproduction is still a defect. It is only cheaper to ignore.
+# =============================================================================================
+
+
+def test_a_partly_written_findings_report_is_not_deleted_by_its_own_writer(
+    tmp_path: Path
+) -> None:
+    """REPAIRED: bytes that reached the disk survive the failure that stopped the rest."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "partial_write_kept")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+
+    real_fdopen = module.os.fdopen
+    wrote: list[int] = []
+
+    class _HalfWriter:
+        """Writes part of the body, then fails the way a full disk or an RLIMIT_FSIZE does."""
+
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+
+        def __enter__(self):
+            self._wrapped.__enter__()
+            return self
+
+        def write(self, data):
+            half = data[: max(1, len(data) // 2)]
+            n = self._wrapped.write(half)
+            self._wrapped.flush()
+            wrote.append(len(half))
+            raise OSError(errno.EFBIG, "injected write failure")
+
+        def __exit__(self, *exc):
+            return self._wrapped.__exit__(*exc)
+
+    def half_writing_fdopen(*args, **kwargs):
+        return _HalfWriter(real_fdopen(*args, **kwargs))
+
+    module.os.fdopen = half_writing_fdopen
+    try:
+        with pytest.raises(Exception):
+            module.write_report(str(staging), NEW_HIT)
+    finally:
+        module.os.fdopen = real_fdopen
+
+    assert wrote and wrote[0] > 0, (
+        "CONTROL: no bytes reached the disk before the injected failure, so this arm measured "
+        "nothing about partial content")
+    leftovers = [p for p in reports.iterdir()
+                 if p.is_file() and p.name.startswith(".scan_report_")]
+    assert leftovers, (
+        "REPAIRED: the staged file was unlinked by the writer that had just put findings bytes "
+        "in it. The caller never receives that descriptor, so no retention rule added since can "
+        "see those bytes — the only chance to keep them is here")
+    body = leftovers[0].read_text(encoding="utf-8")
+    assert body, "and the retained stage must actually hold the bytes that were written"
+
+
+def test_a_partly_written_status_line_is_still_cleaned_up(tmp_path: Path) -> None:
+    """CONTROL-SHAPED: the asymmetry holds here too — a status line is not evidence.
+
+    Keeping partial findings is worth a leftover file. Keeping half of `scan_gate: CLEAN` is not,
+    and a stray fragment of a status line beside a refusal is the confusion every other rule in
+    this file exists to prevent.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "partial_clean_removed")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+
+    real_fdopen = module.os.fdopen
+    wrote: list[int] = []
+
+    class _HalfWriter:
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+
+        def __enter__(self):
+            self._wrapped.__enter__()
+            return self
+
+        def write(self, data):
+            half = data[: max(1, len(data) // 2)]
+            self._wrapped.write(half)
+            self._wrapped.flush()
+            wrote.append(len(half))
+            raise OSError(errno.EFBIG, "injected write failure")
+
+        def __exit__(self, *exc):
+            return self._wrapped.__exit__(*exc)
+
+    module.os.fdopen = lambda *a, **k: _HalfWriter(real_fdopen(*a, **k))
+    try:
+        with pytest.raises(Exception):
+            module.write_report(str(staging), [])
+    finally:
+        module.os.fdopen = real_fdopen
+
+    assert wrote, "CONTROL: nothing was written, so the cleanup decision was never reached"
+    leftovers = [p.name for p in reports.iterdir()
+                 if p.is_file() and p.name.startswith(".scan_report_")]
+    assert not leftovers, (
+        f"a partial status line was left behind as {leftovers}; only evidence is worth keeping")
