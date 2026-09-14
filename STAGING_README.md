@@ -238,18 +238,20 @@ a successful scan's sweep no longer removes a reserved file created after this r
 report. What remains needs a writer who is actively substituting names.
 
 Two more things were measured after that paragraph was written, and both belong here. First, the
-scanner no longer LINKS by name at all: every reserved name it creates is made through the
+scanner no longer links by name for an inode it HOLDS: every reserved name it creates from a held descriptor is made through the
 descriptor directory (`linkat` on `/proc/self/fd/N`, the documented unprivileged form), which
 attaches the inode the scanner holds or fails — it cannot attach something a writer put at the
-name in between. That closes the "reserved name holds a decoy" family outright. It does not close
+name in between. That closes the "reserved name holds a decoy" family for those names. The one link still made by name is preservation's first link of the canonical name into a slot, which is then re-opened and compared with the inode preservation recorded; a slot that is not that inode declines the whole operation. It does not close
 the replace: `os.replace` still acts on the canonical NAME. Review reproduced the gap that left:
 preserve report A, substitute a new findings report B at the canonical name while the refusal is
 being staged, and the refusal replaced B — a report the scanner never preserved. A guard for A
 cannot authorize deleting B, so the guard now names what it authorizes: preservation records the
 identity of the canonical inode it classified (or its confirmed absence), and the replace is
-refused when the name no longer reaches that inode. That closes the interval between preservation
-and the re-check. The interval between the re-check and the rename itself is what remains, and
-it is the same one-syscall gap as before. Second, the one-syscall
+refused when the name no longer reaches that inode. That closes substitution BY NAME between
+preservation and the re-check. It does not cover a writer that rewrites the SAME inode in place
+after it was classified — an inode identity is not a content stamp — and it does not cover the
+interval between the re-check and the rename itself, which is the same one-syscall gap as before.
+Second, the one-syscall
 primitive that would close the replace as well exists — `renameat2(2)` with `RENAME_EXCHANGE`,
 which swaps two names atomically so the old inode is never nameless — and is not used here yet;
 adopting it is a platform decision (Linux ≥ 3.15, filesystem support probed at runtime, a small

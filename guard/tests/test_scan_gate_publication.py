@@ -5986,3 +5986,291 @@ def test_the_replace_is_refused_when_the_canonical_inode_changed_since_preservat
         "REPAIRED: the refusal replaced report B — a findings report that arrived at the canonical "
         "name after A was preserved. A guard for A cannot authorize deleting B; the replace must be "
         "refused when the canonical inode is no longer the one preservation saw")
+
+
+# =============================================================================================
+# GROUP 41 — the thirty-second round. Three findings from the invariant leg on f153122, and all
+# three are the shape round thirty named: a name read or deleted after — or without — the
+# identity check that its sibling branch already carries.
+# =============================================================================================
+
+
+def test_no_slot_classification_reads_the_inode_it_recorded(tmp_path: Path) -> None:
+    """REPAIRED (N1): with no slot, the status verdict must come from the inode that was recorded.
+
+    When every slot is taken, preservation classifies the canonical report by opening the NAME
+    and reading it — never comparing what it opened with `previous`. Put a CLEAN status line at
+    the name for exactly the duration of that open, then put findings A back: the verdict is
+    "status line", nothing is preserved, the canonical guard passes because A is there again, and
+    the replace destroys A's only name. No concurrent activity is needed after the swap; this is
+    outside the documented check-to-rename interval.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "no_slot_aba")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    canonical = reports / "scan_report.txt"
+    canonical.write_text("aws\tkey\tassignment\tdocs/A.md:1\n", encoding="utf-8")
+    for slot in module._superseded_slot_names():
+        (reports / slot).mkdir()              # every slot occupied: no link can succeed
+    real_open = module.os.open
+    swapped: list[str] = []
+
+    def open_that_shows_a_status_line_then_restores_A(path, flags, *args, **kwargs):
+        caller = sys._getframe(1).f_code.co_name
+        if caller in ("_preserve_superseded", "_open_held_copy") and path == "scan_report.txt" and not swapped:
+            swapped.append("S")
+            aside = reports / "A.aside"
+            os.rename(canonical, aside)
+            canonical.write_bytes(module._STATUS_LINE_PREFIX + b" CLEAN\n")
+            fd = real_open(path, flags, *args, **kwargs)
+            os.replace(aside, canonical)      # A is back before the descriptor is even returned
+            return fd
+        return real_open(path, flags, *args, **kwargs)
+
+    module.os.open = open_that_shows_a_status_line_then_restores_A
+    try:
+        module._write_refusal_report(str(tmp_path), module.ScanRefused("report-path-unsafe 'x'"))
+    finally:
+        module.os.open = real_open
+    if not swapped:
+        pytest.skip("the no-slot classification open never ran; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/A.md:1"), (
+        "REPAIRED: the no-slot classification read a status line from whatever was at the name, "
+        "recorded findings report A as classified, and the refusal then replaced A on that "
+        "verdict. Classification must read through a descriptor verified to be the recorded inode")
+
+
+def test_a_successful_rescue_does_not_unlink_a_substituted_stage(tmp_path: Path) -> None:
+    """REPAIRED (N2): the stage NAME is unlinked after publication without an identity check.
+
+    The sibling of F3. `_copy_out_unpublished` links its completed stage to a reserved name,
+    verifies THAT link, and then unlinks the stage by name in its finally. A findings report B
+    put at the stage name between the two is deleted.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "rescue_stage_substituted")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    real_link = module._link_held_inode
+    swapped: list[str] = []
+
+    def link_then_substitute_the_stage(fd, candidate, dirfd):
+        result = real_link(fd, candidate, dirfd)
+        if not swapped:
+            stages = [p for p in reports.iterdir()
+                      if p.name.startswith(".scan_report_") and p.name != ".scan_report_src"]
+            assert len(stages) == 1, stages
+            swapped.append(stages[0].name)
+            b = reports / "B.txt"
+            b.write_text("gcp\tkey\tassignment\tsrc/B.py:2\n", encoding="utf-8")
+            os.replace(b, stages[0])          # B's LAST name is now the rescue's stage name
+        return result
+
+    module._link_held_inode = link_then_substitute_the_stage
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_WRONLY, 0o600)
+    os.write(src, b"aws\tkey\tassignment\tdocs/int.md:2\n")
+    os.close(src)
+    src = os.open(str(reports / ".scan_report_src"), os.O_RDONLY)
+    try:
+        published = module._copy_out_unpublished(dirfd, src)
+    finally:
+        module._link_held_inode = real_link
+        os.close(src); os.close(dirfd)
+    if not swapped:
+        pytest.skip("the rescue never linked; this arm measured nothing")
+    assert published is True, "CONTROL: the rescue itself must have published"
+    assert _findings_anywhere(reports, "docs/int.md:2"), "CONTROL: the rescued findings must survive"
+    assert _findings_anywhere(reports, "src/B.py:2"), (
+        "REPAIRED: after publishing its copy, the rescue unlinked the stage NAME, which by then "
+        "was the only name of findings report B. Cleanup must verify the name is still the "
+        "copied inode, through the still-open descriptor, or leave it")
+
+
+def test_releasing_a_status_slot_checks_the_slot_is_still_the_status_inode(tmp_path: Path) -> None:
+    """REPAIRED (N3): a link count on the held inode does not say what the slot NAME reaches.
+
+    A status report with an extra hard link is preserved into a slot; the slot is then swapped
+    for findings report B's last name while the prefix is being read. The held inode still has
+    two names, so "another name reaches it" is true — of the status inode. The slot is unlinked
+    by name and B is gone.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "status_slot_substituted")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    canonical = reports / "scan_report.txt"
+    canonical.write_bytes(module._STATUS_LINE_PREFIX + b" CLEAN\n")
+    os.link(canonical, reports / "alias.txt")     # a second name for the status inode
+    slot = reports / next(iter(module._superseded_slot_names()))
+    real_read = module._read_prefix_held
+    swapped: list[str] = []
+
+    def read_then_substitute_the_slot(fd, via_proc, count):
+        result = real_read(fd, via_proc, count)
+        if not swapped and slot.exists():
+            swapped.append(slot.name)
+            b = reports / "B.txt"
+            b.write_text("gcp\tkey\tassignment\tsrc/B.py:2\n", encoding="utf-8")
+            os.replace(b, slot)               # B's LAST name is now the slot
+        return result
+
+    module._read_prefix_held = read_then_substitute_the_slot
+    try:
+        preserve_superseded(module, reports)
+    finally:
+        module._read_prefix_held = real_read
+    if not swapped:
+        pytest.skip("the held-descriptor read never ran; this arm measured nothing")
+    assert _findings_anywhere(reports, "src/B.py:2"), (
+        "REPAIRED: the status-slot release unlinked the slot by name on the strength of the "
+        "STATUS inode's link count; the slot had become findings report B's only name. The "
+        "release must confirm the slot still refers to the held inode, or keep it")
+
+
+# ---- the cold leg's three, on the same tree ------------------------------------------------
+
+def test_the_staged_identity_check_is_the_syscall_before_the_replace(tmp_path: Path) -> None:
+    """REPAIRED (cold leg #2): identity of the replace SOURCE is only useful in the syscall before it.
+
+    Round thirty-one put two guards BETWEEN the staged-name identity check and the rename. Plant a
+    wide-open file at the staged name during the second guard: the rename then publishes the
+    planted entry under the canonical name, mode and all, and the last reference to the staged
+    body is closed. The guards must run first and the identity check last.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "identity_adjacent_to_replace")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    canonical = reports / "scan_report.txt"
+    canonical.write_text("aws\tkey\tassignment\tdocs/A.md:1\n", encoding="utf-8")
+    real_check = module._canonical_still_classified
+    swapped: list[str] = []
+
+    def check_then_plant_at_the_stage(dirfd, guard):
+        result = real_check(dirfd, guard)
+        if not swapped:
+            stages = [p for p in reports.iterdir() if p.name.startswith(".scan_report_")]
+            assert len(stages) == 1, stages
+            swapped.append(stages[0].name)
+            planted = reports / "planted.txt"
+            planted.write_text("PLANTED wide-open body\n", encoding="utf-8")
+            planted.chmod(0o644)
+            os.replace(planted, stages[0])    # the staged NAME is now a 0644 planted entry
+        return result
+
+    module._canonical_still_classified = check_then_plant_at_the_stage
+    try:
+        module._write_refusal_report(str(tmp_path), module.ScanRefused("report-path-unsafe 'x'"))
+    finally:
+        module._canonical_still_classified = real_check
+    if not swapped:
+        pytest.skip("the canonical guard never ran; this arm measured nothing")
+    assert not canonical.is_symlink() and "PLANTED" not in canonical.read_text(encoding="utf-8"), (
+        "REPAIRED: the replace renamed the PLANTED entry onto the canonical name — the staged "
+        "identity was checked two syscalls too early")
+    assert (os.stat(canonical).st_mode & 0o777) == 0o600, (
+        "REPAIRED: the canonical name carries the planted mode, not the published one")
+
+
+def test_a_clean_stage_failure_cleanup_does_not_unlink_a_substituted_name(tmp_path: Path) -> None:
+    """REPAIRED (cold leg #4): the CLEAN twin of F3 — an identity-blind unlink of the staged name."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "clean_cleanup_foreign")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_install = module._install_posix_acl_policy
+    swapped: list[str] = []
+
+    def install_that_substitutes_the_stage_then_fails(dirfd, src_name, dst_fd, dst_name):
+        if not swapped and dst_name.startswith(".scan_report_"):
+            swapped.append(dst_name)
+            b = reports / "B.txt"
+            b.write_text("gcp\tkey\tassignment\tsrc/B.py:2\n", encoding="utf-8")
+            os.replace(b, reports / dst_name)   # B's LAST name is now the CLEAN stage's name
+            raise OSError(5, "injected policy failure")
+        return real_install(dirfd, src_name, dst_fd, dst_name)
+
+    module._install_posix_acl_policy = install_that_substitutes_the_stage_then_fails
+    try:
+        with pytest.raises(Exception):
+            module.write_report(str(staging), [])
+    finally:
+        module._install_posix_acl_policy = real_install
+    if not swapped:
+        pytest.skip("the policy install never ran on a stage; this arm measured nothing")
+    assert _findings_anywhere(reports, "src/B.py:2"), (
+        "REPAIRED: the CLEAN stage's failure cleanup unlinked the staged NAME, which had become "
+        "findings report B's only name. Cleanup must be identity-checked like every other unlink")
+
+
+def test_stage_write_failure_cleanup_does_not_unlink_a_substituted_name(tmp_path: Path) -> None:
+    """REPAIRED (cold leg #4, sibling): `_stage_report`'s non-evidence cleanup unlinks by name."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "stage_cleanup_foreign")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    # The stage is written through os.fdopen's buffered handle, whose flush is the C write(2)
+    # and never os.write — an earlier draft of this arm patched os.write and measured nothing.
+    real_fdopen = module.os.fdopen
+    swapped: list[str] = []
+
+    def fdopen_that_substitutes_the_stage_then_fails(fd, *args, **kwargs):
+        if not swapped:
+            stages = [p for p in reports.iterdir() if p.name.startswith(".scan_report_")]
+            if len(stages) == 1:
+                swapped.append(stages[0].name)
+                b = reports / "B.txt"
+                b.write_text("gcp\tkey\tassignment\tsrc/B.py:2\n", encoding="utf-8")
+                os.replace(b, stages[0])
+                raise OSError(5, "injected write failure")
+        return real_fdopen(fd, *args, **kwargs)
+
+    module.os.fdopen = fdopen_that_substitutes_the_stage_then_fails
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(OSError):
+            module._stage_report(dirfd, "scan_gate: CLEAN\n")
+    finally:
+        module.os.fdopen = real_fdopen
+        os.close(dirfd)
+    if not swapped:
+        pytest.skip("the stage write never ran; this arm measured nothing")
+    assert _findings_anywhere(reports, "src/B.py:2"), (
+        "REPAIRED: a failed status-line stage was cleaned up by unlinking its NAME, which had "
+        "become findings report B's only name")
+
+
+def test_narrowing_reports_false_when_the_mode_did_not_land(tmp_path: Path) -> None:
+    """REPAIRED (cold leg #6): the publish path verifies the mode landed; the narrowing must too."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "narrow_mode_verified")
+    if not module._XATTR_SUPPORTED:
+        pytest.skip("no xattr layer here: narrowing already answers False on this platform")
+    wide = tmp_path / "wide.txt"
+    wide.write_text("x\n", encoding="utf-8")
+    wide.chmod(0o644)
+    real_chmod = module.os.chmod
+
+    def chmod_that_returns_without_effect(*args, **kwargs):
+        return None
+
+    fd = os.open(str(wide), os.O_RDONLY)
+    module.os.chmod = chmod_that_returns_without_effect
+    try:
+        narrowed = module._narrow_held_copy(fd, False)
+    finally:
+        module.os.chmod = real_chmod
+        os.close(fd)
+    assert (os.stat(wide).st_mode & 0o777) == 0o644, "CONTROL: the no-op chmod must leave the file wide"
+    assert narrowed is False, (
+        "REPAIRED: a chmod that returned without taking effect was reported as a successful "
+        "narrowing, which records a slot and authorizes the replace while the preserved copy stays wide")
+    fd = os.open(str(wide), os.O_RDONLY)
+    try:
+        assert module._narrow_held_copy(fd, False) is True, "CONTROL: a real chmod narrows and says so"
+    finally:
+        os.close(fd)
+    assert (os.stat(wide).st_mode & 0o777) == 0o600
