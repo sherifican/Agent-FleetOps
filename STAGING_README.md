@@ -264,7 +264,7 @@ Also not a concurrency limit: **the access-policy guarantees are for POSIX-ACL f
 xattr API.** Where that API is absent the scanner cannot verify that a preserved copy carries no
 ACL, so it answers "not verified": a stale CLEAN is still replaced by a refusal, but a FINDINGS
 report is never replaced there — it is left standing, unnarrowed beyond its mode, which is the safe
-direction. One preservation slot is used per distinct report, never more.
+direction. One preservation slot is used per distinct report by any one run, never more; two runs preserving the same report at the same moment can each take one, which is the concurrent same-UID writer limit above — what that costs is slot capacity, never the findings.
 
 Also not a concurrency limit: **a leftover whose ACL strip was denied keeps its inherited entries.**
 Findings the scanner could not publish or reserve are left under the temporary `.scan_report_*`

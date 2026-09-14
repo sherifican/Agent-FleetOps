@@ -4183,7 +4183,7 @@ def test_narrowing_a_fifo_does_not_hang(tmp_path: Path) -> None:
     O_NONBLOCK a name that has become a FIFO stops the refusal writer forever, and a refusal that
     never returns is worse than one that raises.
     """
-    import threading
+    import threading, time
 
     driver = make_tool(tmp_path)
     module = import_driver(driver, "fifo_no_hang")
@@ -4480,7 +4480,7 @@ def test_a_refusal_that_never_finishes_rendering_does_not_hang_the_writer(
     tmp_path: Path
 ) -> None:
     """REPAIRED: the refusal path renders no arbitrary object, so it cannot wait on one."""
-    import threading
+    import threading, time
 
     driver = make_tool(tmp_path)
     module = import_driver(driver, "refusal_str_blocks")
@@ -7470,3 +7470,193 @@ def test_the_same_findings_inode_never_takes_a_second_slot(tmp_path: Path) -> No
     assert len(slots) == 1, (
         f"REPAIRED: three refusals over ONE findings inode took {len(slots)} slots ({slots}); a "
         f"report whose policy cannot be installed must not consume the finite capacity once per refusal")
+
+
+# =============================================================================================
+# GROUP 52 — the forty-fourth round. Gate 38's cold leg (grok) on d7e4a3c, an executed on-box
+# review of d7e4a3c, and gate 39's invariant leg (Gemini) on f69cfff: the stage writer's own
+# keep branch narrowed and then closed without re-checking the name; the identity-unlink helper
+# read the name before the held inode; a rescue whose first read failed left an empty stage
+# under retention; and the post-publish sweep opened reserved names without O_NONBLOCK where
+# O_PATH is absent.
+# =============================================================================================
+
+
+def test_a_swap_during_the_stage_writers_own_keep_narrowing_does_not_free_the_findings(tmp_path: Path) -> None:
+    """REPAIRED (cold #1, gate 38): `_stage_report`'s handler is the only holder of a partial findings
+    body; after it narrows the kept stage it must re-check the name before the close, as write_report does."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "stage_keep_swap")
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here; the rescue cannot run")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    real_fdopen, real_narrow = module.os.fdopen, module._narrow_leftover
+    narrowed: list[int] = []
+    swapped: list[str] = []
+
+    class _HalfWriter:
+        def __init__(self, wrapped): self._wrapped = wrapped
+        def __enter__(self): return self
+        def __exit__(self, *exc): return self._wrapped.__exit__(*exc)
+        def write(self, data):
+            self._wrapped.write(data[: max(1, len(data) // 2)]); self._wrapped.flush()
+            raise OSError(errno.EFBIG, "injected write failure")
+
+    def narrow_then_swap_on_the_keep_call(fd):
+        real_narrow(fd)
+        if sys._getframe(1).f_code.co_name == "_stage_report":
+            narrowed.append(fd)
+            if len(narrowed) == 2 and not swapped:          # 1st: before the first byte; 2nd: the keep branch
+                stages = [p for p in reports.iterdir() if p.name.startswith(".scan_report_")]
+                if len(stages) == 1:
+                    swapped.append(stages[0].name)
+                    decoy = reports / "decoy.txt"
+                    decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+                    os.replace(decoy, stages[0])          # the kept NAME is now the decoy
+
+    module.os.fdopen = lambda *a, **k: _HalfWriter(real_fdopen(*a, **k))
+    module._narrow_leftover = narrow_then_swap_on_the_keep_call
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(OSError):
+            module._stage_report(dirfd, "aws\tkey\tassignment\tdocs/x.md:1\n" * 40, evidence=True)
+    finally:
+        module.os.fdopen, module._narrow_leftover = real_fdopen, real_narrow
+        os.close(dirfd)
+    if not swapped:
+        pytest.skip("the keep-branch narrowing never ran; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/x.md:1"), (
+        "REPAIRED: the stage name was swapped for a decoy during the keep-branch narrowing and the "
+        "handler then closed the last reference; the partial findings are under no name")
+
+
+def test_the_identity_unlink_helper_reads_the_held_side_first(tmp_path: Path) -> None:
+    """REPAIRED (cold #2, gate 38): `_remove_own_stage` compared a name lookup taken BEFORE the held
+    fstat; a rename onto the name between the two removed a foreign findings inode's last name."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "unlink_helper_order")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    stage = reports / ".scan_report_stage"
+    fd = os.open(str(stage), os.O_CREAT | os.O_RDWR, 0o600)               # OUR inode: empty
+    foreign = reports / "scan_report.unpublished.txt"
+    foreign.write_text("aws\tkey\tassignment\tdocs/q.md:1\n", encoding="utf-8")   # someone else's last name
+    real_lstat, real_fstat = module.os.lstat, module.os.fstat
+    calls: list[str] = []
+
+    def swap_before_the_second_syscall():
+        if len(calls) == 2:
+            os.replace(foreign, stage)                 # the findings inode now lives at OUR stage name
+
+    def lstat_counted(path, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_remove_own_stage":
+            calls.append("lstat"); swap_before_the_second_syscall()
+        return real_lstat(path, *a, **k)
+
+    def fstat_counted(f, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_remove_own_stage":
+            calls.append("fstat"); swap_before_the_second_syscall()
+        return real_fstat(f, *a, **k)
+
+    module.os.lstat, module.os.fstat = lstat_counted, fstat_counted
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._remove_own_stage(dirfd, ".scan_report_stage", fd)
+    finally:
+        module.os.lstat, module.os.fstat = real_lstat, real_fstat
+        os.close(fd); os.close(dirfd)
+    if len(calls) < 2:
+        pytest.skip("the helper made fewer than two identity syscalls; this arm measured nothing")
+    assert calls[-1] == "lstat", f"REPAIRED: the name lookup must be the last syscall, got {calls}"
+    assert _findings_anywhere(reports, "docs/q.md:1"), (
+        "REPAIRED: a findings inode renamed onto the stage name between the helper's two identity "
+        "syscalls lost its last name — the helper unlinked on a stale name lookup")
+
+
+@pytest.mark.parametrize("failure", ["read_raises", "write_no_progress"])
+def test_a_rescue_that_fails_before_its_first_byte_leaves_no_empty_stage(tmp_path: Path, failure: str) -> None:
+    """REPAIRED (executed review, gate 38): a read that raises, or a write that makes no progress, before
+    any byte reached the stage returned with retention on — an empty 0-byte stage stayed forever."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "rescue_first_" + failure)
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here; the rescue cannot run")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_WRONLY, 0o600)
+    os.write(src, b"aws\tkey\tassignment\tdocs/first.md:1\n"); os.close(src)
+    src = os.open(str(reports / ".scan_report_src"), os.O_RDONLY)
+    real_read, real_write = module.os.read, module.os.write
+    fired: list[str] = []
+
+    def read_that_raises(fd, n):
+        if sys._getframe(1).f_code.co_name == "_copy_out_unpublished" and not fired:
+            fired.append("read"); raise OSError(5, "injected first-read failure")
+        return real_read(fd, n)
+
+    def write_no_progress(fd, data):
+        if sys._getframe(1).f_code.co_name == "_copy_out_unpublished" and not fired:
+            fired.append("write"); return 0
+        return real_write(fd, data)
+
+    if failure == "read_raises":
+        module.os.read = read_that_raises
+    else:
+        module.os.write = write_no_progress
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        published = module._copy_out_unpublished(dirfd, src)
+    finally:
+        module.os.read, module.os.write = real_read, real_write
+        os.close(src); os.close(dirfd)
+    if not fired:
+        pytest.skip("the injected failure never fired; this arm measured nothing")
+    assert published is False, "CONTROL: a copy that moved no bytes must not report custody"
+    leftovers = [p.name for p in reports.iterdir() if p.name.startswith(".scan_report_") and p.name != ".scan_report_src"]
+    assert not leftovers, (
+        f"REPAIRED ({failure}): nothing reached the stage, yet it was kept under retention: {leftovers}")
+    assert (reports / ".scan_report_src").read_bytes().startswith(b"aws"), "CONTROL: the source is untouched"
+
+
+def test_the_sweep_does_not_block_on_a_fifo_where_o_path_is_absent(tmp_path: Path) -> None:
+    """REPAIRED (invariant leg, gate 39): without O_PATH the sweep opened reserved names O_RDONLY, and
+    a FIFO planted at one blocked the open until a writer appeared — the scanner hung after publishing."""
+    import threading, time
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "sweep_fifo_no_opath")
+    if not hasattr(os, "O_PATH") or not hasattr(os, "mkfifo"):
+        pytest.skip("this arm simulates the absence of O_PATH on a platform that has it")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    fifo = reports / next(iter(module._superseded_slot_names(include_unpublished=True)))
+    os.mkfifo(str(fifo), 0o600)
+    time.sleep(0.05)                                    # strictly older than this run's stage
+    saved = os.O_PATH
+    del os.O_PATH                                       # module.os IS os: the fallback branch runs
+    outcome: list[object] = []
+
+    def run():
+        try:
+            outcome.append(module.write_report(str(staging), [("docs/f.md", 1, "SECRET", "generic_key_assignment", "contents")]))
+        except BaseException as exc:                    # noqa: BLE001 — recorded, asserted below
+            outcome.append(exc)
+
+    worker = threading.Thread(target=run, daemon=True)
+    try:
+        worker.start()
+        worker.join(5.0)
+        hung = worker.is_alive()
+        if hung:
+            try:
+                unblock = os.open(str(fifo), os.O_WRONLY | os.O_NONBLOCK)   # let the blocked open return
+                os.close(unblock)
+            except OSError:
+                pass
+            worker.join(5.0)
+    finally:
+        os.O_PATH = saved
+    assert not hung, "REPAIRED: the post-publish sweep blocked opening a FIFO at a reserved name (no O_PATH, no O_NONBLOCK)"
+    assert outcome and not isinstance(outcome[0], BaseException), f"CONTROL: publication must succeed: {outcome}"
+    assert (reports / "scan_report.txt").read_text(encoding="utf-8").find("docs/f.md:1") >= 0, "CONTROL: the report was published"

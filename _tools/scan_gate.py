@@ -632,6 +632,9 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                             _strip_denied = True      # decided AFTER the bytes are on disk
                 # STREAMED, SOURCE TO STAGE. A read that fails partway leaves what was read on the
                 # stage, and retention is already on; the failure returns False with the bytes kept.
+                # A failure BEFORE THE FIRST BYTE leaves nothing, and an empty stage is not
+                # evidence: retention is released so the finally removes it by identity (an
+                # executed review of d7e4a3c found the first-read failure keeping one forever).
                 try:
                     while True:
                         chunk = os.read(src, 65536)
@@ -642,12 +645,17 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                             n = os.write(stage_fd, chunk[off:])
                             if n <= 0:
                                 # A write that reports no progress would otherwise spin here
-                                # forever. It is a failure that has not raised; the stage is kept.
+                                # forever. It is a failure that has not raised; the stage is
+                                # kept when it holds anything.
+                                if written == 0:
+                                    keep_stage = False
                                 return False
                             off += n
                             written += n
                 except OSError:
-                    return False          # the stage holds what was read; retention is on
+                    if written == 0:
+                        keep_stage = False    # nothing reached the stage: not evidence
+                    return False          # otherwise the stage holds what was read; retention is on
                 if written == 0:
                     keep_stage = False    # nothing readable: an empty stage is not evidence
                     return False
@@ -1139,6 +1147,15 @@ def _stage_report(dirfd, body, evidence=False):
                     # is still True here on that cancellation, so the stage is narrowed anyway.
                     if keep:
                         _narrow_leftover(fd)
+                        # THE NAME IS RE-CHECKED AFTER THE NARROWING AND BEFORE THE CLOSE. The
+                        # narrowing is several syscalls on the descriptor with no eye on the
+                        # name. write_report's handler learnt in round forty to look again
+                        # before its close; this handler — the one holder of a partial body the
+                        # caller never sees — narrowed and closed without looking (cold leg,
+                        # d7e4a3c). Still ours: the name keeps the bytes. Swapped or unlinked:
+                        # the bytes are copied out through the descriptor to a reserved name
+                        # before the close would free them.
+                        _false_or_rescue(dirfd, name, fd)
             finally:
                 _close_quietly(fd)        # under finally: a cancellation in the cleanup leaked it
             raise
@@ -1285,11 +1302,14 @@ def write_report(staging, hits):
                 # leg, 0829b97). The entry is opened O_PATH|O_NOFOLLOW, aged by fstat, and removed
                 # only while the name still refers to that descriptor's inode. What remains is
                 # the helper's own lookup-to-unlink interval, the same as everywhere else.
+                # WHERE O_PATH IS ABSENT THE OPEN READS, AND A READING OPEN OF A FIFO WAITS FOR A
+                # WRITER: O_NONBLOCK makes it return instead (invariant leg, f69cfff — a FIFO
+                # planted at a reserved name hung the scanner after it had published).
                 _swept_fd = None
                 try:                      # ONE finally owns the descriptor from open to removal
                     try:
-                        _swept_fd = os.open(_name, getattr(os, "O_PATH", os.O_RDONLY) | _NOFOLLOW_FLAG,
-                                            dir_fd=dirfd)
+                        _swept_fd = os.open(_name, getattr(os, "O_PATH", os.O_RDONLY) | _NOFOLLOW_FLAG
+                                            | getattr(os, "O_NONBLOCK", 0), dir_fd=dirfd)
                         _swept = os.fstat(_swept_fd)
                         if _swept.st_ctime_ns >= _staged_ctime_ns:
                             # NOT STRICTLY OLDER — including EQUAL. A retained entry created in
@@ -1460,16 +1480,15 @@ def _narrow_held_copy(fd, via_proc):
         except OSError:
             pass
         return False
-    if True:
-        try:
-            _strip_acl_by_fd(fd)
-        except OSError as exc:
-            if exc.errno not in _ACL_ABSENT:
-                try:
-                    os.chmod(target, _REPORT_MODE)
-                except OSError:
-                    pass
-                return False
+    try:
+        _strip_acl_by_fd(fd)
+    except OSError as exc:
+        if exc.errno not in _ACL_ABSENT:
+            try:
+                os.chmod(target, _REPORT_MODE)
+            except OSError:
+                pass
+            return False
     try:
         os.chmod(target, _REPORT_MODE)
     except OSError:
@@ -1662,10 +1681,16 @@ def _remove_own_stage(dirfd, tmp_name, fd):
     module's rule against deleting a name it has not just verified applies to each, and one
     helper means one place to get it right. The interval between the lstat and the unlink is
     the documented limit; this narrows the window to that interval and does not close it.
+
+    THE NAME IS LOOKED UP LAST. The unlink acts on the name, so the name is what must be fresh
+    when the comparison is made; a lookup taken before the held fstat is stale by the time it
+    is compared, and a findings inode renamed onto an empty stage's name between the two
+    syscalls lost its last name to a match against that stale lookup (cold leg, d7e4a3c). The
+    same order as `_false_or_rescue` and `_replace_canonical_guarded`.
     """
     try:
-        named = os.lstat(tmp_name, dir_fd=dirfd)
         held = os.fstat(fd)
+        named = os.lstat(tmp_name, dir_fd=dirfd)
         if (named.st_dev, named.st_ino) == (held.st_dev, held.st_ino):
             os.unlink(tmp_name, dir_fd=dirfd)
     except OSError:
@@ -1781,7 +1806,9 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         return True                       # not a regular file; not ours to preserve
 
     linked = None
-    # THE SAME INODE NEVER TAKES A SECOND SLOT. The link loop below takes the first FREE name,
+    # THE SAME INODE NEVER TAKES A SECOND SLOT FROM ONE RUN. (Two runs preserving the same
+    # report at once can each take one — the concurrent same-UID writer limit; capacity, not
+    # findings.) The link loop below takes the first FREE name,
     # and the "already preserved" scan ran only when no name was free — so every refusal over a
     # report whose policy could not be installed (a denied strip; no xattr API at all) linked
     # the same inode into a fresh slot, and eight refusals of one report exhausted the capacity
@@ -1809,7 +1836,8 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
     if linked is not None:
         held_fd, held_via_proc = _open_held_copy(dirfd, linked, previous)
         if held_fd is None:
-            # THE SLOT IS NO LONGER THE INODE WE LINKED INTO IT. Something replaced that name
+            # THE SLOT IS NO LONGER THE INODE THAT WAS LINKED INTO IT (by this call, or by the
+            # earlier one whose slot the pre-scan found). Something replaced that name
             # between the link and this open. Everything downstream — the narrowing, the
             # classification, the decision to release the slot — would be describing a file this
             # scan never preserved, which is exactly the sequence three legs reproduced. Nothing
@@ -1845,7 +1873,9 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             raise
 
     # Classify only AFTER the link, so a failed read cannot prevent preservation — and classify
-    # THROUGH THE LINK, not through report_path. The two names described the same inode at link
+    # THROUGH THE LINK where one was made, not through report_path (with no link, the else
+    # branch below opens the name bound by identity to the recorded inode, and that is the only
+    # way it reads it). The two names described the same inode at link
     # time, and the link is the name LESS likely to be replaced under us — not, as this comment
     # said until round twenty-seven, a name nobody else is replacing. The gate landed a rename
     # into the reserved slot between the link and this read and the classification then described
@@ -1888,11 +1918,11 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         if _cfd is None:
             return False
         try:
-            try:
-                _prefix = _read_prefix_held(_cfd, _cvia, len(_STATUS_LINE_PREFIX))
-                is_status_line = _prefix == _STATUS_LINE_PREFIX
-            except OSError:
-                is_status_line = False    # cannot tell: assume findings, the costly case
+            # `_read_prefix_held` answers None when it cannot read, and None is not the status
+            # prefix: an unreadable copy is classified as findings, the costly case. (An
+            # `except OSError` that used to sit here was unreachable — cold leg, d7e4a3c.)
+            _prefix = _read_prefix_held(_cfd, _cvia, len(_STATUS_LINE_PREFIX))
+            is_status_line = _prefix == _STATUS_LINE_PREFIX
         finally:
             _close_quietly(_cfd)
 
