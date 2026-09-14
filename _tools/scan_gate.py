@@ -63,7 +63,14 @@ def _load_identity_terms():
 
 
 def _identity_terms():
-    return re.compile("(?i)" + "|".join(re.escape(t) for t in _load_identity_terms()))
+    terms = _load_identity_terms()
+    if not terms:
+        # AN EMPTY ALTERNATION MATCHES THE EMPTY STRING AT EVERY POSITION. A terms file that
+        # exists but holds only comments compiled to "(?i)" and made every line of every file a
+        # PERSONAL hit (cold leg, 0c28c5e). No terms means this pattern matches nothing; the
+        # missing-file refusal above is unchanged and is where "no identity list" is enforced.
+        return re.compile(r"(?!)")
+    return re.compile("(?i)" + "|".join(re.escape(t) for t in terms))
 
 
 # The identity-INDEPENDENT shapes. These need no private file, so a test may import them on any
@@ -553,13 +560,11 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
     file's identity — but it carries the findings, and the alternative measured by review is that
     the next close frees them.
 
-    ONE DELIBERATE EXCEPTION IS TAKEN HERE, and it is the mirror of the one preservation takes.
-    Everywhere else a reserved name is refused when the access policy could not be installed on
-    the file behind it. Here the copy is kept even then, because it may be the only remaining
-    copy — the source's names are not known from here — and refusing the name could destroy the
-    evidence rather than merely decline to label it. The mode
-    is set through the descriptor either way, so a strip that is denied leaves the file at 0600
-    with its entries masked to nothing rather than at whatever the umask allowed.
+    THE SAME RULE AS EVERYWHERE ELSE, since round thirty-nine: a reserved name is refused when
+    the access policy could not be installed on the file behind it. An earlier shape took an
+    exception here ("it may be the only remaining copy") — written when a refused name meant a
+    deleted stage. The stage is now kept by default, so refusing the name loses nothing: the
+    bytes stay under the temporary prefix, narrowed as far as this code can narrow them.
 
     THE RETAINED STAGE EXISTS BEFORE THE FIRST BYTE IS READ, and the copy is streamed into it.
     The previous shape read the whole source into memory and only then created a stage, so a
@@ -585,25 +590,30 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow
         stage_name = None
         stage_fd = None
-        for _ in range(_STAGE_ATTEMPTS):
-            name = ".scan_report_" + "".join(
-                _STAGE_ALPHABET[b % len(_STAGE_ALPHABET)] for b in os.urandom(8))
-            try:
-                stage_fd = os.open(name, flags, _REPORT_MODE, dir_fd=dirfd)
-            except FileExistsError:
-                continue
-            except OSError:
-                return False              # no creatable name: the stated limit
-            stage_name = name
-            break
-        if stage_fd is None:
-            return False                  # every attempt collided: the stated limit
+        keep_stage = True                 # set before the open: no interval owns the fd unwatched
+        try:
+            for _ in range(_STAGE_ATTEMPTS):
+                name = ".scan_report_" + "".join(
+                    _STAGE_ALPHABET[b % len(_STAGE_ALPHABET)] for b in os.urandom(8))
+                try:
+                    stage_fd = os.open(name, flags, _REPORT_MODE, dir_fd=dirfd)
+                except FileExistsError:
+                    continue
+                except OSError:
+                    return False          # no creatable name: the stated limit
+                stage_name = name
+                break
+            if stage_fd is None:
+                return False              # every attempt collided: the stated limit
+        except BaseException:
+            if stage_fd is not None:
+                _close_quietly(stage_fd)  # a cancellation between the open and the owning try
+            raise
         # RETENTION IS THE DEFAULT FROM THE MOMENT A STAGE EXISTS. Round thirty set keep_stage only on
         # the error paths it thought of, and a KeyboardInterrupt between two writes took none of
         # them: the finally saw False and deleted three bytes of evidence. The flag now starts True
         # and is cleared in exactly one place — after a confirmed publication — so cancellation,
         # or any exit this code did not anticipate, keeps whatever reached the stage.
-        keep_stage = True
         written = 0
         try:
             try:
@@ -613,6 +623,13 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                 # leg, 0c28c5e). Whatever can be written is written; the mode verify after the
                 # stream still declines a reserved name when 0600 cannot be established.
                 _narrow_leftover(stage_fd)
+                _strip_denied = False
+                if _XATTR_SUPPORTED:
+                    try:
+                        _strip_acl_by_fd(stage_fd)
+                    except OSError as exc:
+                        if exc.errno not in _ACL_ABSENT:
+                            _strip_denied = True      # decided AFTER the bytes are on disk
                 # STREAMED, SOURCE TO STAGE. A read that fails partway leaves what was read on the
                 # stage, and retention is already on; the failure returns False with the bytes kept.
                 try:
@@ -642,6 +659,13 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                     if stat.S_IMODE(os.fstat(stage_fd).st_mode) != _REPORT_MODE:
                         return False
                 except OSError:
+                    return False
+                if _strip_denied:
+                    # THE SAME RULE AS QUARANTINE: a reserved name asserts the report's access
+                    # policy, and a denied strip means it is not on the file. The bytes are on
+                    # the stage and retention is on, so declining the name loses nothing — the
+                    # "only remaining copy" exception this function used to take was written
+                    # before the stage was kept by default (cold leg, 0c28c5e).
                     return False
             except OSError:
                 return False
@@ -673,7 +697,8 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
             # inside the cleanup's lstat leaked the descriptor at three sites (invariant leg, 0829b97).
             try:
                 if stage_name is not None and not keep_stage:
-                    _remove_own_stage(dirfd, stage_name, stage_fd)
+                    # only while the reserved name (or any other) still reaches the copy
+                    _remove_stage_if_another_name_remains(dirfd, stage_name, stage_fd)
             finally:
                 _close_quietly(stage_fd)
     finally:
@@ -783,7 +808,12 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
         # THE LINK IS THE HELD INODE BY CONSTRUCTION — made through the descriptor directory,
         # it cannot have attached anything else. The staged name is removed only if it still
         # refers to that same inode; a substituted name is left alone.
-        _remove_own_stage(dirfd, tmp_name, fd)   # one helper for every stage cleanup; leftovers are harmless
+        # AND ONLY WHILE ANOTHER NAME STILL REACHES THE INODE. The reserved name just linked can
+        # be ended by someone else before this removal; removing the stage then takes the LAST
+        # name, and the caller's close frees the findings while believing them kept (cold leg,
+        # 0c28c5e). The same nlink rule preservation applies to a status-line slot. A leftover
+        # stage is harmless; a nameless inode is the loss this whole path exists to prevent.
+        _remove_stage_if_another_name_remains(dirfd, tmp_name, fd)
         return True
     return False
 
@@ -1059,6 +1089,11 @@ def _stage_report(dirfd, body, evidence=False):
             # UTF-8 raised UnicodeEncodeError on the first non-UTF-8 name, before a byte reached
             # the disk: this scan's findings, the plain ones included, landed nowhere (cold leg,
             # 0829b97). Encoding with the same error handler puts the original bytes back.
+            # POLICY BEFORE BYTES, on the primary stage as on the rescue copy. With a default ACL
+            # on the directory the create mode does not yield owner-only access, and a listable
+            # `_reports` let a group reader open the temporary name while the findings were being
+            # written (cold leg, 0c28c5e). Best effort here; the verified install still follows.
+            _narrow_leftover(fd)
             with os.fdopen(fd, "wb", closefd=False) as handle:
                 handle.write(body.encode("utf-8", "surrogateescape"))
         except BaseException:
@@ -1545,7 +1580,9 @@ def _narrow_leftover(fd):
     Two keep paths — a partial stage after a write failure, and a stage kept after a failed
     quarantine — set the mode and never attempted the strip, so a findings inode with whatever
     ACL its directory gave it sat under a name that promises nothing (cold leg, 3c075f0). The
-    leftover still claims nothing; it is simply as narrow as this code can make it.
+    leftover still claims nothing; it is simply as narrow as this code can make it. Neither call
+    is verified afterwards: a leftover whose fchmod failed under a umask that masks owner read
+    stays at 0200 — on disk, unreadable to the owner — and nothing else can be done for it here.
     """
     if _XATTR_SUPPORTED:
         try:
@@ -1556,6 +1593,20 @@ def _narrow_leftover(fd):
         os.fchmod(fd, _REPORT_MODE)
     except OSError:
         pass
+
+
+def _remove_stage_if_another_name_remains(dirfd, name, fd):
+    """Remove NAME (identity-checked) only if the held inode has at least one other name.
+
+    The nlink read and the unlink are two syscalls; the interval between them is the documented
+    limit, the same as every check-then-act in this file. What it closes is the wide case: a
+    reserved name ended before the stage removal, which took the inode's last name.
+    """
+    try:
+        if os.fstat(fd).st_nlink >= 2:
+            _remove_own_stage(dirfd, name, fd)
+    except OSError:
+        pass                              # cannot tell: keep the name
 
 
 def _remove_own_stage(dirfd, tmp_name, fd):

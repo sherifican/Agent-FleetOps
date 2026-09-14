@@ -7057,3 +7057,146 @@ def test_a_partial_stage_kept_through_a_cancelled_size_read_is_still_narrowed(tm
     assert seen[0] in stripped, (
         "REPAIRED: the partial stage kept through a cancelled size read was never narrowed — the "
         "narrowing sat after the read instead of in the cleanup that runs regardless")
+
+
+# =============================================================================================
+# GROUP 48 — the thirty-ninth round. The cold leg's three on 0c28c5e: a reserved name dropped
+# by someone else after the link lets the stage removal take the LAST name; the rescue binds a
+# reserved name when its strip was denied; and the primary stage is written before any policy.
+# =============================================================================================
+
+
+def test_quarantine_keeps_its_stage_when_the_reserved_name_is_gone_by_removal_time(tmp_path: Path) -> None:
+    """REPAIRED (cold #1A): removing the stage must require that another name still reaches the inode."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quarantine_last_name")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    fd = os.open(str(reports / ".scan_report_stage"), os.O_CREAT | os.O_RDWR, 0o600)
+    os.write(fd, b"aws\tkey\tassignment\tdocs/q.md:1\n")
+    real_link = module._link_held_inode
+    swapped: list[str] = []
+
+    def link_then_lose_the_reserved_name(f, candidate, dirfd):
+        result = real_link(f, candidate, dirfd)
+        if not swapped:
+            swapped.append(candidate)
+            os.unlink(reports / candidate)          # another process ends the reserved name
+        return result
+
+    module._link_held_inode = link_then_lose_the_reserved_name
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._quarantine_unpublished(dirfd, ".scan_report_stage", fd,
+                                       [("docs/q.md", 1, "SECRET", "generic_key_assignment", "c")])
+    finally:
+        module._link_held_inode = real_link
+        os.close(fd); os.close(dirfd)
+    if not swapped:
+        pytest.skip("quarantine never linked; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/q.md:1"), (
+        "REPAIRED: the reserved name was gone by the time the stage was removed; the removal took "
+        "the inode's LAST name and the close freed the findings")
+
+
+def test_the_rescue_keeps_its_stage_when_the_reserved_name_is_gone_by_removal_time(tmp_path: Path) -> None:
+    """REPAIRED (cold #1B): the same rule in the rescue's finally."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "rescue_last_name")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    src = _rescue_source(reports)
+    os.unlink(reports / ".scan_report_src")
+    real_link = module._link_held_inode
+    swapped: list[str] = []
+
+    def link_then_lose_the_reserved_name(f, candidate, dirfd):
+        result = real_link(f, candidate, dirfd)
+        if not swapped:
+            swapped.append(candidate)
+            os.unlink(reports / candidate)
+        return result
+
+    module._link_held_inode = link_then_lose_the_reserved_name
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._copy_out_unpublished(dirfd, src)
+    finally:
+        module._link_held_inode = real_link
+        os.close(src); os.close(dirfd)
+    if not swapped:
+        pytest.skip("the rescue never linked; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/int.md:2"), (
+        "REPAIRED: the rescue's copy lost its reserved name before the stage was removed; the "
+        "removal took the copy's LAST name and nothing survived")
+
+
+def test_the_rescue_declines_a_reserved_name_when_the_strip_is_denied(tmp_path: Path) -> None:
+    """REPAIRED (cold #2): a reserved name asserts the policy; a denied strip means it is not on the file."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "rescue_strip_denied")
+    if not module._XATTR_SUPPORTED:
+        pytest.skip("no xattr layer here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    src = _rescue_source(reports)
+    os.unlink(reports / ".scan_report_src")
+    real_strip = module._strip_acl_by_fd
+
+    def strip_denied_on_the_stage(fd):
+        if fd != src:
+            raise PermissionError(errno.EPERM, "injected: strip denied")
+
+    module._strip_acl_by_fd = strip_denied_on_the_stage
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        published = module._copy_out_unpublished(dirfd, src)
+    finally:
+        module._strip_acl_by_fd = real_strip
+        os.close(src); os.close(dirfd)
+    assert _findings_anywhere(reports, "docs/int.md:2"), "CONTROL: the bytes must survive under some name"
+    assert published is False and not any(p.name.startswith("scan_report.unpublished") for p in reports.iterdir()), (
+        "REPAIRED: the rescue bound a reserved name to a copy whose ACL strip was denied — the "
+        "name asserts a policy that is not on the file; quarantine already declines in this case")
+
+
+def test_the_primary_stage_is_narrowed_before_its_first_byte(tmp_path: Path) -> None:
+    """REPAIRED (cold #3): policy-before-bytes was applied to the rescue copy and not to the primary write."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "stage_policy_first")
+    if not module._XATTR_SUPPORTED:
+        pytest.skip("no xattr layer here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    real_strip, real_fdopen = module._strip_acl_by_fd, module.os.fdopen
+    order: list[str] = []
+    module._strip_acl_by_fd = lambda fd: order.append("strip")
+    module.os.fdopen = lambda *a, **k: (order.append("write"), real_fdopen(*a, **k))[1]
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fd, name = module._stage_report(dirfd, "aws\tkey\tassignment\tdocs/x.md:1\n", evidence=True)
+        os.close(fd)
+    finally:
+        module._strip_acl_by_fd, module.os.fdopen = real_strip, real_fdopen
+        os.close(dirfd)
+    assert "write" in order, "CONTROL: the stage must have been written"
+    assert "strip" in order and order.index("strip") < order.index("write"), (
+        f"REPAIRED: the primary stage was written before any strip or chmod ({order}); with a default "
+        f"ACL on the directory the findings are group-readable under the temporary name until the "
+        f"policy install")
+
+
+def test_a_terms_file_with_no_terms_does_not_match_everything(tmp_path: Path) -> None:
+    """REPAIRED (cold, unranked): an empty alternation matches the empty string at every position."""
+    driver = make_tool(tmp_path)
+    (driver.parent / "identity_terms.txt").write_text("# no terms yet\n\n", encoding="utf-8")
+    module = import_driver(driver, "empty_terms")
+    if not module._load_identity_terms.__code__.co_filename:
+        pytest.skip("cannot locate the driver")
+    if module._load_identity_terms():
+        pytest.skip("the fixture did not yield an empty term list; this arm measured nothing")
+    name, pattern = module.personal_patterns()[0]
+    assert name == "owner-identity"
+    assert pattern.search("nothing personal in this line") is None, (
+        "REPAIRED: with no identity terms the owner-identity pattern is an empty alternation and "
+        "matches every line — every file in the tree becomes a PERSONAL hit")
