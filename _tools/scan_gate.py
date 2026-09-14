@@ -544,8 +544,8 @@ def _link_held_inode(fd, candidate, dirfd):
     # link and this lstat, in which the candidate name can be replaced. It is the post-link
     # match the cold review leg named as its SHIP bar. A mismatch is
     # reported as ENOENT so every caller takes its rescue path rather than claiming custody.
-    linked = os.lstat(candidate, dir_fd=dirfd)
-    held = os.fstat(fd)
+    held = os.fstat(fd)                   # the held side first —
+    linked = os.lstat(candidate, dir_fd=dirfd)   # the name LAST: it is what custody is claimed over
     if (linked.st_dev, linked.st_ino) != (held.st_dev, held.st_ino):
         raise FileNotFoundError(errno.ENOENT, "linked-name-is-not-the-held-inode")
     return True
@@ -703,13 +703,25 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
             # close (it needs the descriptor) and left the close after it unprotected; a cancellation
             # inside the cleanup's lstat leaked the descriptor at three sites (invariant leg, 0829b97).
             try:
-                if stage_name is not None and not keep_stage:
-                    if written == 0:
+                if stage_name is not None:
+                    # EMPTINESS IS MEASURED ON THE STAGE, NOT INFERRED FROM THE COUNTER. A
+                    # cancellation inside a write lands after the bytes are on disk and before
+                    # `written` advances (the mid-copy arm of round thirty); the counter says
+                    # nothing reached the stage, the stage says otherwise, and the stage is
+                    # what is believed. Unreadable: keeping is the direction that cannot lose.
+                    try:
+                        _empty = os.fstat(stage_fd).st_size == 0
+                    except OSError:
+                        _empty = False
+                    if _empty:
                         # AN EMPTY STAGE HOLDS NOTHING, and has only ever had one name — the
                         # nlink rule below would keep it forever (gate 37). Identity alone
-                        # authorizes removing it.
+                        # authorizes removing it, and retention does not apply to it:
+                        # retention keeps BYTES through a cancellation, and there are none
+                        # (executed review, 4632326 — an interrupt before the first read
+                        # kept an empty stage).
                         _remove_own_stage(dirfd, stage_name, stage_fd)
-                    else:
+                    elif not keep_stage:
                         # only while the reserved name (or any other) still reaches the copy
                         _remove_stage_if_another_name_remains(dirfd, stage_name, stage_fd)
             finally:
@@ -1146,16 +1158,22 @@ def _stage_report(dirfd, body, evidence=False):
                     # size read jumped past the narrowing (invariant leg, three rounds). `keep`
                     # is still True here on that cancellation, so the stage is narrowed anyway.
                     if keep:
-                        _narrow_leftover(fd)
-                        # THE NAME IS RE-CHECKED AFTER THE NARROWING AND BEFORE THE CLOSE. The
-                        # narrowing is several syscalls on the descriptor with no eye on the
-                        # name. write_report's handler learnt in round forty to look again
-                        # before its close; this handler — the one holder of a partial body the
-                        # caller never sees — narrowed and closed without looking (cold leg,
-                        # d7e4a3c). Still ours: the name keeps the bytes. Swapped or unlinked:
-                        # the bytes are copied out through the descriptor to a reserved name
-                        # before the close would free them.
-                        _false_or_rescue(dirfd, name, fd)
+                        # THE NAME IS RE-CHECKED AFTER THE NARROWING AND BEFORE THE CLOSE, IN
+                        # CLEANUP A CANCELLATION INSIDE THE NARROWING CANNOT SKIP. The narrowing
+                        # is several syscalls on the descriptor with no eye on the name.
+                        # write_report's handler learnt in round forty to look again before its
+                        # close; this handler — the one holder of a partial body the caller
+                        # never sees — narrowed and closed without looking (cold leg, d7e4a3c),
+                        # and the re-check then sat after the narrowing where an interrupt
+                        # inside it jumped past (invariant leg, 4632326). Still ours: the name
+                        # keeps the bytes. Swapped or unlinked: the bytes are copied out through
+                        # the descriptor to a reserved name before the close would free them —
+                        # where a descriptor directory exists and a temporary name can be
+                        # made, which is the limit `_copy_out_unpublished` states.
+                        try:
+                            _narrow_leftover(fd)
+                        finally:
+                            _false_or_rescue(dirfd, name, fd)
             finally:
                 _close_quietly(fd)        # under finally: a cancellation in the cleanup leaked it
             raise
@@ -1366,7 +1384,10 @@ def write_report(staging, hits):
                 # THEY ARE: the staged name is inside the scanner's own reserved prefix, and a
                 # retained temporary holding real hits is strictly better than deleting them
                 # because every destination was occupied. The gate measured the alternative — a
-                # populated directory at the quarantine name cost a run its findings.
+                # populated directory at the quarantine name cost a run its findings. "Where
+                # they are" is the staged NAME while it still reaches them; a name that diverged
+                # is rescued by copy through the descriptor, which needs a descriptor directory
+                # and a creatable temporary name — the limit `_copy_out_unpublished` states.
                 # IDENTITY-CHECKED, like every other unlink of a name this file created. This
                 # was the CLEAN twin of the refusal writer's round-31 defect: a staged status
                 # line's cleanup unlinked the NAME, and the name had become findings report B's
@@ -1381,14 +1402,19 @@ def write_report(staging, hits):
                     # be read, was left at that create mode — evidence nobody could read (rounds
                     # 24 and 25) — and later with its inherited entries (cold leg, 3c075f0). Best
                     # effort, through the held descriptor; the stage still promises nothing.
-                    _narrow_leftover(fd)
-                    # AND THE NAME IS RE-ASKED AFTER THE NARROWING, immediately before the close
-                    # in the finally. "False → the caller keeps the name" is only safe if the
-                    # next act is not close(fd); the narrowing above is the same strip + fchmod
-                    # the helper stopped trusting, and a decoy renamed onto the name during it
-                    # made the close free the last copy (cold leg, 279368a). What remains is the
-                    # interval between this check and the close.
-                    _false_or_rescue(dirfd, tmp_name, fd)
+                    # THE RE-CHECK RUNS IN CLEANUP AN INTERRUPT INSIDE THE NARROWING CANNOT SKIP — the
+                    # same composition `_stage_report` was given in round forty-five; here the pair sat as
+                    # two statements and a cancellation inside the first jumped the second (cold leg, 4632326).
+                    try:
+                        _narrow_leftover(fd)
+                        # AND THE NAME IS RE-ASKED AFTER THE NARROWING, immediately before the close
+                        # in the finally. "False → the caller keeps the name" is only safe if the
+                        # next act is not close(fd); the narrowing above is the same strip + fchmod
+                        # the helper stopped trusting, and a decoy renamed onto the name during it
+                        # made the close free the last copy (cold leg, 279368a). What remains is the
+                        # interval between this check and the close.
+                    finally:
+                        _false_or_rescue(dirfd, tmp_name, fd)
             raise
         finally:
             _close_quietly(fd)

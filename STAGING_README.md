@@ -266,6 +266,8 @@ ACL, so it answers "not verified": a stale CLEAN is still replaced by a refusal,
 report is never replaced there — it is left standing, unnarrowed beyond its mode, which is the safe
 direction. One preservation slot is used per distinct report by any one run, never more; two runs preserving the same report at the same moment can each take one, which is the concurrent same-UID writer limit above — what that costs is slot capacity, never the findings.
 
+**The by-descriptor rescue needs a descriptor directory and a creatable temporary name.** When a staged or held name has stopped naming the bytes the scanner holds, the last resort copies them out through `/proc/self/fd/N` (or `/dev/fd/N`) into a fresh temporary name. On a system with neither directory, or when no temporary name can be created, that copy cannot be made, the function says so by answering False, and the close that follows frees the descriptor's inode. That is the one case in which bytes this scanner held are not on disk afterwards; it is stated here because two comments used to read as if the copy-out were unconditional.
+
 Also not a concurrency limit: **a leftover whose ACL strip was denied keeps its inherited entries.**
 Findings the scanner could not publish or reserve are left under the temporary `.scan_report_*`
 prefix, narrowed as far as it can — mode 0600, so any inherited named-user or named-group entry is

@@ -7660,3 +7660,190 @@ def test_the_sweep_does_not_block_on_a_fifo_where_o_path_is_absent(tmp_path: Pat
     assert not hung, "REPAIRED: the post-publish sweep blocked opening a FIFO at a reserved name (no O_PATH, no O_NONBLOCK)"
     assert outcome and not isinstance(outcome[0], BaseException), f"CONTROL: publication must succeed: {outcome}"
     assert (reports / "scan_report.txt").read_text(encoding="utf-8").find("docs/f.md:1") >= 0, "CONTROL: the report was published"
+
+
+# =============================================================================================
+# GROUP 53 — the forty-fifth round. Gate 40 on 4632326: the invariant leg (Gemini) found the
+# round-44 re-check in `_stage_report` skipped by a cancellation inside the narrowing it follows;
+# the executed review found the round-44 empty-stage release skipped by a cancellation before
+# the rescue's first byte.
+# =============================================================================================
+
+
+def test_a_cancellation_inside_the_keep_narrowing_still_rescues_a_swapped_stage(tmp_path: Path) -> None:
+    """REPAIRED (invariant leg, gate 40): the re-check after the narrowing must run in cleanup that a
+    cancellation inside the narrowing cannot skip — otherwise the close frees a swapped stage."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "stage_keep_narrow_cancel")
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here; the rescue cannot run")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    real_fdopen, real_narrow = module.os.fdopen, module._narrow_leftover
+    narrowed: list[int] = []
+    swapped: list[str] = []
+
+    class _HalfWriter:
+        def __init__(self, wrapped): self._wrapped = wrapped
+        def __enter__(self): return self
+        def __exit__(self, *exc): return self._wrapped.__exit__(*exc)
+        def write(self, data):
+            self._wrapped.write(data[: max(1, len(data) // 2)]); self._wrapped.flush()
+            raise OSError(errno.EFBIG, "injected write failure")
+
+    def swap_then_cancel_on_the_keep_call(fd):
+        real_narrow(fd)
+        if sys._getframe(1).f_code.co_name == "_stage_report":
+            narrowed.append(fd)
+            if len(narrowed) == 2 and not swapped:
+                stages = [p for p in reports.iterdir() if p.name.startswith(".scan_report_")]
+                if len(stages) == 1:
+                    swapped.append(stages[0].name)
+                    decoy = reports / "decoy.txt"
+                    decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+                    os.replace(decoy, stages[0])          # the kept NAME is now the decoy
+                    raise KeyboardInterrupt               # …and the narrowing is cancelled
+
+    module.os.fdopen = lambda *a, **k: _HalfWriter(real_fdopen(*a, **k))
+    module._narrow_leftover = swap_then_cancel_on_the_keep_call
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._stage_report(dirfd, "aws\tkey\tassignment\tdocs/y.md:1\n" * 40, evidence=True)
+    finally:
+        module.os.fdopen, module._narrow_leftover = real_fdopen, real_narrow
+        os.close(dirfd)
+    if not swapped:
+        pytest.skip("the keep-branch narrowing never ran; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/y.md:1"), (
+        "REPAIRED: a cancellation inside the keep-branch narrowing skipped the re-check; the handler "
+        "closed the last reference to a swapped stage and the partial findings are under no name")
+
+
+def test_a_cancellation_before_the_rescues_first_byte_leaves_no_empty_stage(tmp_path: Path) -> None:
+    """REPAIRED (executed review, gate 40): retention-on-cancellation is for bytes; an empty stage is
+    not evidence under a cancellation either, and is removed by identity."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "rescue_first_read_cancel")
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here; the rescue cannot run")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_WRONLY, 0o600)
+    os.write(src, b"aws\tkey\tassignment\tdocs/first.md:1\n"); os.close(src)
+    src = os.open(str(reports / ".scan_report_src"), os.O_RDONLY)
+    real_read = module.os.read
+    fired: list[str] = []
+
+    def read_cancelled(fd, n):
+        if sys._getframe(1).f_code.co_name == "_copy_out_unpublished" and not fired:
+            fired.append("read"); raise KeyboardInterrupt
+        return real_read(fd, n)
+
+    module.os.read = read_cancelled
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._copy_out_unpublished(dirfd, src)
+    finally:
+        module.os.read = real_read
+        os.close(src); os.close(dirfd)
+    if not fired:
+        pytest.skip("the cancellation never fired; this arm measured nothing")
+    leftovers = [p.name for p in reports.iterdir() if p.name.startswith(".scan_report_") and p.name != ".scan_report_src"]
+    assert not leftovers, f"REPAIRED: nothing reached the stage, yet the cancellation kept it: {leftovers}"
+    assert (reports / ".scan_report_src").read_bytes().startswith(b"aws"), "CONTROL: the source is untouched"
+
+
+def test_a_cancellation_inside_the_callers_kept_stage_narrowing_still_rescues(tmp_path: Path) -> None:
+    """REPAIRED (cold #1, gate 40): write_report's kept-stage branch has the same narrow-then-re-check pair;
+    an interrupt inside the narrowing must not skip the re-check there either."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "caller_keep_narrow_cancel")
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_install, real_strip, real_narrow = module._install_posix_acl_policy, module._strip_acl_by_fd, module._narrow_leftover
+    swapped: list[str] = []
+
+    def install_that_fails(dirfd, src_name, dst_fd, dst_name):
+        raise OSError(5, "injected policy failure")
+
+    def strip_denied(fd):
+        raise PermissionError(errno.EPERM, "injected: strip denied")
+
+    def narrow_swap_then_cancel(fd):
+        real_narrow(fd)
+        if not swapped and sys._getframe(1).f_code.co_name == "write_report":
+            stages = [p for p in reports.iterdir() if p.name.startswith(".scan_report_")]
+            if len(stages) == 1:
+                swapped.append(stages[0].name)
+                decoy = reports / "decoy.txt"
+                decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+                os.replace(decoy, stages[0])          # the kept NAME is now the decoy
+                raise KeyboardInterrupt               # …and the narrowing is cancelled
+
+    module._install_posix_acl_policy, module._strip_acl_by_fd, module._narrow_leftover = install_that_fails, strip_denied, narrow_swap_then_cancel
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module.write_report(str(staging), [("docs/z.md", 1, "SECRET", "generic_key_assignment", "contents")])
+    finally:
+        module._install_posix_acl_policy, module._strip_acl_by_fd, module._narrow_leftover = real_install, real_strip, real_narrow
+    if not swapped:
+        pytest.skip("the kept-stage narrowing never ran; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/z.md:1"), (
+        "REPAIRED: an interrupt inside the caller's kept-stage narrowing skipped the re-check; the close "
+        "freed the last reference to a swapped stage and the findings are under no name")
+
+
+def test_the_link_helper_confirms_custody_with_the_name_last(tmp_path: Path) -> None:
+    """REPAIRED (cold #2, gate 40): `_link_held_inode` looked the new name up BEFORE the held fstat, so a
+    decoy swapped onto the reserved name between the two passed as custody taken."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "link_helper_order")
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    stage = reports / ".scan_report_stage"
+    fd = os.open(str(stage), os.O_CREAT | os.O_WRONLY, 0o600)
+    os.write(fd, b"aws\tkey\tassignment\tdocs/l.md:1\n")
+    candidate = "scan_report.unpublished.txt"
+    real_lstat, real_fstat = module.os.lstat, module.os.fstat
+    calls: list[str] = []
+
+    def swap_before_the_second_syscall():
+        if len(calls) == 2:
+            decoy = reports / "decoy.txt"
+            decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+            os.replace(decoy, reports / candidate)   # the reserved name now holds a decoy
+
+    def lstat_counted(path, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_link_held_inode":
+            calls.append("lstat"); swap_before_the_second_syscall()
+        return real_lstat(path, *a, **k)
+
+    def fstat_counted(f, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_link_held_inode":
+            calls.append("fstat"); swap_before_the_second_syscall()
+        return real_fstat(f, *a, **k)
+
+    module.os.lstat, module.os.fstat = lstat_counted, fstat_counted
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    custody: object = None
+    try:
+        try:
+            custody = module._link_held_inode(fd, candidate, dirfd)
+        except FileNotFoundError:
+            custody = "declined"
+    finally:
+        module.os.lstat, module.os.fstat = real_lstat, real_fstat
+        os.close(fd); os.close(dirfd)
+    if len(calls) < 2:
+        pytest.skip("the helper made fewer than two identity syscalls; this arm measured nothing")
+    assert calls[-1] == "lstat", f"REPAIRED: the name lookup must be the last syscall, got {calls}"
+    assert custody == "declined", (
+        "REPAIRED: a decoy swapped onto the reserved name between the helper's two identity syscalls "
+        "was reported as custody taken — the helper compared a stale name lookup")
