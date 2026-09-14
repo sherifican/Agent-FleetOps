@@ -237,6 +237,22 @@ closed rather than documented: the refusal writer no longer unlinks the canonica
 a successful scan's sweep no longer removes a reserved file created after this run staged its own
 report. What remains needs a writer who is actively substituting names.
 
+Two more things were measured after that paragraph was written, and both belong here. First, the
+scanner no longer LINKS by name at all: every reserved name it creates is made through the
+descriptor directory (`linkat` on `/proc/self/fd/N`, the documented unprivileged form), which
+attaches the inode the scanner holds or fails — it cannot attach something a writer put at the
+name in between. That closes the "reserved name holds a decoy" family outright. It does not close
+the replace: `os.replace` still acts on the canonical NAME, and the guard the scanner re-checks
+immediately before it certifies the PRESERVED inode, not the canonical one about to be
+overwritten. Review reproduced that gap: preserve report A, substitute a new findings report B at
+the canonical name while the refusal is being staged, and the refusal replaces B — a report the
+scanner never preserved. A guard for A cannot authorize deleting B. Second, the one-syscall
+primitive that would close the replace as well exists — `renameat2(2)` with `RENAME_EXCHANGE`,
+which swaps two names atomically so the old inode is never nameless — and is not used here yet;
+adopting it is a platform decision (Linux ≥ 3.15, filesystem support probed at runtime, a small
+`ctypes` shim because `os.replace` exposes no flags) and is recorded as the next step rather than
+claimed.
+
 **Precondition, therefore: the report directory must not be writable by anyone you are defending
 against, and no second writer should be publishing into it concurrently.** The scanner hardens
 `_reports/` to `0700` on creation, which covers group and other. It cannot cover another process

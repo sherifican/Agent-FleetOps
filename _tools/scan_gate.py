@@ -302,7 +302,11 @@ _ACL_ABSENT = frozenset(
 def _strip_acl_by_fd(fd):
     """Remove the POSIX access ACL from the inode behind ``fd``.
 
-    os.removexattr takes neither a descriptor nor a dir_fd, so the inode is reached through the
+    os.removexattr takes no dir_fd. Two review legs measured that it DOES accept an ordinary
+    integer descriptor on this runtime, so the sentence this replaced — "neither a descriptor nor
+    a dir_fd" — was false here. The descriptor-directory route is kept anyway, because the
+    descriptors this module holds are often O_PATH, and nobody has established that removexattr
+    accepts one of those; the proc path works for both. The inode is reached through the
     kernel's descriptor directory — /proc/self/fd on Linux, /dev/fd on the BSDs — which is the
     same indirection _harden_report_dir uses to read the mode of an O_PATH directory handle.
 
@@ -500,7 +504,38 @@ def _staged_holds_evidence(fd, hits):
         return True
 
 
-def _copy_out_unpublished(dirfd, fd):
+def _link_held_inode(fd, candidate, dirfd):
+    """Give the inode behind FD a new name — binding the link to the INODE, not to a pathname.
+
+    Every earlier shape of this module linked by NAME (`os.link(stage_name, candidate)`) and then
+    tried to confirm, afterwards, that the name had still meant our inode at the instant of the
+    link. Both review legs measured what that costs: a substitution between the write and the
+    link attaches a decoy to a reserved name, and the confirmation arrives one syscall too late.
+
+    linkat(2) through the descriptor directory with AT_SYMLINK_FOLLOW is the documented,
+    unprivileged way to link a held inode (the AT_EMPTY_PATH form needs CAP_DAC_READ_SEARCH).
+    Measured on this box: while the inode still has at least one name the new link IS the held
+    inode; once its link count is zero the call fails ENOENT rather than linking anything else.
+    So this either attaches OUR bytes to CANDIDATE, or it fails — it cannot attach a decoy.
+
+    Returns True on success. Raises FileNotFoundError when the inode has no names left (the
+    caller's rescue path), and other OSError for an occupied or unusable candidate.
+    """
+    if _PROC_FD_DIR is None:
+        raise OSError(errno.ENOSYS, "descriptor-directory-unavailable")
+    os.link("%s/%d" % (_PROC_FD_DIR, fd), candidate, dst_dir_fd=dirfd, follow_symlinks=True)
+    # CONFIRMED ANYWAY. The syscall above cannot attach anything but the held inode, so this
+    # check is not covering a race — it covers a broken or substituted link implementation,
+    # and it is the post-link match the cold review leg named as its SHIP bar. A mismatch is
+    # reported as ENOENT so every caller takes its rescue path rather than claiming custody.
+    linked = os.lstat(candidate, dir_fd=dirfd)
+    held = os.fstat(fd)
+    if (linked.st_dev, linked.st_ino) != (held.st_dev, held.st_ino):
+        raise FileNotFoundError(errno.ENOENT, "linked-name-is-not-the-held-inode")
+    return True
+
+
+def _copy_out_unpublished(dirfd, fd, depth=0):
     """Last resort: write the held inode's bytes to a fresh reserved name, by READING not linking.
 
     This runs only when the staged name has stopped naming the staged inode, which means no
@@ -570,6 +605,9 @@ def _copy_out_unpublished(dirfd, fd):
         break
     if stage_fd is None:
         return False
+    keep_stage = False
+    published = False
+    written = 0
     try:
         try:
             os.fchmod(stage_fd, _REPORT_MODE)   # the create mode is umask-masked; this is not
@@ -585,26 +623,49 @@ def _copy_out_unpublished(dirfd, fd):
                 if n <= 0:
                     # A write that reports no progress would otherwise spin here forever. It is
                     # not a partial success; it is a failure that has not raised.
+                    keep_stage = written > 0
                     return False
                 written += n
         except OSError:
+            # A PARTIAL COPY IS KEPT under the temporary prefix when any bytes reached it — an
+            # explicitly partial artifact that claims nothing, per the staging policy — because
+            # the alternative measured by the gate was deleting the only recoverable bytes.
+            keep_stage = written > 0
             return False
-        # EVERY BYTE IS ON DISK BEFORE ANY RESERVED NAME EXISTS. os.link refuses an occupied
-        # name, so an earlier run's retained findings cannot be overwritten to make room.
+        # EVERY BYTE HAS BEEN WRITTEN BEFORE THIS FUNCTION LINKS A RESERVED NAME. That is an
+        # ordering statement, not a durability one: nothing here is fsync'd, and other reserved
+        # names may already exist. os.link refuses an occupied name, so an earlier run's
+        # retained findings cannot be overwritten to make room.
         for candidate in _unpublished_slot_names():
             try:
-                os.link(stage_name, candidate, src_dir_fd=dirfd, dst_dir_fd=dirfd,
-                        follow_symlinks=False)
+                _link_held_inode(stage_fd, candidate, dirfd)
+            except FileNotFoundError:
+                # THE STAGE HAS NO NAMES LEFT — its name was taken while we were writing — and
+                # the descriptor is the only thing holding the bytes. One more copy, from the
+                # stage descriptor into a fresh stage; the recursion is bounded by the writer
+                # having to win the same race again, and the limits section says so.
+                keep_stage = True         # whatever stands at the old stage name is not ours
+                return _copy_out_unpublished(dirfd, stage_fd) if depth < 1 else False
             except OSError:
                 continue                  # occupied or unusable — the next name
+            # THE LINK IS THE HELD INODE BY CONSTRUCTION: it was made through the descriptor
+            # directory, which cannot attach anything else. No confirmation is needed after it.
+            published = True
             return True
-        return False                      # every reserved name was taken
+        # EVERY RESERVED NAME WAS TAKEN — AND THE STAGE IS KEPT. The previous shape deleted a
+        # completed recovery stage here and the caller then closed the last descriptor: zero
+        # copies of the findings, eight occupied names untouched. A completed stage under the
+        # scanner's own temporary prefix promises nothing and claims nothing, which makes it the
+        # right place for evidence that no reserved name will take.
+        keep_stage = True
+        return False
     finally:
         _close_quietly(stage_fd)
-        # The stage is removed whether or not it was published. If this unlink fails the file is
-        # left under the scanner's own temporary prefix, which promises nothing and claims
-        # nothing — the one place a leftover is harmless.
-        if stage_name is not None:
+        # THE STAGE IS REMOVED ONLY WHEN IT HAS BEEN PUBLISHED under a confirmed reserved name, or
+        # when nothing was written into it. A stage holding bytes that reached no reserved name
+        # is kept: it is the only copy. Cleanup is attempted, not guaranteed; a failed unlink
+        # leaves an extra name under the temporary prefix, which loses nothing.
+        if stage_name is not None and not keep_stage:
             try:
                 os.unlink(stage_name, dir_fd=dirfd)
             except OSError:
@@ -690,27 +751,24 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
     # one name simply moves us to the next rather than costing anyone their evidence.
     for candidate in _unpublished_slot_names():
         try:
-            os.link(tmp_name, candidate, src_dir_fd=dirfd, dst_dir_fd=dirfd,
-                    follow_symlinks=False)
+            _link_held_inode(fd, candidate, dirfd)
+        except FileNotFoundError:
+            # THE STAGED INODE HAS NO NAMES LEFT. Its name was taken between the identity check
+            # and this link, and the descriptor is the only thing still holding the findings.
+            # Two review legs measured the previous shape closing that descriptor on a False
+            # answer. The rescue is the same one the pre-link divergence gets: copy the bytes
+            # out through the descriptor. Nothing at the old staged name is ours to remove.
+            return _copy_out_unpublished(dirfd, fd)
         except OSError:
             continue                      # occupied, unusable, or unsupported — try the next
-        # THE LINK IS CONFIRMED TO BE OURS BEFORE CUSTODY IS CLAIMED. The identity check above
-        # runs before this link and therefore says nothing about what the link actually landed
-        # on: a substitution of the staged name in between makes the reserved name describe a
-        # file this scan never staged, and answering True then tells the caller its findings are
-        # safe when they are not. A review leg traced exactly that gap.
+        # THE LINK IS THE HELD INODE BY CONSTRUCTION — made through the descriptor directory,
+        # it cannot have attached anything else. The staged name is removed only if it still
+        # refers to that same inode; a substituted name is left alone.
         try:
-            _linked = os.lstat(candidate, dir_fd=dirfd)
+            _named = os.lstat(tmp_name, dir_fd=dirfd)
             _ours = os.fstat(fd)
-        except OSError:
-            return False                  # cannot confirm: claim nothing, keep the stage
-        if (_linked.st_dev, _linked.st_ino) != (_ours.st_dev, _ours.st_ino):
-            # The reserved name is not our inode. It is NOT removed — it may be somebody else's
-            # retained evidence, and round twenty-six settled that giving a name back is a
-            # destructive act. The staged file is left alone too, so the bytes remain reachable.
-            return False
-        try:
-            os.unlink(tmp_name, dir_fd=dirfd)
+            if (_named.st_dev, _named.st_ino) == (_ours.st_dev, _ours.st_ino):
+                os.unlink(tmp_name, dir_fd=dirfd)
         except OSError:
             pass                          # the evidence is linked; a leftover stage is harmless
         return True
@@ -1137,10 +1195,15 @@ def write_report(staging, hits):
             # without the clock — but a file reserved BEFORE we staged is still swept, and that
             # case is indistinguishable from the stale generation the sweep exists to clear.
             # What it removes is the case that needs nobody to be hostile.
-            for _name in _superseded_slot_names(include_unpublished=True):
+            # NO REFERENCE TIMESTAMP MEANS NO SWEEP. The previous shape short-circuited the age
+            # test to "not newer" when the staged fstat had failed, and swept — the second of the
+            # two metadata inputs the age guard depends on, repaired one round after the first.
+            # A question this code cannot answer never authorizes destruction; that has to hold
+            # for the reference side of the comparison too.
+            for _name in (_superseded_slot_names(include_unpublished=True)
+                          if _staged_ctime_ns is not None else ()):
                 try:
-                    if (_staged_ctime_ns is not None
-                            and os.lstat(_name, dir_fd=dirfd).st_ctime_ns > _staged_ctime_ns):
+                    if os.lstat(_name, dir_fd=dirfd).st_ctime_ns > _staged_ctime_ns:
                         continue          # newer than this run's own staging; not ours to end
                 except FileNotFoundError:
                     continue              # already gone; nothing to remove
@@ -1255,7 +1318,8 @@ def _narrow_held_copy(fd, via_proc):
     target = "%s/%d" % (_PROC_FD_DIR, fd) if via_proc else fd
     # WHERE THE XATTR CALLS DO NOT EXIST, NOTHING WAS STRIPPED — and a review leg was right that
     # returning True here reported a removal that was never attempted. The cap below is still
-    # installed either way; what changes is only the claim this function makes about the strip.
+    # ATTEMPTED either way — its own failure is swallowed on this branch — and what changes is
+    # the claim this function makes about the strip.
     if not _XATTR_SUPPORTED:
         try:
             os.chmod(target, _REPORT_MODE)
@@ -1340,34 +1404,52 @@ def _narrow_kept_copy(dirfd, name):
                 return False              # not a preserved report; not ours to re-mode
         except OSError:
             return False
-        target = "%s/%d" % (_PROC_FD_DIR, fd) if via_proc else fd
-        if _XATTR_SUPPORTED:
-            try:
-                _strip_acl_by_fd(fd)
-            except OSError as exc:
-                if exc.errno not in _ACL_ABSENT:
-                    # DENIED, which is not the same as ABSENT, and the two were one branch. The
-                    # cap below still runs — the two remain independent, exactly as round
-                    # seventeen established — but the answer this function returns tells the
-                    # truth about the strip, and its caller stops treating the copy as policy-
-                    # bearing. The quarantine path has drawn this line since round twenty-three;
-                    # preservation was never brought in line with it.
-                    try:
-                        os.chmod(target, _REPORT_MODE)
-                    except OSError:
-                        pass
-                    return False
-        try:
-            # THE REPORT MODE, not the planted mode narrowed. `_kept & 0o600` mapped 0044 to 0000
-            # and left the only surviving copy of the findings unreadable by its owner. 0600 is
-            # narrower than a planted mode for group and other in every case AND readable, which
-            # is what an evidence copy has to be.
-            os.chmod(target, _REPORT_MODE)
-        except OSError:
-            return False
-        return True
+        # ONE IMPLEMENTATION OF THE NARROWING, not two that drift. This name is kept for its
+        # remaining caller; the work is the held-descriptor helper's, so the claim this
+        # function makes about the policy is the same claim that helper makes.
+        return _narrow_held_copy(fd, via_proc)
     finally:
         _close_quietly(fd)
+
+
+def _replace_canonical_guarded(dirfd, tmp_name, fd, slot_guard):
+    """THE ONE PLACE A REFUSAL REPLACES THE CANONICAL NAME. Both refusal branches call this.
+
+    Round twenty-nine put the spent-authorization re-check before the ordinary replace and not
+    before the fallback one, and the gate reproduced the fallback spending a stale authorization
+    the very next round. That is the third time this file has fixed one branch and left its
+    sibling. The review leg's structural advice was to put the shared preconditions in one
+    publication path, so that there is no second branch to forget — this is that path.
+
+    Returns True after replacing. Returns False when the preserved slot no longer refers to the
+    inode that was preserved: the authorization was computed earlier and is not spent. Raises
+    when the staged name has stopped naming the staged inode, which is the caller's existing
+    refusal reason.
+    """
+    named = os.lstat(tmp_name, dir_fd=dirfd)
+    held = os.fstat(fd)
+    if (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino):
+        raise OSError(errno.EIO, "report-staged-name-diverged")
+    # THE AUTHORIZATION IS RE-CHECKED WHERE IT IS SPENT, not only where it was computed.
+    if not _slot_still_holds(dirfd, slot_guard):
+        return False
+    os.replace(tmp_name, _REPORT_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
+    return True
+
+
+def _remove_own_stage(dirfd, tmp_name, fd):
+    """Remove a refusal stage this call created, ONLY if the name still refers to the held inode.
+
+    A refusal stage carries no evidence, so removing it costs nothing — but the module's rule
+    against deleting a name it has not just verified applies here as everywhere. Best effort.
+    """
+    try:
+        named = os.lstat(tmp_name, dir_fd=dirfd)
+        held = os.fstat(fd)
+        if (named.st_dev, named.st_ino) == (held.st_dev, held.st_ino):
+            os.unlink(tmp_name, dir_fd=dirfd)
+    except OSError:
+        pass
 
 
 def _slot_still_holds(dirfd, guard):
@@ -1482,7 +1564,11 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         # the gate demonstrated a substitution. A reserved name asserts that the retained
         # report's access policy; if it does not, this call has to decide that below rather than
         # hand the caller an authorization built on a strip that was refused.
-        narrowed = _narrow_held_copy(held_fd, held_via_proc)
+        try:
+            narrowed = _narrow_held_copy(held_fd, held_via_proc)
+        except BaseException:
+            _close_quietly(held_fd)       # an interrupt here used to leak the descriptor
+            raise
 
     # Classify only AFTER the link, so a failed read cannot prevent preservation — and classify
     # THROUGH THE LINK, not through report_path. The two names described the same inode at link
@@ -1500,14 +1586,16 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         # difference between classifying what we preserved and classifying what someone left at
         # the name. The link count is read here too, from the same descriptor, because releasing
         # a slot is a destructive act and it needs to know whether this is the last name.
-        _prefix = _read_prefix_held(held_fd, held_via_proc, len(_STATUS_LINE_PREFIX))
-        is_status_line = _prefix == _STATUS_LINE_PREFIX
         try:
-            _slot_has_another_name = os.fstat(held_fd).st_nlink >= 2
-        except OSError:
-            _slot_has_another_name = False
-        _close_quietly(held_fd)
-        held_fd = None
+            _prefix = _read_prefix_held(held_fd, held_via_proc, len(_STATUS_LINE_PREFIX))
+            is_status_line = _prefix == _STATUS_LINE_PREFIX
+            try:
+                _slot_has_another_name = os.fstat(held_fd).st_nlink >= 2
+            except OSError:
+                _slot_has_another_name = False
+        finally:
+            _close_quietly(held_fd)
+            held_fd = None
     else:
         try:
             _nofollow = getattr(os, "O_NOFOLLOW", 0)
@@ -1639,11 +1727,14 @@ def _write_refusal_report(staging, refusal):
     "Creates nothing when no report exists" stood here and was not quite true; the cold leg
     caught it. The existence test is an os.lstat that does not follow, which a DANGLING SYMLINK
     satisfies — it was os.path.lexists when the note was written — so at
-    a report name pointing nowhere this function unlinks the link and creates a regular file
-    holding a REFUSED line, where write_report would have refused the same state outright. The
-    two writers therefore disagree about whether a symlink is a report, and this one is the
-    permissive side. That is the intended direction for a writer whose job is to leave a refusal
-    record rather than to publish, but it is a creation, so the sentence now says so.
+    a report name pointing nowhere this function publishes a regular file holding a REFUSED line
+    OVER the link, where write_report would have refused the same state outright. It no longer
+    unlinks the link first: round twenty-seven removed that step, because os.replace does not
+    follow a symlink at its destination and the preliminary unlink was the one place the canonical
+    name could go missing — and, under a concurrent rename, the one place this writer could delete
+    a real findings file on the strength of an lstat taken a moment earlier. The two writers still
+    disagree about whether a symlink is a report, and this one is still the permissive side; the
+    disagreement is now settled by a replace rather than by a delete.
 
     WHERE IT CANNOT REACH, stated plainly because an earlier revision of this docstring claimed
     the guarantee unconditionally and gate review falsified it three ways:
@@ -1818,14 +1909,9 @@ def _publish_refusal(dirfd, refusal):
             # name is relative to the directory that was validated.
             # The refusal report is the one a reader needs most, so it gets the same contract.
             _install_posix_acl_policy(dirfd, _REPORT_NAME, fd, tmp_name)
-            _named = os.lstat(tmp_name, dir_fd=dirfd)
-            _held = os.fstat(fd)
-            if (_named.st_dev, _named.st_ino) != (_held.st_dev, _held.st_ino):
-                raise OSError(errno.EIO, "report-staged-name-diverged")
-            # THE AUTHORIZATION IS RE-CHECKED WHERE IT IS SPENT, not only where it was computed.
-            if not _slot_still_holds(dirfd, _slot_guard):
+            if not _replace_canonical_guarded(dirfd, tmp_name, fd, _slot_guard):
+                _remove_own_stage(dirfd, tmp_name, fd)   # declined: the refusal stage is unneeded
                 return
-            os.replace(tmp_name, _REPORT_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
         except BaseException:
             try:
                 os.unlink(tmp_name, dir_fd=dirfd)
@@ -1856,13 +1942,18 @@ def _publish_refusal(dirfd, refusal):
         #   owner write. It is narrower for every reader other than the owner, which is the
         #   property this fallback needs, and "never wider" was simply wrong.
         #
-        #   "No window exists" is true of this branch only. The symlinked-report branch above
-        #   unlinks the canonical name before the replace, and a failure in between leaves it
-        #   missing.
+        #   "No window exists" is now true of BOTH branches. It used to be true of this one
+        #   only, because the symlinked-report branch above unlinked the canonical name before
+        #   its replace and a failure in between left the name missing. Round twenty-seven
+        #   removed that unlink; a symlink at the report name now routes here and is replaced
+        #   atomically like everything else.
         #
-        # If even this fails, the old report is left exactly as it was — this function cannot
-        # promise a write on a filesystem refusing writes, and it is the EXIT CODE, not the
-        # report, that says this scan refused.
+        # If even this fails, the old report's BYTES are left as they were. Its metadata may
+        # not be: preservation narrows the inode it links — and the preserved copy and the
+        # canonical report are one inode — so a report that could not be replaced may already
+        # have had its ACL stripped and its mode set to 0600. This function cannot promise a
+        # write on a filesystem refusing writes, and it is the EXIT CODE, not the report, that
+        # says this scan refused.
         try:
             fd, tmp_name = _stage_report(dirfd, f"scan_gate: REFUSED {reason_class}\n")
             try:
@@ -1896,11 +1987,9 @@ def _publish_refusal(dirfd, refusal):
                 # stated there: renameat would otherwise publish a planted symlink under the
                 # canonical name. This is the path that runs when something has already gone
                 # wrong, which is the worse place to omit it.
-                _fnamed = os.lstat(tmp_name, dir_fd=dirfd)
-                _fheld = os.fstat(fd)
-                if (_fnamed.st_dev, _fnamed.st_ino) != (_fheld.st_dev, _fheld.st_ino):
-                    raise OSError(errno.EIO, "report-staged-name-diverged")
-                os.replace(tmp_name, _REPORT_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
+                if not _replace_canonical_guarded(dirfd, tmp_name, fd, _slot_guard):
+                    _remove_own_stage(dirfd, tmp_name, fd)
+                    return
             except BaseException:
                 try:
                     os.unlink(tmp_name, dir_fd=dirfd)

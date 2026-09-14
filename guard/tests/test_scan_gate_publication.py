@@ -4223,12 +4223,22 @@ def test_the_refusal_fallback_checks_the_staged_inode_before_replacing(tmp_path:
     source = SCANNER.read_text(encoding="utf-8")
     body = source[source.index("def _write_refusal_report"):]
     fallback = body[body.index("except (OSError, UnicodeError):"):]
-    assert "st_ino" in fallback, (
-        "the refusal writer's fallback replaces the canonical name without checking that the "
-        "staged name is still the descriptor's inode")
-    assert fallback.count("os.replace(") == 1, (
-        "CONTROL: the fallback should contain exactly one publish; if this changed, the arm above "
-        "may be inspecting the wrong region")
+    # RESCOPED IN ROUND THIRTY. This arm used to look for the identity check and the single
+    # os.replace INSIDE the fallback's own text. Round thirty moved both into the one shared
+    # publication path, `_replace_canonical_guarded`, precisely so that neither refusal branch
+    # can omit them again — so the property is now: the fallback CALLS that path, and that path
+    # carries the identity check and the module's only refusal replace.
+    assert "_replace_canonical_guarded(" in fallback, (
+        "REPAIRED: the refusal writer's fallback does not go through the shared publication "
+        "path, so it can replace the canonical name without the checks that path carries")
+    helper = source[source.index("def _replace_canonical_guarded"):]
+    helper = helper[:helper.index("\ndef ")]
+    assert "st_ino" in helper and helper.count("os.replace(") == 1, (
+        "REPAIRED: the shared publication path must carry the staged-inode identity check and "
+        "exactly one replace — it is the only place a refusal may replace the canonical name")
+    assert fallback.count("os.replace(") == 0, (
+        "REPAIRED: a refusal branch replaces the canonical name directly instead of through the "
+        "shared path — the sibling-branch defect, back again")
 
 
 # =============================================================================================
@@ -4433,26 +4443,22 @@ def test_quarantine_does_not_link_through_a_symlink(tmp_path: Path) -> None:
     source = SCANNER.read_text(encoding="utf-8")
     quarantine = source[source.index("def _quarantine_unpublished"):]
     quarantine = quarantine[:quarantine.index("\ndef ")]
-    assert "follow_symlinks=False" in quarantine, (
-        "the quarantine link still follows symlinks while preservation's does not; a staged name "
-        "swapped for a symlink would link its target into the evidence store")
+    # RESCOPED IN ROUND THIRTY. This arm asserted `follow_symlinks=False` on the quarantine link
+    # so that a staged NAME swapped for a symlink could not link its target into the evidence
+    # store. Quarantine no longer links by name at all: it links the HELD INODE through the
+    # descriptor directory, which has no source name to be a symlink. The property survives in a
+    # stronger form — the link cannot attach anything the scanner does not hold.
+    q = source[source.index("def _quarantine_unpublished"):]
+    q = q[:q.index("\ndef ")]
+    assert "_link_held_inode(" in q and "os.link(tmp_name" not in q, (
+        "REPAIRED: quarantine links a NAME again. A staged name swapped for a symlink would link "
+        "its target into the evidence store; linking the held inode makes that impossible")
+    h = source[source.index("def _link_held_inode"):]
+    h = h[:h.index("\ndef ")]
+    assert "_PROC_FD_DIR" in h and "os.link(" in h and "follow_symlinks=True" in h, (
+        "CONTROL: the descriptor-bound helper must link through the descriptor directory, which "
+        "requires following that one symlink — the proc entry — and nothing else")
 
-
-# =============================================================================================
-# GROUP 32 — the twenty-third round. The gate's last two, and both are about a promise rather
-# than a crash.
-#
-#   #1 "No ACL on a retained report" was unconditional in the contract and best-effort in the
-#      code. With the strip denied, quarantine swallowed the failure, applied 0600, linked the
-#      file into a RESERVED name and reported retention success — presenting an artifact as
-#      policy-compliant when its policy had not been installed. The gate's instruction is the
-#      right one: preserve the bytes, do not silently present them as compliant.
-#
-#   #2 "Never blocks" was refuted by a refusal object whose __str__ never returns. Round
-#      eighteen wrapped str() in `except Exception`, which cannot interrupt a callback that does
-#      not raise. The fix the gate names is better than a guard: stop rendering arbitrary objects
-#      in this path at all, and carry a validated reason code from the failure that raised.
-# =============================================================================================
 
 
 class _RefusalWhoseStrBlocks(Exception):
@@ -5534,3 +5540,253 @@ def test_a_slot_stolen_after_authorization_does_not_get_the_report_replaced(tmp_
         "REPAIRED: the slot was taken between the authorization and the replace, so the preserved "
         "copy stopped being our inode — and the replace then dropped the canonical name, which "
         "was the last one the findings had")
+
+
+# =============================================================================================
+# GROUP 39 — the thirtieth round. Five evidence-retention failures, four of them in code the
+# last three rounds wrote, and one more sibling branch.
+#
+# The pattern this file has now shown three times gets its own sentence: WHEN A FIX ANCHORS ONE
+# BRANCH, ITS SIBLING IS WHERE THE DEFECT GOES TO LIVE. Round twenty-nine put the spent-authorization
+# re-check before the ordinary refusal replace and not before the fallback one. The review leg's
+# structural advice — put the shared preconditions in ONE publication path — is what this round
+# does, so there is no second branch left to forget.
+#
+# The copy-out helper, added in round twenty-seven as the last-resort rescue for an inode with no
+# names, turned out to lose that inode in three ways of its own: it deleted a completed recovery
+# stage when every reserved name was occupied; it claimed custody of a reserved link it never
+# confirmed was the stage it wrote; and quarantine's new mismatch branch, which relies on it,
+# returned False while the held original had zero names left. Each is a case where the module
+# knew it held the only copy and closed it anyway.
+# =============================================================================================
+
+
+def _refusal_with_slot_stolen_during(module, reports, hook_name):
+    """Run the refusal writer with the preserved slot stolen inside HOOK_NAME. Returns nothing;
+    the caller asserts on the tree. The steal is a status-line plant, which under the old code
+    reads as 'nothing preserved here worth keeping'."""
+    real = getattr(module, hook_name)
+    fired: list[str] = []
+
+    def hooked(*args, **kwargs):
+        if not fired:
+            fired.append(hook_name)
+            slot = reports / "scan_report.superseded.txt"
+            if slot.exists():
+                plant = reports / "plant.txt"
+                plant.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+                os.replace(plant, slot)
+        return real(*args, **kwargs)
+
+    setattr(module, hook_name, hooked)
+    try:
+        module._write_refusal_report(str(reports.parent), module.ScanRefused("report-path-unsafe 'x'"))
+    finally:
+        setattr(module, hook_name, real)
+    return fired
+
+
+def test_the_fallback_replace_also_rechecks_the_authorization(tmp_path: Path) -> None:
+    """REPAIRED (B1): the sibling branch. The fallback publish must not spend a stale authorization."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "fallback_recheck")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    (reports / "scan_report.txt").write_text("aws\tkey\tassignment\tdocs/fb.md:1\n", encoding="utf-8")
+
+    real_install = module._install_posix_acl_policy
+
+    def install_that_steals_then_fails(dirfd, src_name, dst_fd, dst_name):
+        # THE INTERLEAVING: the slot is taken during the ORDINARY path's policy install, which
+        # then fails — routing the publish through the fallback, which had no re-check.
+        slot = reports / "scan_report.superseded.txt"
+        if slot.exists():
+            plant = reports / "plant.txt"
+            plant.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+            os.replace(plant, slot)
+        raise OSError(errno.EPERM, "policy install failed (injected)")
+
+    module._install_posix_acl_policy = install_that_steals_then_fails
+    try:
+        module._write_refusal_report(str(tmp_path), module.ScanRefused("report-path-unsafe 'x'"))
+    finally:
+        module._install_posix_acl_policy = real_install
+    assert _findings_anywhere(reports, "docs/fb.md:1"), (
+        "REPAIRED: the fallback replaced the canonical findings on the strength of an "
+        "authorization whose slot had already been taken. The ordinary path re-checks; this one "
+        "did not. Same defect, sibling branch, third time")
+
+
+def test_copy_out_keeps_its_stage_when_every_reserved_name_is_taken(tmp_path: Path) -> None:
+    """REPAIRED (B2): a completed recovery stage is never deleted for lack of a reserved name."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "copyout_slots_full")
+    staging = tmp_path / "tree"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    for name in module._unpublished_slot_names():
+        (reports / name).mkdir()          # every reserved name occupied by something unremovable
+
+    real_unlink = module.os.unlink
+    real_install = module._install_posix_acl_policy
+    took: list[str] = []
+
+    def install_after_taking_the_staged_name(dirfd, src_name, dst_fd, dst_name):
+        if not took:
+            took.append(dst_name)
+            try: real_unlink(str(reports / dst_name))
+            except OSError: pass
+        raise OSError(errno.EIO, "policy install failed (injected)")
+
+    module._install_posix_acl_policy = install_after_taking_the_staged_name
+    try:
+        with pytest.raises(BaseException):
+            module.write_report(str(staging), [("docs/full.md", 2, "aws", "key", "assignment")])
+    finally:
+        module._install_posix_acl_policy = real_install
+    if not took:
+        pytest.skip("the staged name was never taken; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/full.md:2"), (
+        "REPAIRED: the copy-out wrote a complete recovery stage, found every reserved name "
+        "occupied, and deleted the stage it had just written — then the last descriptor was "
+        "closed. A completed stage under the scanner's own prefix promises nothing and must be "
+        "KEPT when no reserved name will take it")
+
+
+def test_copy_out_confirms_the_reserved_link_is_its_stage(tmp_path: Path) -> None:
+    """REPAIRED (B3): the reserved name must be the inode that was written, not whatever is there."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "copyout_link_identity")
+    staging = tmp_path / "tree"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+
+    real_link = module.os.link
+    real_unlink = module.os.unlink
+    real_install = module._install_posix_acl_policy
+    swapped: list[str] = []
+
+    def install_after_taking_the_staged_name(dirfd, src_name, dst_fd, dst_name):
+        try: real_unlink(str(reports / dst_name))
+        except OSError: pass
+        raise OSError(errno.EIO, "policy install failed (injected)")
+
+    def link_that_substitutes_the_stage(src, dst, *args, **kwargs):
+        # THE SUBSTITUTION, re-keyed in round thirty: the link is now made through the
+        # descriptor directory, so the stage name no longer arrives as `src`. The writer takes
+        # the stage NAME (unlink + decoy at that name) just before the link; the link then sees
+        # an inode with no names and must fail rather than attach anything.
+        if (not swapped and isinstance(dst, str) and dst.startswith("scan_report.unpublished")):
+            for p in list(reports.iterdir()):
+                if p.name.startswith(".scan_report_"):
+                    swapped.append(p.name)
+                    decoy = reports / "decoy.txt"
+                    decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+                    try: real_unlink(str(p))
+                    except OSError: pass
+                    os.replace(decoy, p)
+        return real_link(src, dst, *args, **kwargs)
+
+    module._install_posix_acl_policy = install_after_taking_the_staged_name
+    module.os.link = link_that_substitutes_the_stage
+    try:
+        with pytest.raises(BaseException):
+            module.write_report(str(staging), [("docs/decoy.md", 3, "aws", "key", "assignment")])
+    finally:
+        module.os.link = real_link
+        module._install_posix_acl_policy = real_install
+    if not swapped:
+        pytest.skip("the copy-out never linked; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/decoy.md:3"), (
+        "REPAIRED: the copy-out linked whatever stood at its stage name into a reserved slot and "
+        "answered True. The slot holds a decoy; the findings have no name. The link has to be "
+        "confirmed against the descriptor that wrote the stage")
+
+
+def test_quarantine_mismatch_still_rescues_the_held_original(tmp_path: Path) -> None:
+    """REPAIRED (B4): divergence found after the link gets the same rescue as divergence before it."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quarantine_mismatch_rescue")
+    staging = tmp_path / "tree"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+
+    real_link = module.os.link
+    real_unlink = module.os.unlink
+    real_install = module._install_posix_acl_policy
+    swapped: list[str] = []
+
+    def failing_install(dirfd, src_name, dst_fd, dst_name):
+        raise OSError(errno.EIO, "policy install failed (injected)")
+
+    def link_after_the_stage_was_replaced(src, dst, *args, **kwargs):
+        # THE SUBSTITUTION, re-keyed in round thirty: the link is now made through the
+        # descriptor directory, so the stage name no longer arrives as `src`. The writer takes
+        # the stage NAME (unlink + decoy at that name) just before the link; the link then sees
+        # an inode with no names and must fail rather than attach anything.
+        if (not swapped and isinstance(dst, str) and dst.startswith("scan_report.unpublished")):
+            for p in list(reports.iterdir()):
+                if p.name.startswith(".scan_report_"):
+                    swapped.append(p.name)
+                    decoy = reports / "decoy.txt"
+                    decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+                    try: real_unlink(str(p))
+                    except OSError: pass
+                    os.replace(decoy, p)
+        return real_link(src, dst, *args, **kwargs)
+
+    module._install_posix_acl_policy = failing_install
+    module.os.link = link_after_the_stage_was_replaced
+    try:
+        with pytest.raises(BaseException):
+            module.write_report(str(staging), [("docs/rescue.md", 4, "aws", "key", "assignment")])
+    finally:
+        module.os.link = real_link
+        module._install_posix_acl_policy = real_install
+    if not swapped:
+        pytest.skip("no quarantine link was attempted; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/rescue.md:4"), (
+        "REPAIRED: quarantine detected that the reserved link was not its inode, answered False, "
+        "and left the held original — which by then had zero names — to be closed. The mismatch "
+        "branch has to rescue through the descriptor, exactly as the pre-link divergence does")
+
+
+def test_the_sweep_does_not_run_without_a_reference_timestamp(tmp_path: Path) -> None:
+    """REPAIRED (B5): an unknown reference age must not authorize the sweep."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "sweep_no_reference")
+    staging = tmp_path / "tree"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+
+    real_fstat = module.os.fstat
+    real_replace = module.os.replace
+    planted: list[Path] = []
+    denied: list[int] = []
+
+    def fstat_that_fails_once_for_write_report(fd):
+        if not denied and sys._getframe(1).f_code.co_name == "write_report":
+            denied.append(fd)
+            raise OSError(errno.EIO, "fstat failed (injected)")
+        return real_fstat(fd)
+
+    def replace_then_a_writer_quarantines(*args, **kwargs):
+        r = real_replace(*args, **kwargs)
+        if not planted:
+            q = reports / "scan_report.unpublished.txt"
+            q.write_text("gcp\tkey\tassignment\tsrc/noref.py:5\n", encoding="utf-8")
+            planted.append(q)
+        return r
+
+    module.os.fstat = fstat_that_fails_once_for_write_report
+    module.os.replace = replace_then_a_writer_quarantines
+    try:
+        module.write_report(str(staging), [("docs/mine.md", 1, "aws", "key", "assignment")])
+    finally:
+        module.os.fstat = real_fstat
+        module.os.replace = real_replace
+    if not denied:
+        pytest.skip("the reference fstat was never reached; this arm measured nothing")
+    assert _findings_anywhere(reports, "src/noref.py:5"), (
+        "REPAIRED: with no reference timestamp the age guard short-circuited to 'not newer' and "
+        "the sweep removed a concurrent writer's retained findings. No reference means no sweep")
