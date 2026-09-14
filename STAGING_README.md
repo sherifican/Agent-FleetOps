@@ -260,6 +260,13 @@ adopting it is a platform decision (Linux ≥ 3.15, filesystem support probed at
 `ctypes` shim because `os.replace` exposes no flags) and is recorded as the next step rather than
 claimed.
 
+Also not a concurrency limit: **a leftover whose ACL strip was denied keeps its inherited entries.**
+Findings the scanner could not publish or reserve are left under the temporary `.scan_report_*`
+prefix, narrowed as far as it can — mode 0600, so any inherited named-user or named-group entry is
+masked to nothing. A strip that was DENIED cannot be redone here; those entries stay on the inode,
+one `chmod` away from being live again. That is exactly why a reserved name (which asserts the
+policy) is never taken in that state, and why the leftover claims nothing.
+
 Third, and not a concurrency limit: **nothing here is fsync'd.** The stage is written, linked and
 renamed with ordering guarantees only. A power loss or crash between the rename and the
 filesystem's own commit can leave the previous report, an empty report, or no report — whatever

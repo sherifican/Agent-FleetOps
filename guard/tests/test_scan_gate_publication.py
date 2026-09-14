@@ -7266,3 +7266,173 @@ def test_quarantine_rescues_when_a_failure_after_its_identity_check_finds_the_na
     assert _findings_anywhere(reports, "docs/q.md:1"), (
         f"REPAIRED ({label}): the staged name became a decoy during the failing call; quarantine "
         f"returned False trusting the name it had checked earlier, and the findings are under no name")
+
+
+# =============================================================================================
+# GROUP 50 — the forty-second round. Gate 37: an invariant-framed leg (Gemini, reading the module
+# as a file) found the nlink rule of round 39 refusing to remove an EMPTY rescue stage, which has
+# never been linked and so has exactly one name.
+# =============================================================================================
+
+
+def test_an_empty_rescue_stage_is_removed(tmp_path: Path) -> None:
+    """REPAIRED: an empty stage holds nothing; identity alone should authorize removing its one name."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "empty_rescue_stage")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_RDONLY, 0o600)   # zero bytes
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        published = module._copy_out_unpublished(dirfd, src)
+    finally:
+        os.close(src); os.close(dirfd)
+    assert published is False, "CONTROL: nothing readable cannot be published"
+    leftovers = [p.name for p in reports.iterdir() if p.name.startswith(".scan_report_") and p.name != ".scan_report_src"]
+    assert not leftovers, (
+        f"REPAIRED: the rescue read zero bytes, cleared keep_stage, and the finally's nlink rule then "
+        f"refused to remove a stage that has only ever had one name: {leftovers} leaked")
+
+
+def test_a_stale_clean_is_still_replaced_where_the_xattr_api_is_absent(tmp_path: Path) -> None:
+    """CONTROL for a review claim: without the xattr API, the refusal still replaces a stale CLEAN.
+
+    A gate-37 leg read `_narrow_held_copy` returning False on such platforms and concluded the
+    refusal writer "always aborts" there. The status-line branch of preservation answers True
+    before narrowing is consulted, so a stale CLEAN — the case the refusal exists for — is still
+    replaced; only a FINDINGS report is left unreplaced there, which is the safe direction.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "no_xattr_refusal")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    canonical = reports / "scan_report.txt"
+    canonical.write_bytes(module._STATUS_LINE_PREFIX + b"CLEAN\n")
+    module._XATTR_SUPPORTED = False
+    module._write_refusal_report(str(tmp_path), module.ScanRefused("report-path-unsafe 'x'"))
+    assert canonical.read_bytes().startswith(b"scan_gate: REFUSED"), (
+        "the refusal did not replace a stale CLEAN on a platform without the xattr API")
+
+
+def test_a_cancellation_during_the_sweep_does_not_quarantine_the_published_report(tmp_path: Path) -> None:
+    """REPAIRED (executed review, gate 37): after the replace the stage IS the report; the failure handler
+    must not copy it out again under a reserved name."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "sweep_cancel_no_duplicate")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    old = reports / "scan_report.superseded.txt"
+    old.write_text("aws\tkey\tassignment\tdocs/old.md:1\n", encoding="utf-8")
+    os.utime(old, ns=(1, 1))
+    real_open = module.os.open
+    fired: list[str] = []
+
+    def open_that_cancels_the_sweep(path, flags, *a, **k):
+        if (not fired and isinstance(path, str) and path.startswith("scan_report.superseded")
+                and flags & getattr(os, "O_PATH", 0) and sys._getframe(1).f_code.co_name == "write_report"):
+            fired.append(path)
+            raise KeyboardInterrupt
+        return real_open(path, flags, *a, **k)
+
+    module.os.open = open_that_cancels_the_sweep
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module.write_report(str(staging), [("docs/new.md", 2, "SECRET", "generic_key_assignment", "contents")])
+    finally:
+        module.os.open = real_open
+    if not fired:
+        pytest.skip("the sweep never opened the entry; this arm measured nothing")
+    assert (reports / "scan_report.txt").read_text(encoding="utf-8").count("docs/new.md") == 1, "CONTROL: published"
+    dupes = [p.name for p in reports.iterdir() if p.name.startswith("scan_report.unpublished")]
+    assert not dupes, (
+        f"REPAIRED: the report was already published when the sweep was cancelled; the handler "
+        f"quarantined the renamed stage by descriptor and left a duplicate under {dupes}")
+
+
+# ---- gate 37, the cold leg: the round-40 swap moved one function down -----------------------
+
+def test_a_decoy_swapped_in_during_the_kept_stage_narrowing_does_not_free_the_findings(tmp_path: Path) -> None:
+    """REPAIRED (cold #1): after `_false_or_rescue` says False, the caller narrows and closes; a swap
+    during the narrowing must be caught before the close."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "narrow_then_swap")
+    if not module._XATTR_SUPPORTED:
+        pytest.skip("no xattr layer here")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_install, real_strip, real_narrow = module._install_posix_acl_policy, module._strip_acl_by_fd, module._narrow_leftover
+    swapped: list[str] = []
+
+    def install_that_fails(dirfd, src_name, dst_fd, dst_name):
+        raise OSError(5, "injected policy failure")
+
+    def strip_denied(fd):
+        raise PermissionError(errno.EPERM, "injected: strip denied")
+
+    def narrow_then_swap_the_name(fd):
+        real_narrow(fd)
+        if not swapped and sys._getframe(1).f_code.co_name == "write_report":
+            stages = [p for p in reports.iterdir() if p.name.startswith(".scan_report_")]
+            if len(stages) == 1:
+                swapped.append(stages[0].name)
+                decoy = reports / "decoy.txt"
+                decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+                os.replace(decoy, stages[0])          # the kept NAME is now the decoy
+
+    module._install_posix_acl_policy, module._strip_acl_by_fd, module._narrow_leftover = install_that_fails, strip_denied, narrow_then_swap_the_name
+    try:
+        with pytest.raises(Exception):
+            module.write_report(str(staging), [("docs/k.md", 1, "SECRET", "generic_key_assignment", "contents")])
+    finally:
+        module._install_posix_acl_policy, module._strip_acl_by_fd, module._narrow_leftover = real_install, real_strip, real_narrow
+    if not swapped:
+        pytest.skip("the kept-stage narrowing never ran; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/k.md:1"), (
+        "REPAIRED: the name was swapped for a decoy during the kept-stage narrowing; the caller then "
+        "closed the last reference and the findings are under no name")
+
+
+def test_the_post_check_identity_helper_reads_the_held_side_first(tmp_path: Path) -> None:
+    """REPAIRED (cold #1, sub-issue): a swap between the helper's two syscalls must be caught, so the
+    name lookup has to be the LAST of the two."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "helper_order")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    stage = reports / ".scan_report_stage"
+    fd = os.open(str(stage), os.O_CREAT | os.O_RDWR, 0o600)
+    os.write(fd, b"aws\tkey\tassignment\tdocs/q.md:1\n")
+    real_lstat, real_fstat = module.os.lstat, module.os.fstat
+    calls: list[str] = []
+
+    def swap_before_the_second_syscall():
+        if len(calls) == 2:
+            decoy = reports / "decoy.txt"
+            decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+            os.replace(decoy, stage)
+
+    def lstat_counted(path, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_false_or_rescue":
+            calls.append("lstat"); swap_before_the_second_syscall()
+        return real_lstat(path, *a, **k)
+
+    def fstat_counted(f, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_false_or_rescue":
+            calls.append("fstat"); swap_before_the_second_syscall()
+        return real_fstat(f, *a, **k)
+
+    module.os.lstat, module.os.fstat = lstat_counted, fstat_counted
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        answer = module._false_or_rescue(dirfd, ".scan_report_stage", fd)
+    finally:
+        module.os.lstat, module.os.fstat = real_lstat, real_fstat
+        os.close(fd); os.close(dirfd)
+    if len(calls) < 2:
+        pytest.skip("the helper made fewer than two identity syscalls; this arm measured nothing")
+    assert calls[-1] == "lstat", f"REPAIRED: the name lookup must be the last syscall, got {calls}"
+    assert answer is True or _findings_anywhere(reports, "docs/q.md:1"), (
+        "REPAIRED: a swap between the two identity syscalls was missed — the helper compared a stale "
+        "name lookup and answered False")

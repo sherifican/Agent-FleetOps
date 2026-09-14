@@ -590,7 +590,8 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow
         stage_name = None
         stage_fd = None
-        keep_stage = True                 # set before the open: no interval owns the fd unwatched
+        keep_stage = True                 # set before the open, with `written`, so the acquisition
+        written = 0                       # try below hands straight to the try that owns the fd
         try:
             for _ in range(_STAGE_ATTEMPTS):
                 name = ".scan_report_" + "".join(
@@ -614,7 +615,6 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
         # them: the finally saw False and deleted three bytes of evidence. The flag now starts True
         # and is cleared in exactly one place — after a confirmed publication — so cancellation,
         # or any exit this code did not anticipate, keeps whatever reached the stage.
-        written = 0
         try:
             try:
                 # THE STAGE'S CHMOD AND STRIP ARE BEST EFFORT BEFORE THE STREAM. A chmod that
@@ -651,10 +651,9 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                 if written == 0:
                     keep_stage = False    # nothing readable: an empty stage is not evidence
                     return False
-                # THE BYTES ARE ON DISK BEFORE ANY DECISION ABOUT A RESERVED NAME. The deliberate
-                # exception above (a denied strip still takes a reserved name) rests on the mode
-                # being 0600 with the entries masked; if the mode did not land, the reserved name
-                # is declined — and the stage, holding the bytes, is kept.
+                # THE BYTES ARE ON DISK BEFORE ANY DECISION ABOUT A RESERVED NAME. A mode that did
+                # not land, or a strip that was denied (recorded above, decided below), declines
+                # the reserved name — and the stage, holding the bytes, is kept.
                 try:
                     if stat.S_IMODE(os.fstat(stage_fd).st_mode) != _REPORT_MODE:
                         return False
@@ -697,8 +696,14 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
             # inside the cleanup's lstat leaked the descriptor at three sites (invariant leg, 0829b97).
             try:
                 if stage_name is not None and not keep_stage:
-                    # only while the reserved name (or any other) still reaches the copy
-                    _remove_stage_if_another_name_remains(dirfd, stage_name, stage_fd)
+                    if written == 0:
+                        # AN EMPTY STAGE HOLDS NOTHING, and has only ever had one name — the
+                        # nlink rule below would keep it forever (gate 37). Identity alone
+                        # authorizes removing it.
+                        _remove_own_stage(dirfd, stage_name, stage_fd)
+                    else:
+                        # only while the reserved name (or any other) still reaches the copy
+                        _remove_stage_if_another_name_remains(dirfd, stage_name, stage_fd)
             finally:
                 _close_quietly(stage_fd)
     finally:
@@ -1200,7 +1205,8 @@ def write_report(staging, hits):
 
         fd, tmp_name = _stage_report(dirfd, body, evidence=bool(hits))
         _staged_ctime_ns = None           # unknown age until read: no reference stamp means no sweep
-        try:
+        _published = False                # flips the instant the replace lands: from then on the
+        try:                              # stage IS the report, and the handler must not copy it
             # Inside the ownership try, so a cancellation during this read still reaches the close
             # in the finally (invariant leg, 3c075f0).
             try:
@@ -1243,6 +1249,7 @@ def write_report(staging, hits):
             if (_named.st_dev, _named.st_ino) != (_held.st_dev, _held.st_ino):
                 raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
             os.replace(tmp_name, _REPORT_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
+            _published = True
             # A fresh scan has just published a report, so anything preserved from an EARLIER
             # generation is stale. Leaving it meant the sibling slot stayed occupied and the next
             # refusal could not keep the findings this run produced — measured: an old report's
@@ -1322,6 +1329,13 @@ def write_report(staging, hits):
                     if _swept_fd is not None:
                         _close_quietly(_swept_fd)
         except BaseException:
+            if _published:
+                # ALREADY PUBLISHED. A cancellation or error in the post-publish sweep reaches
+                # this handler with the stage already renamed onto the canonical name; the
+                # descriptor-based quarantine then copied the published report out again under
+                # a reserved name — a duplicate, no loss (executed review, gate 37). Nothing here
+                # is unpublished; re-raise and let the finally close the descriptor.
+                raise
             # KEEP THE FINDINGS if there are any and they made it to disk. Unlinking here
             # destroyed the hits this scan had just written, and the refusal that follows cannot
             # carry them.
@@ -1347,6 +1361,13 @@ def write_report(staging, hits):
                     # 24 and 25) — and later with its inherited entries (cold leg, 3c075f0). Best
                     # effort, through the held descriptor; the stage still promises nothing.
                     _narrow_leftover(fd)
+                    # AND THE NAME IS RE-ASKED AFTER THE NARROWING, immediately before the close
+                    # in the finally. "False → the caller keeps the name" is only safe if the
+                    # next act is not close(fd); the narrowing above is the same strip + fchmod
+                    # the helper stopped trusting, and a decoy renamed onto the name during it
+                    # made the close free the last copy (cold leg, 279368a). What remains is the
+                    # interval between this check and the close.
+                    _false_or_rescue(dirfd, tmp_name, fd)
             raise
         finally:
             _close_quietly(fd)
@@ -1583,6 +1604,9 @@ def _narrow_leftover(fd):
     leftover still claims nothing; it is simply as narrow as this code can make it. Neither call
     is verified afterwards: a leftover whose fchmod failed under a umask that masks owner read
     stays at 0200 — on disk, unreadable to the owner — and nothing else can be done for it here.
+    A leftover whose strip was DENIED keeps its inherited entries, masked to nothing at 0600 and
+    one chmod from live; that is why no reserved name is ever taken in that state, and why the
+    leftover sits under the temporary prefix, which claims nothing (README limits).
     """
     if _XATTR_SUPPORTED:
         try:
@@ -1605,8 +1629,8 @@ def _false_or_rescue(dirfd, tmp_name, fd):
     close freed the findings (round 40). The pre-check twin of this was closed in rounds 37–38.
     """
     try:
-        named = os.lstat(tmp_name, dir_fd=dirfd)
-        held = os.fstat(fd)
+        held = os.fstat(fd)               # the held side first — it cannot change under us —
+        named = os.lstat(tmp_name, dir_fd=dirfd)   # and the name LAST, like every other spend site
         if (named.st_dev, named.st_ino) == (held.st_dev, held.st_ino):
             return False                  # still ours by name: the caller keeps it
     except OSError:
