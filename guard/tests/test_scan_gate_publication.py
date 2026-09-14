@@ -6517,3 +6517,107 @@ def test_rescue_declines_a_reserved_name_when_its_mode_did_not_land(tmp_path: Pa
     assert _findings_anywhere(reports, "docs/int.md:2"), "CONTROL: the copied bytes must survive somewhere"
     assert published is False and not any(p.name.startswith("scan_report.unpublished") for p in reports.iterdir()), (
         "REPAIRED: the rescue reserved a name for a copy whose mode it set and never verified")
+
+
+# =============================================================================================
+# GROUP 44 — the thirty-fifth round. The cold leg's three on 0829b97: the scan arm round-trips
+# arbitrary path bytes and the publication arm assumed UTF-8 text; a kept partial stage at the
+# umask-masked create mode; and the sweep's age check followed by an unlink of the NAME.
+# =============================================================================================
+
+
+def test_a_hit_in_a_non_utf8_path_does_not_lose_every_finding(tmp_path: Path) -> None:
+    """REPAIRED (cold #1): scan() stores paths with surrogateescape; the report must write them back."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "surrogate_path_hit")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    hits = [("docs/\udcff.md", 1, "SECRET", "generic_key_assignment", "contents"),
+            ("docs/plain.md", 2, "SECRET", "generic_key_assignment", "contents")]
+    try:
+        module.write_report(str(staging), hits)
+    except UnicodeError as exc:
+        pytest.fail(f"REPAIRED: the report writer raised {exc!r} on a hit whose path is not UTF-8 — "
+                    f"this scan's findings, the plain ones included, landed nowhere")
+    published = (reports / "scan_report.txt").read_bytes()
+    assert b"docs/plain.md" in published and b"docs/\xff.md" in published, (
+        "REPAIRED: the published report must carry both hits, the non-UTF-8 path as its original bytes")
+
+
+def test_the_sweep_does_not_unlink_a_name_that_changed_after_it_was_aged(tmp_path: Path) -> None:
+    """REPAIRED (cold #3): the age check answered for one inode; the unlink acted on the name."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "sweep_identity_bound")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    old = reports / "scan_report.unpublished.txt"
+    old.write_text("aws\tkey\tassignment\tdocs/old.md:1\n", encoding="utf-8")
+    os.utime(old, ns=(1, 1))
+    real_lstat, real_open = module.os.lstat, module.os.open
+    swapped: list[str] = []
+
+    def substitute_after_the_age_check(name):
+        f = reports / "F.txt"
+        f.write_text("gcp\tkey\tassignment\tsrc/F.py:2\n", encoding="utf-8")
+        os.replace(f, reports / name)         # F's LAST name is now the aged reserved name
+        swapped.append(name)
+
+    def lstat_then_substitute(path, *args, **kwargs):
+        st = real_lstat(path, *args, **kwargs)
+        if (not swapped and isinstance(path, str) and path.startswith("scan_report.unpublished")
+                and sys._getframe(1).f_code.co_name == "write_report"):
+            substitute_after_the_age_check(path)
+        return st
+
+    def open_then_substitute(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        if (not swapped and isinstance(path, str) and path.startswith("scan_report.unpublished")
+                and flags & getattr(os, "O_PATH", 0)
+                and sys._getframe(1).f_code.co_name == "write_report"):
+            substitute_after_the_age_check(path)
+        return fd
+
+    module.os.lstat, module.os.open = lstat_then_substitute, open_then_substitute
+    try:
+        module.write_report(str(staging), [])   # a successful CLEAN publish runs the sweep
+    finally:
+        module.os.lstat, module.os.open = real_lstat, real_open
+    if not swapped:
+        pytest.skip("the sweep never aged the reserved name; this arm measured nothing")
+    assert _findings_anywhere(reports, "src/F.py:2"), (
+        "REPAIRED: the sweep aged one inode and unlinked the NAME, which by then was findings "
+        "report F's only name. The unlink must be bound to the inode that was aged")
+
+
+def test_a_kept_partial_stage_is_left_owner_readable(tmp_path: Path) -> None:
+    """REPAIRED (cold #2, sequence A): the partial findings kept by `_stage_report` must be readable."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "partial_keep_readable")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_fdopen = module.os.fdopen
+
+    class _HalfWriter:
+        def __init__(self, wrapped): self._wrapped = wrapped
+        def __enter__(self): return self
+        def __exit__(self, *exc): return self._wrapped.__exit__(*exc)
+        def write(self, data):
+            self._wrapped.write(data[: max(1, len(data) // 2)]); self._wrapped.flush()
+            raise OSError(errno.EFBIG, "injected write failure")
+
+    module.os.fdopen = lambda *a, **k: _HalfWriter(real_fdopen(*a, **k))
+    old_umask = os.umask(0o400)
+    try:
+        with pytest.raises(Exception):
+            module.write_report(str(staging), [("docs/k.md", 1, "SECRET", "generic_key_assignment", "contents")])
+    finally:
+        os.umask(old_umask)
+        module.os.fdopen = real_fdopen
+    kept = [p for p in reports.iterdir() if p.name.startswith(".scan_report_")]
+    if not kept:
+        pytest.skip("no partial stage was kept; this arm measured nothing")
+    assert all(p.stat().st_mode & 0o400 for p in kept), (
+        f"REPAIRED: the kept partial stage is owner-unreadable ({[oct(p.stat().st_mode & 0o777) for p in kept]})")

@@ -272,6 +272,7 @@ _REPORT_MODE = 0o600
 # read — a pre-existing directory at 0300 is accepted by _harden_report_dir through its O_PATH
 # path — and the cleared group/other bits are the confidentiality rule.
 _REPORT_DIR_MODE = 0o700
+_NOFOLLOW_FLAG = getattr(os, "O_NOFOLLOW", 0)
 
 # Reaching an INODE that is already open, for the calls that take no fd. Populated once rather
 # than probed per call, and None where /proc is not mounted.
@@ -1070,8 +1071,13 @@ def _stage_report(dirfd, body, evidence=False):
             last = exc
             continue
         try:
-            with os.fdopen(fd, "w", closefd=False) as handle:
-                handle.write(body)
+            # THE REPORT IS WRITTEN AS THE BYTES SCAN() ROUND-TRIPPED. scan() stores every path
+            # with os.fsdecode — surrogateescape, reversible — and a text-mode write with strict
+            # UTF-8 raised UnicodeEncodeError on the first non-UTF-8 name, before a byte reached
+            # the disk: this scan's findings, the plain ones included, landed nowhere (cold leg,
+            # 0829b97). Encoding with the same error handler puts the original bytes back.
+            with os.fdopen(fd, "wb", closefd=False) as handle:
+                handle.write(body.encode("utf-8", "surrogateescape"))
         except BaseException:
             # KEEP WHAT REACHED THE DISK, WHEN IT IS EVIDENCE. This cleanup predates every
             # retention rule the file has since grown, and it sits where none of them can reach:
@@ -1100,6 +1106,14 @@ def _stage_report(dirfd, body, evidence=False):
             try:
                 if not keep:
                     _remove_own_stage(dirfd, name, fd)
+                else:
+                    # KEPT, AND READABLE. The caller never receives this descriptor, so the
+                    # policy install and the quarantine cannot set the mode on a kept partial
+                    # stage; under a umask that masks owner read it sat at 0200 (cold leg).
+                    try:
+                        os.fchmod(fd, _REPORT_MODE)
+                    except OSError:
+                        pass
             finally:
                 _close_quietly(fd)        # under finally: a cancellation in the cleanup leaked it
             raise
@@ -1234,12 +1248,27 @@ def write_report(staging, hits):
             # for the reference side of the comparison too.
             for _name in (_superseded_slot_names(include_unpublished=True)
                           if _staged_ctime_ns is not None else ()):
+                # AGED AND REMOVED AS ONE INODE. The age check used to lstat the name and the
+                # unlink then acted on the name — a reserved name freed and re-linked by another
+                # run's quarantine between the two was deleted on the first occupant's age (cold
+                # leg, 0829b97). The entry is opened O_PATH|O_NOFOLLOW, aged by fstat, and removed
+                # only while the name still refers to that descriptor's inode. What remains is
+                # the helper's own lookup-to-unlink interval, the same as everywhere else.
+                _swept_fd = None
                 try:
-                    if os.lstat(_name, dir_fd=dirfd).st_ctime_ns > _staged_ctime_ns:
+                    _swept_fd = os.open(_name, getattr(os, "O_PATH", os.O_RDONLY) | _NOFOLLOW_FLAG,
+                                        dir_fd=dirfd)
+                    _swept = os.fstat(_swept_fd)
+                    if _swept.st_ctime_ns > _staged_ctime_ns:
+                        _close_quietly(_swept_fd); _swept_fd = None
                         continue          # newer than this run's own staging; not ours to end
                 except FileNotFoundError:
+                    if _swept_fd is not None:
+                        _close_quietly(_swept_fd)
                     continue              # already gone; nothing to remove
                 except OSError:
+                    if _swept_fd is not None:
+                        _close_quietly(_swept_fd)
                     # A QUESTION THIS CODE CANNOT ANSWER NEVER AUTHORIZES DESTRUCTION. The
                     # previous shape fell through to the unlink here, which is precisely the
                     # outcome the age check was added to prevent — the check protects a
@@ -1255,17 +1284,21 @@ def write_report(staging, hits):
                 # and age alone. That is the reserved-namespace rule, stated as a rule and not as
                 # an identity guarantee.
                 try:
-                    os.unlink(_name, dir_fd=dirfd)
-                except IsADirectoryError:
-                    # A directory at that name cannot be unlinked, and gate review reproduced one
-                    # blocking every later preservation permanently. An EMPTY one is removable; a
-                    # populated one is somebody else's data and is left alone.
-                    try:
-                        os.rmdir(_name, dir_fd=dirfd)
-                    except OSError:
-                        pass
-                except OSError:
-                    pass
+                    if stat.S_ISDIR(_swept.st_mode):
+                        # A directory at that name cannot be unlinked, and gate review reproduced
+                        # one blocking every later preservation permanently. An EMPTY one is
+                        # removable; a populated one is somebody else's data and is left alone.
+                        # Same identity rule: the name must still be the directory that was aged.
+                        try:
+                            _now = os.lstat(_name, dir_fd=dirfd)
+                            if (_now.st_dev, _now.st_ino) == (_swept.st_dev, _swept.st_ino):
+                                os.rmdir(_name, dir_fd=dirfd)
+                        except OSError:
+                            pass
+                    else:
+                        _remove_own_stage(dirfd, _name, _swept_fd)
+                finally:
+                    _close_quietly(_swept_fd)
         except BaseException:
             # KEEP THE FINDINGS if there are any and they made it to disk. Unlinking here
             # destroyed the hits this scan had just written, and the refusal that follows cannot
