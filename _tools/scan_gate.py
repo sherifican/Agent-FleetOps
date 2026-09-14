@@ -605,8 +605,12 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
         break
     if stage_fd is None:
         return False
-    keep_stage = False
-    published = False
+    # RETENTION IS THE DEFAULT FROM THE MOMENT A STAGE EXISTS. Round thirty set keep_stage only on
+    # the error paths it thought of, and a KeyboardInterrupt between two writes took none of
+    # them: the finally saw False and deleted three bytes of evidence. The flag now starts True
+    # and is cleared in exactly one place — after a confirmed publication — so cancellation,
+    # or any exit this code did not anticipate, keeps whatever reached the stage.
+    keep_stage = True
     written = 0
     try:
         try:
@@ -622,15 +626,15 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                 n = os.write(stage_fd, body[written:])
                 if n <= 0:
                     # A write that reports no progress would otherwise spin here forever. It is
-                    # not a partial success; it is a failure that has not raised.
-                    keep_stage = written > 0
+                    # not a partial success; it is a failure that has not raised. The stage is
+                    # kept (retention is the default); an empty stage is harmless under the
+                    # temporary prefix and a partial one is evidence.
                     return False
                 written += n
         except OSError:
-            # A PARTIAL COPY IS KEPT under the temporary prefix when any bytes reached it — an
-            # explicitly partial artifact that claims nothing, per the staging policy — because
-            # the alternative measured by the gate was deleting the only recoverable bytes.
-            keep_stage = written > 0
+            # A PARTIAL COPY IS KEPT under the temporary prefix — an explicitly partial artifact
+            # that claims nothing, per the staging policy — because the alternative measured by
+            # the gate was deleting the only recoverable bytes.
             return False
         # EVERY BYTE HAS BEEN WRITTEN BEFORE THIS FUNCTION LINKS A RESERVED NAME. That is an
         # ordering statement, not a durability one: nothing here is fsync'd, and other reserved
@@ -645,20 +649,26 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                 # stage descriptor into a fresh stage; the recursion is bounded by the writer
                 # having to win the same race again, and the limits section says so.
                 keep_stage = True         # whatever stands at the old stage name is not ours
-                return _copy_out_unpublished(dirfd, stage_fd) if depth < 1 else False
+                if depth >= 1:
+                    # THE BOUND. Round thirty wrote "bounded to one level" and passed depth
+                    # unchanged, so the bound was a comment; the gate drove it to RecursionError.
+                    # A writer who takes the stage name twice in a row defeats retention here,
+                    # and the limits section says so.
+                    return False
+                return _copy_out_unpublished(dirfd, stage_fd, depth + 1)
             except OSError:
                 continue                  # occupied or unusable — the next name
             # THE LINK IS THE HELD INODE BY CONSTRUCTION: it was made through the descriptor
-            # directory, which cannot attach anything else. No confirmation is needed after it.
-            published = True
+            # directory, which cannot attach anything else. This is the one place retention is
+            # released — the bytes now have a reserved name.
+            keep_stage = False
             return True
         # EVERY RESERVED NAME WAS TAKEN — AND THE STAGE IS KEPT. The previous shape deleted a
         # completed recovery stage here and the caller then closed the last descriptor: zero
         # copies of the findings, eight occupied names untouched. A completed stage under the
         # scanner's own temporary prefix promises nothing and claims nothing, which makes it the
         # right place for evidence that no reserved name will take.
-        keep_stage = True
-        return False
+        return False                      # retention still on: the stage is the only copy
     finally:
         _close_quietly(stage_fd)
         # THE STAGE IS REMOVED ONLY WHEN IT HAS BEEN PUBLISHED under a confirmed reserved name, or
@@ -1282,14 +1292,22 @@ def _open_held_copy(dirfd, name, expect):
         fd = os.open(name, flags, dir_fd=dirfd)
     except OSError:
         return None, False
+    # THE ACQUISITION INTERVAL IS OWNED HERE. Between the open and the return the caller has
+    # not received the descriptor, so its cleanup cannot close it; an interrupt in this window
+    # leaked the handle (measured by the gate). Ordinary OSError still answers (None, False);
+    # anything else closes and re-raises.
     try:
-        got = os.fstat(fd)
-    except OSError:
+        try:
+            got = os.fstat(fd)
+        except OSError:
+            _close_quietly(fd)
+            return None, False
+        if not stat.S_ISREG(got.st_mode) or (got.st_dev, got.st_ino) != (expect.st_dev, expect.st_ino):
+            _close_quietly(fd)
+            return None, False
+    except BaseException:
         _close_quietly(fd)
-        return None, False
-    if not stat.S_ISREG(got.st_mode) or (got.st_dev, got.st_ino) != (expect.st_dev, expect.st_ino):
-        _close_quietly(fd)
-        return None, False
+        raise
     return fd, via_proc
 
 
@@ -1421,17 +1439,27 @@ def _replace_canonical_guarded(dirfd, tmp_name, fd, slot_guard):
     sibling. The review leg's structural advice was to put the shared preconditions in one
     publication path, so that there is no second branch to forget — this is that path.
 
-    Returns True after replacing. Returns False when the preserved slot no longer refers to the
-    inode that was preserved: the authorization was computed earlier and is not spent. Raises
-    when the staged name has stopped naming the staged inode, which is the caller's existing
-    refusal reason.
+    Returns True after replacing. Returns False when the authorization no longer applies: the
+    preserved slot no longer refers to the inode that was preserved, OR the canonical name no
+    longer refers to the inode preservation classified. Raises when the staged name has stopped
+    naming the staged inode, which is the caller's existing refusal reason.
+
+    The second refusal is round thirty-one's. The authorization used to say only "the copy of
+    what I saw is still there"; it never said WHAT it had seen. So a findings report B that
+    arrived at the canonical name after report A was preserved was replaced on A's authority —
+    nobody had preserved B, and the guard for A could not tell. The gate substituted B during
+    the policy install and watched it go. Now the authorization names the inode it authorizes
+    destroying, and is refused when the name has stopped reaching it.
     """
     named = os.lstat(tmp_name, dir_fd=dirfd)
     held = os.fstat(fd)
     if (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino):
         raise OSError(errno.EIO, "report-staged-name-diverged")
-    # THE AUTHORIZATION IS RE-CHECKED WHERE IT IS SPENT, not only where it was computed.
+    # THE AUTHORIZATION IS RE-CHECKED WHERE IT IS SPENT, not only where it was computed — and it
+    # is checked on BOTH ends: the copy preservation kept, and the original it was a copy of.
     if not _slot_still_holds(dirfd, slot_guard):
+        return False
+    if not _canonical_still_classified(dirfd, slot_guard):
         return False
     os.replace(tmp_name, _REPORT_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
     return True
@@ -1463,14 +1491,42 @@ def _slot_still_holds(dirfd, guard):
     This does not close the interval between its own check and the following rename — nothing in
     POSIX can — and it is not offered as if it did. It closes the wide one.
     """
-    if not guard:
+    slots = [entry for entry in guard if entry[0] == "slot"]
+    if not slots:
         return True                       # nothing was preserved; nothing to re-check
-    name, dev, ino = guard[0]
+    _tag, name, dev, ino = slots[0]
     try:
         seen = os.lstat(name, dir_fd=dirfd)
     except OSError:
         return False                      # cannot confirm the copy is still there: do not spend
     return stat.S_ISREG(seen.st_mode) and (seen.st_dev, seen.st_ino) == (dev, ino)
+
+
+def _canonical_still_classified(dirfd, guard):
+    """Does the canonical name still refer to what preservation classified?
+
+    `_preserve_superseded` records the identity of the report it looked at — regular file,
+    status line, absent — as the first thing it learns, before any slot is taken. This asks
+    whether that is still what the name reaches. A different inode there is a report nobody
+    classified and nobody preserved, and replacing it is not what the caller was authorized to
+    do. A recorded absence must still be an absence for the same reason.
+
+    The interval between this check and the following rename is the documented limit (§5 of the
+    README's limits); the interval between preservation and this check no longer is.
+    """
+    canon = [entry for entry in guard if entry[0] == "canonical"]
+    if not canon:
+        return True                       # preservation was not consulted; nothing recorded
+    _tag, name, dev, ino = canon[-1]
+    try:
+        seen = os.lstat(name, dir_fd=dirfd)
+    except FileNotFoundError:
+        return dev is None                # absent now: only fine if it was absent then
+    except OSError:
+        return False                      # cannot confirm: do not spend
+    if dev is None:
+        return False                      # something arrived at a name that was absent
+    return (seen.st_dev, seen.st_ino) == (dev, ino)
 
 
 def _preserve_superseded(dirfd, report_name, guard_out=None):
@@ -1504,6 +1560,8 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
     try:
         previous = os.lstat(report_name, dir_fd=dirfd)
     except FileNotFoundError:
+        if guard_out is not None:
+            guard_out.append(("canonical", report_name, None, None))
         return True                       # CONFIRMED absent; nothing to lose
     except OSError:
         # COULD NOT LOOK. This answered True under a comment reading "nothing there; nothing to
@@ -1518,6 +1576,13 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         # routed into a fallback that replaces the report anyway, which is the same destruction
         # arriving by a longer path.
         return False
+    # WHAT WAS CLASSIFIED IS RECORDED BEFORE ANYTHING IS DONE ABOUT IT, so the authorization this
+    # call returns names the inode it is about — on every path below, the status-line one
+    # included. Recorded here and not beside the slot: a status line takes no slot, and the
+    # replace that follows a status-line verdict is exactly as capable of destroying a findings
+    # report that arrived afterwards.
+    if guard_out is not None:
+        guard_out.append(("canonical", report_name, previous.st_dev, previous.st_ino))
     if not stat.S_ISREG(previous.st_mode):
         return True                       # not a regular file; not ours to preserve
 
@@ -1626,7 +1691,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
     if linked is not None:
         if narrowed:
             if guard_out is not None:
-                guard_out.append((linked, previous.st_dev, previous.st_ino))
+                guard_out.append(("slot", linked, previous.st_dev, previous.st_ino))
             return True
         # THE POLICY WAS DENIED ON THE INODE WE JUST RESERVED A NAME FOR, so the replacement is
         # refused. Round twenty-three settled the shape for quarantine and preservation was left
@@ -1693,7 +1758,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             try:
                 if _narrow_held_copy(_kept_fd, _kept_via_proc):
                     if guard_out is not None:
-                        guard_out.append((candidate, previous.st_dev, previous.st_ino))
+                        guard_out.append(("slot", candidate, previous.st_dev, previous.st_ino))
                     return True           # already preserved by an earlier call; oldest wins
             finally:
                 _close_quietly(_kept_fd)
@@ -1913,10 +1978,11 @@ def _publish_refusal(dirfd, refusal):
                 _remove_own_stage(dirfd, tmp_name, fd)   # declined: the refusal stage is unneeded
                 return
         except BaseException:
-            try:
-                os.unlink(tmp_name, dir_fd=dirfd)
-            except OSError:
-                pass
+            # IDENTITY-CHECKED, not unconditional. The publication path raises precisely when the
+            # staged name has stopped being our inode — and this handler then deleted that name
+            # anyway, which the gate measured taking a foreign findings file's last link. The
+            # cleanup helper removes the stage only if it is still the inode we hold.
+            _remove_own_stage(dirfd, tmp_name, fd)
             raise
         finally:
             try:
@@ -1991,10 +2057,7 @@ def _publish_refusal(dirfd, refusal):
                     _remove_own_stage(dirfd, tmp_name, fd)
                     return
             except BaseException:
-                try:
-                    os.unlink(tmp_name, dir_fd=dirfd)
-                except OSError:
-                    pass
+                _remove_own_stage(dirfd, tmp_name, fd)   # identity-checked; see the branch above
                 raise
             finally:
                 _close_quietly(fd)

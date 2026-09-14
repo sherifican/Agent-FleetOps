@@ -242,11 +242,14 @@ scanner no longer LINKS by name at all: every reserved name it creates is made t
 descriptor directory (`linkat` on `/proc/self/fd/N`, the documented unprivileged form), which
 attaches the inode the scanner holds or fails — it cannot attach something a writer put at the
 name in between. That closes the "reserved name holds a decoy" family outright. It does not close
-the replace: `os.replace` still acts on the canonical NAME, and the guard the scanner re-checks
-immediately before it certifies the PRESERVED inode, not the canonical one about to be
-overwritten. Review reproduced that gap: preserve report A, substitute a new findings report B at
-the canonical name while the refusal is being staged, and the refusal replaces B — a report the
-scanner never preserved. A guard for A cannot authorize deleting B. Second, the one-syscall
+the replace: `os.replace` still acts on the canonical NAME. Review reproduced the gap that left:
+preserve report A, substitute a new findings report B at the canonical name while the refusal is
+being staged, and the refusal replaced B — a report the scanner never preserved. A guard for A
+cannot authorize deleting B, so the guard now names what it authorizes: preservation records the
+identity of the canonical inode it classified (or its confirmed absence), and the replace is
+refused when the name no longer reaches that inode. That closes the interval between preservation
+and the re-check. The interval between the re-check and the rename itself is what remains, and
+it is the same one-syscall gap as before. Second, the one-syscall
 primitive that would close the replace as well exists — `renameat2(2)` with `RENAME_EXCHANGE`,
 which swaps two names atomically so the old inode is never nameless — and is not used here yet;
 adopting it is a platform decision (Linux ≥ 3.15, filesystem support probed at runtime, a small

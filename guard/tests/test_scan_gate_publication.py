@@ -5790,3 +5790,199 @@ def test_the_sweep_does_not_run_without_a_reference_timestamp(tmp_path: Path) ->
     assert _findings_anywhere(reports, "src/noref.py:5"), (
         "REPAIRED: with no reference timestamp the age guard short-circuited to 'not newer' and "
         "the sweep removed a concurrent writer's retained findings. No reference means no sweep")
+
+
+# =============================================================================================
+# GROUP 40 — the thirty-first round. Four defects in the round-thirty rescue path, found by the
+# invariant leg on its fourth pass. All four are mine, and the first is the kind that should not
+# survive a re-read: the bounded recursion never passed depth+1, so the bound was a comment.
+# =============================================================================================
+
+
+def test_the_rescue_recursion_actually_advances_its_depth(tmp_path: Path) -> None:
+    """REPAIRED (F1): a bound that never advances is not a bound."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "rescue_depth")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    depths: list[int] = []
+    real = module._copy_out_unpublished
+
+    def recording(dirfd, fd, depth=0):
+        depths.append(depth)
+        return real(dirfd, fd, depth)
+    module._copy_out_unpublished = recording
+
+    real_link = module._link_held_inode
+    def link_that_always_finds_no_names(fd, candidate, dirfd):
+        # Every attempt: the stage has "lost its last name". Without an advancing depth this
+        # recurses until Python gives up.
+        raise FileNotFoundError(errno.ENOENT, "no names (injected, every time)")
+    module._link_held_inode = link_that_always_finds_no_names
+
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_WRONLY, 0o600)
+    os.write(src, b"aws\tkey\tassignment\tdocs/depth.md:1\n")
+    try:
+        result = module._copy_out_unpublished(dirfd, src)
+    finally:
+        module._copy_out_unpublished = real
+        module._link_held_inode = real_link
+        os.close(src); os.close(dirfd)
+    assert result is False, "CONTROL: with every link refused, the copy-out must answer False"
+    assert max(depths) >= 1 and len(depths) <= 3, (
+        f"REPAIRED: depths seen were {depths}. The recursion must pass depth+1 and stop at the "
+        "bound — the previous shape recursed with depth 0 every time")
+
+
+def test_an_interrupt_mid_copy_keeps_the_partial_stage(tmp_path: Path) -> None:
+    """REPAIRED (F2): retention is the default once a stage may hold bytes; cancellation keeps it."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "interrupt_keeps_stage")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    real_write = module.os.write
+    calls: list[int] = []
+
+    def write_then_interrupt(fd, data):
+        calls.append(fd)
+        if len(calls) == 1:
+            real_write(fd, data[:3])
+            raise KeyboardInterrupt
+        return real_write(fd, data)
+    module.os.write = write_then_interrupt
+
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_WRONLY, 0o600)
+    real_write(src, b"aws\tkey\tassignment\tdocs/int.md:2\n")
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._copy_out_unpublished(dirfd, src)
+    finally:
+        module.os.write = real_write
+        os.close(src); os.close(dirfd)
+    stages = [p for p in reports.iterdir() if p.name.startswith(".scan_report_") and p.name != ".scan_report_src"]
+    assert stages and stages[0].stat().st_size >= 3, (
+        "REPAIRED: a KeyboardInterrupt after three bytes were written propagated, and the finally "
+        "deleted the recovery stage those bytes were in. Retention must be the default once a "
+        "stage exists; cancellation keeps it")
+
+
+def test_refusal_cleanup_does_not_unlink_a_stage_the_guard_rejected(tmp_path: Path) -> None:
+    """REPAIRED (F3): the exception handler must not delete a name whose identity just failed."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "refusal_cleanup_foreign")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    (reports / "scan_report.txt").write_text("aws\tkey\tassignment\tdocs/old.md:1\n", encoding="utf-8")
+    real_install = module._install_posix_acl_policy
+    swapped: list[str] = []
+
+    def install_that_substitutes_the_stage(dirfd, src_name, dst_fd, dst_name):
+        # THE SUBSTITUTION: a FOREIGN findings file is put at the refusal's staged name. The
+        # identity guard in the publication path will correctly refuse — and the cleanup that
+        # follows must not delete the foreign file the guard just declined to touch.
+        foreign = reports / "foreign.txt"
+        foreign.write_text("gcp\tkey\tassignment\tsrc/foreign.py:7\n", encoding="utf-8")
+        swapped.append(dst_name)
+        os.replace(foreign, reports / dst_name)
+        return real_install(dirfd, src_name, dst_fd, dst_name)
+    module._install_posix_acl_policy = install_that_substitutes_the_stage
+    try:
+        module._write_refusal_report(str(tmp_path), module.ScanRefused("report-path-unsafe 'x'"))
+    finally:
+        module._install_posix_acl_policy = real_install
+    if not swapped:
+        pytest.skip("no refusal stage was created; this arm measured nothing")
+    assert _findings_anywhere(reports, "src/foreign.py:7"), (
+        "REPAIRED: the publication path detected that the staged name was not its inode and "
+        "raised — and the exception handler then unlinked that name anyway, deleting a foreign "
+        "findings file the guard had just refused to touch")
+
+
+def test_an_interrupt_during_acquisition_does_not_leak_the_descriptor(tmp_path: Path) -> None:
+    """REPAIRED (F4): the acquisition interval inside _open_held_copy is covered too."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "acquire_interrupt")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    rp = reports / "scan_report.txt"
+    rp.write_text("x\n", encoding="utf-8")
+    expect = os.lstat(rp)
+    real_fstat = module.os.fstat
+    opened: list[int] = []
+    real_open = module.os.open
+
+    def open_recording(*a, **k):
+        fd = real_open(*a, **k); opened.append(fd); return fd
+    def fstat_that_interrupts(fd):
+        if fd in opened:
+            raise KeyboardInterrupt
+        return real_fstat(fd)
+    module.os.open = open_recording
+    module.os.fstat = fstat_that_interrupts
+    dirfd = real_open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._open_held_copy(dirfd, "scan_report.txt", expect)
+    finally:
+        module.os.open = real_open
+        module.os.fstat = real_fstat
+        os.close(dirfd)
+    leaked = [fd for fd in opened if fd != dirfd]
+    still_open = []
+    for fd in leaked:
+        try:
+            real_fstat(fd); still_open.append(fd)
+        except OSError:
+            pass
+    for fd in still_open:
+        os.close(fd)
+    assert not still_open, (
+        f"REPAIRED: descriptor(s) {still_open} were still open after an interrupt inside "
+        "_open_held_copy. The caller never received them, so its own cleanup cannot close them")
+
+
+def test_the_replace_is_refused_when_the_canonical_inode_changed_since_preservation(
+    tmp_path: Path
+) -> None:
+    """REPAIRED: the authorization must name the inode it authorizes destroying.
+
+    Preservation classifies and links report A. The refusal then stages its body and installs
+    policy — many syscalls — and replaces the canonical NAME. If a different findings report B was
+    put at that name in between, the replace destroys B, which nobody preserved. Two legs found
+    this from different ends: one measured it and called it a wide limit, the other said it is
+    closeable — record the canonical inode at preservation time and refuse the replace when the
+    name no longer refers to it. The interval between that check and the rename remains the
+    documented limit; the interval between preservation and the check no longer is.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "canonical_changed")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    (reports / "scan_report.txt").write_text("aws\tkey\tassignment\tdocs/A.md:1\n", encoding="utf-8")
+    real_install = module._install_posix_acl_policy
+    swapped: list[str] = []
+
+    def install_that_substitutes_the_canonical(dirfd, src_name, dst_fd, dst_name):
+        # THE INTERLEAVING: after A was preserved, a NEW findings report B lands at the canonical
+        # name while the refusal body is being prepared.
+        if not swapped:
+            swapped.append("B")
+            b = reports / "B.txt"
+            b.write_text("gcp\tkey\tassignment\tsrc/B.py:2\n", encoding="utf-8")
+            os.replace(b, reports / "scan_report.txt")
+        return real_install(dirfd, src_name, dst_fd, dst_name)
+
+    module._install_posix_acl_policy = install_that_substitutes_the_canonical
+    try:
+        module._write_refusal_report(str(tmp_path), module.ScanRefused("report-path-unsafe 'x'"))
+    finally:
+        module._install_posix_acl_policy = real_install
+    if not swapped:
+        pytest.skip("the refusal never reached policy install; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/A.md:1"), "CONTROL: the preserved report A must survive"
+    assert _findings_anywhere(reports, "src/B.py:2"), (
+        "REPAIRED: the refusal replaced report B — a findings report that arrived at the canonical "
+        "name after A was preserved. A guard for A cannot authorize deleting B; the replace must be "
+        "refused when the canonical inode is no longer the one preservation saw")
