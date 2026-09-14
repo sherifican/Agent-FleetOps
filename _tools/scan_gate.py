@@ -776,18 +776,18 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
                     # was DENIED then that policy is not on the file, and linking it into a
                     # reserved name anyway reports compliance that was never installed — the gate
                     # measured exactly that, an ACL-bearing retained file at 0600 presented as
-                    # retained. Answering False keeps the BYTES: the caller leaves them at the
-                    # staged name, which promises nothing and claims nothing.
-                    return False
+                    # retained. Answering False keeps the BYTES only while the staged name is
+                    # still this inode — so that is re-asked first (round 40).
+                    return _false_or_rescue(dirfd, tmp_name, fd)
         os.fchmod(fd, _REPORT_MODE)
         # VERIFIED BEFORE A RESERVED NAME ASSERTS IT. A reserved name means "retained evidence,
         # carrying the report's access policy"; a chmod that returned without taking effect would
         # have that name assert a policy that is not on the file. Declining keeps the bytes at the
         # staged name, exactly as a denied strip does.
         if stat.S_IMODE(os.fstat(fd).st_mode) != _REPORT_MODE:
-            return False
+            return _false_or_rescue(dirfd, tmp_name, fd)
     except OSError:
-        return False
+        return _false_or_rescue(dirfd, tmp_name, fd)   # fchmod or fstat failed past the check
 
     # EXCLUSIVE, never replacing. os.link refuses an occupied name, so an earlier run's kept
     # findings cannot be overwritten to make room for this run's, and a populated directory at
@@ -1593,6 +1593,25 @@ def _narrow_leftover(fd):
         os.fchmod(fd, _REPORT_MODE)
     except OSError:
         pass
+
+
+def _false_or_rescue(dirfd, tmp_name, fd):
+    """The answer to a failure AFTER quarantine's identity check: False if the staged name is still
+    the held inode (the caller keeps the name, as before), else the descriptor-based rescue.
+
+    The strip, the fchmod and the mode verify each used to `return False` on failure, trusting the
+    identity check made three syscalls earlier. An executed on-box review renamed a decoy onto the
+    staged name during the failing call: the caller then kept "the name" — the decoy — and its
+    close freed the findings (round 40). The pre-check twin of this was closed in rounds 37–38.
+    """
+    try:
+        named = os.lstat(tmp_name, dir_fd=dirfd)
+        held = os.fstat(fd)
+        if (named.st_dev, named.st_ino) == (held.st_dev, held.st_ino):
+            return False                  # still ours by name: the caller keeps it
+    except OSError:
+        pass                              # cannot tell: treat as diverged
+    return _copy_out_unpublished(dirfd, fd)
 
 
 def _remove_stage_if_another_name_remains(dirfd, name, fd):

@@ -7200,3 +7200,69 @@ def test_a_terms_file_with_no_terms_does_not_match_everything(tmp_path: Path) ->
     assert pattern.search("nothing personal in this line") is None, (
         "REPAIRED: with no identity terms the owner-identity pattern is an empty alternation and "
         "matches every line — every file in the tree becomes a PERSONAL hit")
+
+
+# =============================================================================================
+# GROUP 49 — the fortieth round. An executed on-box review of 461db53 (33 schedules, one FAIL):
+# quarantine's failure returns AFTER its identity check trusted the name; a decoy renamed onto
+# the staged name during the failing call, plus the failure itself, left the findings unnamed.
+# =============================================================================================
+
+
+def _quarantine_with_decoy_during(module, reports: Path, patch_name: str, failing):
+    """Run quarantine on staged findings; during `patch_name`'s call, rename a decoy onto the staged
+    name and then let the call fail as `failing` says. Returns (quarantine result, fired)."""
+    stage = reports / ".scan_report_stage"
+    fd = os.open(str(stage), os.O_CREAT | os.O_RDWR, 0o600)
+    os.write(fd, b"aws\tkey\tassignment\tdocs/q.md:1\n")
+    real = getattr(module if patch_name.startswith("_") else module.os, patch_name)
+    fired: list[str] = []
+    calls: list[int] = []
+    # fstat is called twice inside quarantine: the identity read BEFORE the check, and the mode
+    # verify AFTER it. Only the second is the post-check window; firing on the first measures
+    # a different, already-closed schedule.
+    fire_on = 2 if patch_name == "fstat" else 1
+
+    def decoy_then_fail(*args, **kwargs):
+        if sys._getframe(1).f_code.co_name == "_quarantine_unpublished":
+            calls.append(1)
+        if not fired and len(calls) == fire_on and sys._getframe(1).f_code.co_name == "_quarantine_unpublished":
+            fired.append(patch_name)
+            decoy = reports / "decoy.txt"
+            decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+            os.replace(decoy, stage)                  # the staged NAME is now the decoy
+            return failing(real, *args, **kwargs)
+        return real(*args, **kwargs)
+
+    target = module if patch_name.startswith("_") else module.os
+    setattr(target, patch_name, decoy_then_fail)
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        result = module._quarantine_unpublished(dirfd, ".scan_report_stage", fd,
+                                                [("docs/q.md", 1, "SECRET", "generic_key_assignment", "c")])
+    finally:
+        setattr(target, patch_name, real)
+        os.close(fd); os.close(dirfd)
+    return result, fired
+
+
+@pytest.mark.parametrize("patch_name,failing,label", [
+    ("_strip_acl_by_fd", lambda real, *a, **k: (_ for _ in ()).throw(PermissionError(errno.EPERM, "strip denied")), "strip denied"),
+    ("fchmod", lambda real, *a, **k: (_ for _ in ()).throw(PermissionError(errno.EPERM, "fchmod failed")), "fchmod failed"),
+    ("fstat", lambda real, fd, *a, **k: os.stat_result((0o100644,) + tuple(real(fd, *a, **k))[1:10]), "mode verify failed"),
+])
+def test_quarantine_rescues_when_a_failure_after_its_identity_check_finds_the_name_taken(
+        tmp_path: Path, patch_name, failing, label) -> None:
+    """REPAIRED: a failure after the identity check must re-ask whether the name is still ours."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quarantine_post_check_" + patch_name)
+    if patch_name == "_strip_acl_by_fd" and not module._XATTR_SUPPORTED:
+        pytest.skip("no xattr layer here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    result, fired = _quarantine_with_decoy_during(module, reports, patch_name, failing)
+    if not fired:
+        pytest.skip(f"the {label} injection never fired inside quarantine; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/q.md:1"), (
+        f"REPAIRED ({label}): the staged name became a decoy during the failing call; quarantine "
+        f"returned False trusting the name it had checked earlier, and the findings are under no name")
