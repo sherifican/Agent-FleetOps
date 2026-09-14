@@ -571,10 +571,11 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
     """
     if _PROC_FD_DIR is None:
         return False
-    try:
-        os.fchmod(fd, _REPORT_MODE)
-    except OSError:
-        pass                              # best effort: the read below may still succeed
+    # THE SOURCE IS NARROWED, STRIP AND MODE, EACH BEST EFFORT. The mode so the reopen below can
+    # read it (umask 0400 leaves it 0200); the strip because an alias of this inode may survive
+    # under another name, and a mode-only narrowing leaves whatever ACL the directory gave it on
+    # that alias (invariant leg, 0c28c5e).
+    _narrow_leftover(fd)
     try:
         src = os.open("%s/%d" % (_PROC_FD_DIR, fd), os.O_RDONLY)
     except OSError:
@@ -606,13 +607,12 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
         written = 0
         try:
             try:
-                os.fchmod(stage_fd, _REPORT_MODE)   # the create mode is umask-masked; this is not
-                if _XATTR_SUPPORTED:
-                    try:
-                        _strip_acl_by_fd(stage_fd)
-                    except OSError as exc:
-                        if exc.errno not in _ACL_ABSENT:
-                            pass        # kept anyway: see the exception in this docstring
+                # THE STAGE'S CHMOD AND STRIP ARE BEST EFFORT BEFORE THE STREAM. A chmod that
+                # RAISED here sat inside the except that returns before any byte was copied, so
+                # the copy never happened and the caller's close freed the source (invariant
+                # leg, 0c28c5e). Whatever can be written is written; the mode verify after the
+                # stream still declines a reserved name when 0600 cannot be established.
+                _narrow_leftover(stage_fd)
                 # STREAMED, SOURCE TO STAGE. A read that fails partway leaves what was read on the
                 # stage, and retention is already on; the failure returns False with the bytes kept.
                 try:
@@ -714,12 +714,17 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
     if not _staged_holds_evidence(fd, hits):
         return False
     try:
-        held = os.fstat(fd)
+        # A FAILED IDENTITY READ IS NOT "THE STAGE STILL HAS A NAME". This fstat used to sit in a
+        # block whose handler returned False, so one failed metadata read on a source whose name
+        # was already gone took no custody and attempted no rescue; the close freed the last copy
+        # (invariant leg, 0c28c5e). Either half failing means custody by name cannot be
+        # established, and the descriptor-based copy is attempted before the caller releases it.
         try:
+            held = os.fstat(fd)
             named = os.lstat(tmp_name, dir_fd=dirfd)
             diverged = (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino)
         except OSError:
-            diverged = True               # the name is gone, or cannot be read: same situation
+            diverged = True               # the name is gone, unreadable, or unverifiable: same situation
         if diverged:
             # THE NAME NO LONGER REACHES THESE BYTES, AND THE BYTES ARE STILL HERE. Answering
             # False was right about custody and wrong about consequence: the caller reads the
@@ -1075,21 +1080,25 @@ def _stage_report(dirfd, body, evidence=False):
             # beside a refusal is the confusion the rest of this file exists to prevent.
             keep = evidence
             try:
-                if keep:
-                    try:
-                        keep = os.fstat(fd).st_size > 0
-                    except OSError:
-                        keep = True       # cannot tell; keeping is the direction that cannot lose
-                # The unlink is identity-checked through the descriptor, so it runs BEFORE the
-                # close: a name that has stopped being this inode is someone else's and is left.
-                if not keep:
-                    _remove_own_stage(dirfd, name, fd)
-                else:
-                    # KEPT, READABLE, AND STRIPPED. The caller never receives this descriptor, so
-                    # the policy install and the quarantine cannot narrow a kept partial stage;
-                    # under a umask that masks owner read it sat at 0200, and with a default ACL
-                    # on the directory it kept the inherited entries (cold leg, twice).
-                    _narrow_leftover(fd)
+                try:
+                    if keep:
+                        try:
+                            keep = os.fstat(fd).st_size > 0
+                        except OSError:
+                            keep = True   # cannot tell; keeping is the direction that cannot lose
+                    # The unlink is identity-checked through the descriptor, so it runs BEFORE
+                    # the close: a name that has stopped being this inode is someone else's.
+                    if not keep:
+                        _remove_own_stage(dirfd, name, fd)
+                finally:
+                    # KEPT, READABLE, AND STRIPPED — IN CLEANUP THAT RUNS REGARDLESS. The caller
+                    # never receives this descriptor, so nothing downstream can narrow a kept
+                    # partial stage; under a umask that masks owner read it sat at 0200, with a
+                    # default ACL it kept the inherited entries, and a cancellation during the
+                    # size read jumped past the narrowing (invariant leg, three rounds). `keep`
+                    # is still True here on that cancellation, so the stage is narrowed anyway.
+                    if keep:
+                        _narrow_leftover(fd)
             finally:
                 _close_quietly(fd)        # under finally: a cancellation in the cleanup leaked it
             raise
@@ -1239,8 +1248,13 @@ def write_report(staging, hits):
                         _swept_fd = os.open(_name, getattr(os, "O_PATH", os.O_RDONLY) | _NOFOLLOW_FLAG,
                                             dir_fd=dirfd)
                         _swept = os.fstat(_swept_fd)
-                        if _swept.st_ctime_ns > _staged_ctime_ns:
-                            continue      # newer than this run's own staging; not ours to end
+                        if _swept.st_ctime_ns >= _staged_ctime_ns:
+                            # NOT STRICTLY OLDER — including EQUAL. A retained entry created in
+                            # the same tick as this run's stage has the same ctime on a real
+                            # filesystem (invariant leg measured it, no clock mocked). Equality is
+                            # not age; only a strictly older entry is this run's to end. ctime is
+                            # still not provenance and not a monotonic clock — those are limits.
+                            continue
                     except FileNotFoundError:
                         continue          # already gone; nothing to remove
                     except OSError:

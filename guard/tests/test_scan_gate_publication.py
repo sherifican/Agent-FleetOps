@@ -6876,3 +6876,184 @@ def test_a_kept_stage_after_a_failed_quarantine_has_its_acl_stripped(tmp_path: P
     assert staged[0] in stripped, (
         "REPAIRED: the stage kept after a failed quarantine was fchmod'd and never stripped; the "
         "leftover keeps whatever ACL its directory gave it")
+
+
+# =============================================================================================
+# GROUP 47 — the thirty-eighth round. The invariant leg's FIX-FORWARD on 0c28c5e.
+# =============================================================================================
+
+
+def _rescue_source(reports: Path) -> int:
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_WRONLY, 0o600)
+    os.write(src, b"aws\tkey\tassignment\tdocs/int.md:2\n"); os.close(src)
+    return os.open(str(reports / ".scan_report_src"), os.O_RDONLY)
+
+
+def test_a_raising_stage_chmod_does_not_stop_the_rescue_copy(tmp_path: Path) -> None:
+    """REPAIRED (F1): the stage's chmod sat inside the except that returns before the stream."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "rescue_chmod_raises")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    src = _rescue_source(reports)
+    real_fchmod = module.os.fchmod
+
+    def fchmod_that_raises_on_the_stage(fd, mode):
+        if fd != src and sys._getframe(1).f_code.co_name == "_copy_out_unpublished":
+            raise PermissionError(errno.EPERM, "injected chmod failure on the stage")
+        return real_fchmod(fd, mode)
+
+    os.unlink(reports / ".scan_report_src")          # the source's only name is gone: the rescue's case
+    module.os.fchmod = fchmod_that_raises_on_the_stage
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._copy_out_unpublished(dirfd, src)
+    finally:
+        module.os.fchmod = real_fchmod
+        os.close(src); os.close(dirfd)
+    assert any(p.stat().st_size > 0 for p in reports.iterdir() if p.name.startswith(".scan_report_")) \
+        or _findings_anywhere(reports, "docs/int.md:2"), (
+        "REPAIRED: a chmod that RAISED on the stage returned before the stream; the source was never "
+        "copied, and the caller's close would have been the end of it")
+
+
+def test_a_failed_held_identity_read_in_quarantine_still_reaches_the_rescue(tmp_path: Path) -> None:
+    """REPAIRED (F2): `held = os.fstat(fd)` failing returned False without a rescue attempt."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quarantine_fstat_fails")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    stage = reports / ".scan_report_stage"
+    fd = os.open(str(stage), os.O_CREAT | os.O_RDWR, 0o600)
+    os.write(fd, b"aws\tkey\tassignment\tdocs/q.md:1\n")
+    os.unlink(stage)                                  # the source's only name is gone
+    real_fstat = module.os.fstat
+    seen: list[int] = []
+
+    def fstat_that_fails_once_in_quarantine(f, *a, **k):
+        if f == fd and not seen and sys._getframe(1).f_code.co_name == "_quarantine_unpublished":
+            seen.append(f)
+            raise OSError(errno.EIO, "injected identity read failure")
+        return real_fstat(f, *a, **k)
+
+    module.os.fstat = fstat_that_fails_once_in_quarantine
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._quarantine_unpublished(dirfd, ".scan_report_stage", fd,
+                                       [("docs/q.md", 1, "SECRET", "generic_key_assignment", "c")])
+    finally:
+        module.os.fstat = real_fstat
+        os.close(fd); os.close(dirfd)
+    if not seen:
+        pytest.skip("the held-identity read never ran; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/q.md:1"), (
+        "REPAIRED: one failed metadata read on an already-unnamed source returned False with no "
+        "rescue attempt; the close freed the last copy")
+
+
+def test_the_sweep_leaves_an_entry_whose_ctime_equals_the_stage(tmp_path: Path) -> None:
+    """REPAIRED (F3): 'older than' must exclude equality; equal ctimes happen on real filesystems."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "sweep_equal_ctime")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    other = reports / "scan_report.unpublished.txt"
+    other.write_text("gcp\tkey\tassignment\tsrc/other.py:2\n", encoding="utf-8")
+    real_fstat = module.os.fstat
+    stamp: list[int] = []
+    faked: list[int] = []
+
+    def fstat_with_an_equal_ctime_for_the_swept_entry(f, *a, **k):
+        st = real_fstat(f, *a, **k)
+        caller = sys._getframe(1).f_code.co_name
+        if caller == "write_report":
+            if not stamp:
+                stamp.append(st.st_ctime_ns)          # the reference stamp, read first
+                return st
+            if stat.S_ISREG(st.st_mode) and st.st_size == other.stat().st_size and not faked:
+                faked.append(f)
+                fields = (st.st_mode, st.st_ino, st.st_dev, st.st_nlink, st.st_uid, st.st_gid, st.st_size,
+                          st.st_atime, st.st_mtime, st.st_ctime)
+                return os.stat_result(fields, {"st_atime_ns": st.st_atime_ns, "st_mtime_ns": st.st_mtime_ns,
+                                               "st_ctime_ns": stamp[0]})
+        return st
+
+    module.os.fstat = fstat_with_an_equal_ctime_for_the_swept_entry
+    try:
+        module.write_report(str(staging), [])
+    finally:
+        module.os.fstat = real_fstat
+    if not faked:
+        pytest.skip("the sweep never read the entry's age; this arm measured nothing")
+    assert _findings_anywhere(reports, "src/other.py:2"), (
+        "REPAIRED: an entry whose ctime EQUALS the stage's was swept as 'older'; a concurrent "
+        "writer's retained findings created in the same tick are deleted")
+
+
+def test_the_rescue_strips_its_source_as_well_as_its_copy(tmp_path: Path) -> None:
+    """REPAIRED (F4): the rescue fchmods its source and never strips it; a surviving alias keeps the ACL."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "rescue_source_strip")
+    if not module._XATTR_SUPPORTED:
+        pytest.skip("no xattr layer here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    src = _rescue_source(reports)
+    real_strip = module._strip_acl_by_fd
+    stripped: list[int] = []
+    module._strip_acl_by_fd = lambda fd: stripped.append(fd)
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._copy_out_unpublished(dirfd, src)
+    finally:
+        module._strip_acl_by_fd = real_strip
+        os.close(src); os.close(dirfd)
+    assert src in stripped, (
+        "REPAIRED: the rescue narrowed its source by mode alone; an alias of that inode left behind "
+        "keeps whatever ACL its directory gave it")
+
+
+def test_a_partial_stage_kept_through_a_cancelled_size_read_is_still_narrowed(tmp_path: Path) -> None:
+    """REPAIRED (F4b): the narrowing must sit in cleanup that still runs when the size read is cancelled."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "partial_keep_cancel_narrow")
+    if not module._XATTR_SUPPORTED:
+        pytest.skip("no xattr layer here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    real_open, real_fdopen, real_strip = module.os.open, module.os.fdopen, module._strip_acl_by_fd
+    opened: list[int] = []
+    stripped: list[int] = []
+
+    def open_and_record(path, flags, *a, **k):
+        fd = real_open(path, flags, *a, **k)
+        if sys._getframe(1).f_code.co_name == "_stage_report":
+            opened.append(fd)
+        return fd
+
+    class _HalfWriter:
+        def __init__(self, wrapped): self._wrapped = wrapped
+        def __enter__(self): return self
+        def __exit__(self, *exc): return self._wrapped.__exit__(*exc)
+        def write(self, data):
+            self._wrapped.write(data[: max(1, len(data) // 2)]); self._wrapped.flush()
+            raise OSError(errno.EFBIG, "injected write failure")
+
+    seen: list[int] = []
+    real_fstat, cancelling = _fstat_that_cancels(module, opened, "_stage_report", seen)
+    module.os.open, module.os.fdopen, module.os.fstat = open_and_record, (lambda *a, **k: _HalfWriter(real_fdopen(*a, **k))), cancelling
+    module._strip_acl_by_fd = lambda fd: stripped.append(fd)
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._stage_report(dirfd, "aws\tkey\tassignment\tdocs/x.md:1\n", evidence=True)
+    finally:
+        module.os.open, module.os.fdopen, module.os.fstat, module._strip_acl_by_fd = real_open, real_fdopen, real_fstat, real_strip
+        os.close(dirfd)
+    if not seen:
+        pytest.skip("the size read never ran; this arm measured nothing")
+    _assert_closed(seen[0], "the partial stage's descriptor (cancelled during the size read)")
+    assert seen[0] in stripped, (
+        "REPAIRED: the partial stage kept through a cancelled size read was never narrowed — the "
+        "narrowing sat after the read instead of in the cleanup that runs regardless")
