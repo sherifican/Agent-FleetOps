@@ -7436,3 +7436,37 @@ def test_the_post_check_identity_helper_reads_the_held_side_first(tmp_path: Path
     assert answer is True or _findings_anywhere(reports, "docs/q.md:1"), (
         "REPAIRED: a swap between the two identity syscalls was missed — the helper compared a stale "
         "name lookup and answered False")
+
+
+# =============================================================================================
+# GROUP 51 — the forty-third round. Gate 38's invariant leg (Gemini): with the ACL strip denied
+# (or no xattr API at all), each refusal over the SAME findings inode took a fresh preservation
+# slot — eight refusals of one report exhaust the capacity the README calls finite.
+# =============================================================================================
+
+
+def test_the_same_findings_inode_never_takes_a_second_slot(tmp_path: Path) -> None:
+    """REPAIRED: a second name for an inode already in a slot gains nothing and costs a slot."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "one_slot_per_inode")
+    if not module._XATTR_SUPPORTED:
+        pytest.skip("no xattr layer here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    (reports / "scan_report.txt").write_text("aws\tkey\tassignment\tdocs/A.md:1\n", encoding="utf-8")
+    real_strip = module._strip_acl_by_fd
+
+    def strip_denied(fd):
+        raise PermissionError(errno.EPERM, "injected: strip denied")
+
+    module._strip_acl_by_fd = strip_denied
+    try:
+        for _ in range(3):
+            module._write_refusal_report(str(tmp_path), module.ScanRefused("report-path-unsafe 'x'"))
+    finally:
+        module._strip_acl_by_fd = real_strip
+    slots = sorted(p.name for p in reports.iterdir() if p.name.startswith("scan_report.superseded"))
+    assert _findings_anywhere(reports, "docs/A.md:1"), "CONTROL: the findings must survive the refusals"
+    assert len(slots) == 1, (
+        f"REPAIRED: three refusals over ONE findings inode took {len(slots)} slots ({slots}); a "
+        f"report whose policy cannot be installed must not consume the finite capacity once per refusal")

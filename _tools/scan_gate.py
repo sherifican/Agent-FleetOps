@@ -1249,7 +1249,8 @@ def write_report(staging, hits):
             if (_named.st_dev, _named.st_ino) != (_held.st_dev, _held.st_ino):
                 raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
             os.replace(tmp_name, _REPORT_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
-            _published = True
+            _published = True             # a cancellation between these two statements reaches
+                                          # the handler unflagged: a duplicate copy, no loss
             # A fresh scan has just published a report, so anything preserved from an EARLIER
             # generation is stale. Leaving it meant the sibling slot stayed occupied and the next
             # refusal could not keep the findings this run produced — measured: an old report's
@@ -1473,7 +1474,9 @@ def _narrow_held_copy(fd, via_proc):
         os.chmod(target, _REPORT_MODE)
     except OSError:
         return False
-    # THE ANSWER IS WHETHER THE POLICY IS ON THE INODE, not whether chmod returned. The publish
+    # THE ANSWER IS WHETHER THE POLICY IS VERIFIED ON THE INODE, not whether chmod returned —
+    # and where it cannot be verified (no xattr API: the early return above) the answer is
+    # False, which is the platform limit the README states. The publish
     # path has verified its fchmod by fstat since round seventeen; this path answered True on
     # the return code alone, and a chmod that returns without taking effect (a filesystem that
     # ignores mode bits) would then record a slot and authorize the replace while the preserved
@@ -1778,7 +1781,22 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         return True                       # not a regular file; not ours to preserve
 
     linked = None
+    # THE SAME INODE NEVER TAKES A SECOND SLOT. The link loop below takes the first FREE name,
+    # and the "already preserved" scan ran only when no name was free — so every refusal over a
+    # report whose policy could not be installed (a denied strip; no xattr API at all) linked
+    # the same inode into a fresh slot, and eight refusals of one report exhausted the capacity
+    # the README calls finite (gate 38, measured: three refusals, three slots). A slot that
+    # already holds this inode is used as-is; a free name is taken only when none does.
     for candidate in _superseded_slot_names():
+        try:
+            kept = os.lstat(candidate, dir_fd=dirfd)
+        except OSError:
+            continue
+        if (stat.S_ISREG(kept.st_mode)
+                and (kept.st_dev, kept.st_ino) == (previous.st_dev, previous.st_ino)):
+            linked = candidate
+            break
+    for candidate in (_superseded_slot_names() if linked is None else ()):
         try:
             os.link(report_name, candidate, src_dir_fd=dirfd, dst_dir_fd=dirfd,
                     follow_symlinks=False)
@@ -1987,7 +2005,10 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
 
 def _write_refusal_report(staging, refusal):
     """Best-effort: replace an EXISTING report with a single REFUSED line, so that a stale CLEAN
-    does not survive beside an rc 2 wherever this function can reach it.
+    does not survive beside an rc 2 wherever this function can reach it. A stale CLEAN is
+    replaced on every platform; a FINDINGS report is replaced only where its preserved copy's
+    access policy can be verified (POSIX ACL xattr API present) — elsewhere it is left standing,
+    which is the safe direction and a stated limit.
 
     NEVER RAISES AN ERROR, and never blocks — the two halves of a contract whose point is that
     this function must not displace the failure it was called to report. The gate asked for the

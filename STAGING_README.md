@@ -260,6 +260,12 @@ adopting it is a platform decision (Linux ≥ 3.15, filesystem support probed at
 `ctypes` shim because `os.replace` exposes no flags) and is recorded as the next step rather than
 claimed.
 
+Also not a concurrency limit: **the access-policy guarantees are for POSIX-ACL filesystems with the
+xattr API.** Where that API is absent the scanner cannot verify that a preserved copy carries no
+ACL, so it answers "not verified": a stale CLEAN is still replaced by a refusal, but a FINDINGS
+report is never replaced there — it is left standing, unnarrowed beyond its mode, which is the safe
+direction. One preservation slot is used per distinct report, never more.
+
 Also not a concurrency limit: **a leftover whose ACL strip was denied keeps its inherited entries.**
 Findings the scanner could not publish or reserve are left under the temporary `.scan_report_*`
 prefix, narrowed as far as it can — mode 0600, so any inherited named-user or named-group entry is
