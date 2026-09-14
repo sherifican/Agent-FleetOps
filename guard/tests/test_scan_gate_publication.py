@@ -5135,6 +5135,7 @@ def test_staged_findings_survive_the_staged_name_being_unlinked(tmp_path: Path) 
 
 
 def test_a_slot_swapped_after_the_link_does_not_release_the_findings(tmp_path: Path) -> None:
+    _A_MARK = "docs/swapped.md:5"
     """REPAIRED: classification must describe the inode that was preserved, not the name."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "slot_swapped_status_line")
@@ -5170,12 +5171,17 @@ def test_a_slot_swapped_after_the_link_does_not_release_the_findings(tmp_path: P
         "REPAIRED: the findings are gone. A planted status line at the slot name was classified "
         "as THIS scan's preserved copy, the slot was released, and the replacement was authorized "
         "over the only remaining name for the real findings")
-    assert authorized is False, (
+    _a_under_a_slot = [p.name for p in reports.iterdir() if p.name.startswith("scan_report.superseded")
+                       and _A_MARK in p.read_text(encoding="utf-8", errors="replace")]
+    # Since round forty-six the link is made from the held inode, a swapped slot is detected by the
+    # helper and the NEXT slot is taken, so A is preserved and the replacement is rightly authorized.
+    assert authorized is False or _a_under_a_slot, (
         "REPAIRED: the replacement was authorized on the strength of a file this scan never "
         "preserved. The slot no longer held the inode that was linked into it")
 
 
 def test_a_slot_swapped_after_the_link_is_not_reported_as_narrowed(tmp_path: Path) -> None:
+    _A_MARK = "docs/narrowed.md:8"
     """REPAIRED: narrowing a planted file must not count as installing policy on our inode."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "slot_swapped_narrow")
@@ -5204,7 +5210,11 @@ def test_a_slot_swapped_after_the_link_is_not_reported_as_narrowed(tmp_path: Pat
 
     if not swapped:
         pytest.skip("no link was made, so no slot could be swapped")
-    assert authorized is False, (
+    _a_under_a_slot = [p.name for p in reports.iterdir() if p.name.startswith("scan_report.superseded")
+                       and _A_MARK in p.read_text(encoding="utf-8", errors="replace")]
+    # Since round forty-six the link is made from the held inode, a swapped slot is detected by the
+    # helper and the NEXT slot is taken, so A is preserved and the replacement is rightly authorized.
+    assert authorized is False or _a_under_a_slot, (
         "REPAIRED: the policy was installed on a planted file and reported as installed on the "
         "preserved inode, which then authorized replacing the report")
     assert _findings_anywhere(reports, "docs/narrowed.md:8"), (
@@ -7847,3 +7857,126 @@ def test_the_link_helper_confirms_custody_with_the_name_last(tmp_path: Path) -> 
     assert custody == "declined", (
         "REPAIRED: a decoy swapped onto the reserved name between the helper's two identity syscalls "
         "was reported as custody taken — the helper compared a stale name lookup")
+
+
+# =============================================================================================
+# GROUP 54 — the forty-sixth round. Gate 41's cold leg (grok) on e1c1404: preservation still
+# linked the canonical NAME, so a report substituted between the lookup and the link took a
+# reserved second name; a post-link confirmation error was read as "slot unusable" and the same
+# inode took a second slot; and a write-only stage could not be read back by the rescue when the
+# reopen through the descriptor directory was refused.
+# =============================================================================================
+
+
+def test_preservation_links_the_inode_it_recorded_not_whatever_the_name_holds(tmp_path: Path) -> None:
+    """REPAIRED (cold #1, gate 41): a report substituted at the canonical name between preservation's
+    lookup and its link must not get a reserved name; the recorded inode is what is preserved."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "preserve_links_inode")
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    canonical = reports / "scan_report.txt"
+    canonical.write_text("aws\tkey\tassignment\tdocs/A.md:1\n", encoding="utf-8")
+    os.chmod(canonical, 0o600)
+    real_link = module.os.link
+    fired: list[str] = []
+
+    def substitute_then_link(*a, **k):
+        callers = {sys._getframe(1).f_code.co_name, sys._getframe(2).f_code.co_name}
+        if "_preserve_superseded" in callers and not fired:      # by name, or via the link helper
+            fired.append("link")
+            decoy = reports / "decoy.txt"
+            decoy.write_text("aws\tkey\tassignment\tdocs/B.md:1\n", encoding="utf-8")
+            os.chmod(decoy, 0o644)
+            os.replace(decoy, canonical)              # B now stands at the canonical name, wide
+        return real_link(*a, **k)
+
+    module.os.link = substitute_then_link
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        module.os.link = real_link
+        os.close(dirfd)
+    if not fired:
+        pytest.skip("preservation never linked; this arm measured nothing")
+    slots = [p for p in reports.iterdir() if p.name.startswith("scan_report.superseded")]
+    b_named = [p.name for p in slots if "docs/B.md" in p.read_text(encoding="utf-8", errors="replace")]
+    assert not b_named, (
+        f"REPAIRED: the substituted report B took a reserved second name {b_named} (mode "
+        f"{[oct(p.stat().st_mode & 0o777) for p in slots]}) — preservation linked the NAME, not the recorded inode")
+    assert _findings_anywhere(reports, "docs/A.md:1"), "REPAIRED: the recorded report A was not preserved"
+
+
+def test_an_unconfirmed_custody_never_takes_a_second_reserved_name(tmp_path: Path) -> None:
+    """REPAIRED (cold #2, gate 41): a confirmation error AFTER a successful link means custody may have
+    been taken; the caller must not move on to link the same inode into the next slot."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "unconfirmed_custody")
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_RDWR, 0o600)
+    os.write(src, b"aws\tkey\tassignment\tdocs/u.md:1\n")
+    real_lstat = module.os.lstat
+    fired: list[str] = []
+
+    def lstat_eio_once(path, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_link_held_inode" and not fired:
+            fired.append("lstat"); raise OSError(errno.EIO, "injected confirmation failure")
+        return real_lstat(path, *a, **k)
+
+    module.os.lstat = lstat_eio_once
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._copy_out_unpublished(dirfd, src)
+    finally:
+        module.os.lstat = real_lstat
+        os.close(src); os.close(dirfd)
+    if not fired:
+        pytest.skip("the post-link confirmation never ran; this arm measured nothing")
+    by_inode: dict[tuple[int, int], list[str]] = {}
+    for p in reports.iterdir():
+        if p.name.startswith("scan_report.unpublished"):
+            st = p.stat(); by_inode.setdefault((st.st_dev, st.st_ino), []).append(p.name)
+    doubled = {k: v for k, v in by_inode.items() if len(v) >= 2}
+    assert not doubled, (
+        f"REPAIRED: one inode holds several reserved names {doubled} — a confirmation error after a "
+        f"successful link was read as 'slot unusable' and the next slot was linked too")
+    assert _findings_anywhere(reports, "docs/u.md:1"), "CONTROL: the findings must survive"
+
+
+def test_a_rescue_reads_the_held_descriptor_when_the_reopen_is_refused(tmp_path: Path) -> None:
+    """REPAIRED (cold #3, gate 41): a stage the rescue cannot reopen through the descriptor directory
+    (a 0200 stage whose chmod did not stick) must still be copied from the descriptor it holds."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "rescue_pread_fallback")
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    fd, name = module._stage_report(dirfd, "aws\tkey\tassignment\tdocs/r.md:1\n", evidence=True)
+    os.unlink(str(reports / name))                    # the staged name has diverged; the fd is the last reference
+    real_open = module.os.open
+    refused: list[str] = []
+
+    def refuse_the_proc_reopen(path, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_copy_out_unpublished" and str(path).startswith(module._PROC_FD_DIR):
+            refused.append(str(path)); raise PermissionError(errno.EACCES, "injected: reopen refused (0200)")
+        return real_open(path, *a, **k)
+
+    module.os.open = refuse_the_proc_reopen
+    try:
+        module._copy_out_unpublished(dirfd, fd)
+    finally:
+        module.os.open = real_open
+        os.close(fd); os.close(dirfd)
+    if not refused:
+        pytest.skip("the rescue never tried the reopen; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/r.md:1"), (
+        "REPAIRED: the reopen through the descriptor directory was refused and the rescue gave up; the "
+        "held descriptor was the last reference and the close freed the findings")

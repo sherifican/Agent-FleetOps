@@ -516,6 +516,16 @@ def _staged_holds_evidence(fd, hits):
         return True
 
 
+class _CustodyUnconfirmed(OSError):
+    """The link succeeded and the confirmation after it did not: custody MAY have been taken.
+
+    Distinct from FileNotFoundError ("no custody was taken") and from the OSError a refused link
+    raises ("this name was never ours"), because callers react to those by moving to the next
+    reserved name — and moving on after a successful link gives the same inode a second reserved
+    name (cold leg, e1c1404). A caller that sees this stops linking and keeps its stage.
+    """
+
+
 def _link_held_inode(fd, candidate, dirfd):
     """Give the inode behind FD a new name — binding the link to the INODE, not to a pathname.
 
@@ -544,8 +554,14 @@ def _link_held_inode(fd, candidate, dirfd):
     # link and this lstat, in which the candidate name can be replaced. It is the post-link
     # match the cold review leg named as its SHIP bar. A mismatch is
     # reported as ENOENT so every caller takes its rescue path rather than claiming custody.
-    held = os.fstat(fd)                   # the held side first —
-    linked = os.lstat(candidate, dir_fd=dirfd)   # the name LAST: it is what custody is claimed over
+    try:
+        held = os.fstat(fd)               # the held side first —
+        linked = os.lstat(candidate, dir_fd=dirfd)   # the name LAST: it is what custody is claimed over
+    except OSError as exc:
+        # THE LINK IS MADE AND THE CONFIRMATION FAILED. Neither "no custody" nor "not ours":
+        # the reserved name may well hold the inode. Reported as its own class so no caller
+        # reads it as a free slot and links the next one (cold leg, e1c1404).
+        raise _CustodyUnconfirmed(errno.EIO, "custody-unconfirmed-after-link") from exc
     if (linked.st_dev, linked.st_ino) != (held.st_dev, held.st_ino):
         raise FileNotFoundError(errno.ENOENT, "linked-name-is-not-the-held-inode")
     return True
@@ -572,7 +588,8 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
     a local variable and the caller's next close freed the last inode reference (cold leg,
     3c075f0). Now whatever was read is on disk when the read fails, and the stage is kept.
     What this cannot do is retain without one creatable temporary name and a readable source;
-    when neither can be had the bytes are not on disk, and that is the limit, stated.
+    when EITHER cannot be had no copy is made, the bytes stay only on the held inode, and the
+    caller's next close frees them if no name still reaches it — that is the limit, stated.
     """
     if _PROC_FD_DIR is None:
         return False
@@ -581,13 +598,24 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
     # under another name, and a mode-only narrowing leaves whatever ACL the directory gave it on
     # that alias (invariant leg, 0c28c5e).
     _narrow_leftover(fd)
+    # THE SOURCE IS READ THROUGH THE DESCRIPTOR DIRECTORY, OR FROM THE HELD DESCRIPTOR ITSELF.
+    # The reopen needs owner-read on the mode, which the narrowing above installs best-effort
+    # and does not verify; when it is refused, a descriptor that was opened for reading — the
+    # scanner's own stages are O_RDWR since round forty-six — is read with pread, which depends
+    # on no mode at all (cold leg, e1c1404). What stays unreadable is a write-only or path-only
+    # descriptor whose reopen is refused: the "readable source" half of the limit stated above.
+    src = None
     try:
         src = os.open("%s/%d" % (_PROC_FD_DIR, fd), os.O_RDONLY)
     except OSError:
-        return False
+        try:
+            os.pread(fd, 1, 0)            # EBADF on a descriptor not open for reading
+        except OSError:
+            return False
+    _src_off = 0
     try:
         nofollow = getattr(os, "O_NOFOLLOW", 0)
-        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow
+        flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | nofollow   # readable: a nested rescue can pread it
         stage_name = None
         stage_fd = None
         keep_stage = True                 # set before the open, with `written`, so the acquisition
@@ -633,11 +661,18 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                 # STREAMED, SOURCE TO STAGE. A read that fails partway leaves what was read on the
                 # stage, and retention is already on; the failure returns False with the bytes kept.
                 # A failure BEFORE THE FIRST BYTE leaves nothing, and an empty stage is not
-                # evidence: retention is released so the finally removes it by identity (an
-                # executed review of d7e4a3c found the first-read failure keeping one forever).
+                # evidence: an error releases retention, and the finally removes an EMPTY stage
+                # by identity whether or not retention was released — a cancellation here
+                # releases nothing, and the stage is removed because it is measured empty (an
+                # executed review of d7e4a3c found the first-read failure keeping one forever;
+                # gate 41 found this comment claiming the release for the cancellation too).
                 try:
                     while True:
-                        chunk = os.read(src, 65536)
+                        if src is not None:
+                            chunk = os.read(src, 65536)
+                        else:
+                            chunk = os.pread(fd, 65536, _src_off)
+                            _src_off += len(chunk)
                         if not chunk:
                             break
                         off = 0
@@ -687,6 +722,10 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                     if depth >= 1:
                         return False
                     return _copy_out_unpublished(dirfd, stage_fd, depth + 1)
+                except _CustodyUnconfirmed:
+                    # THE LINK MAY HAVE LANDED. The next name would be a second one for this
+                    # inode; the stage keeps the bytes (retention is on) and no more is tried.
+                    return False
                 except OSError:
                     continue              # occupied or unusable — the next name
                 # THE LINK IS THE HELD INODE BY CONSTRUCTION: it was made through the descriptor
@@ -727,7 +766,8 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
             finally:
                 _close_quietly(stage_fd)
     finally:
-        _close_quietly(src)
+        if src is not None:
+            _close_quietly(src)
 
 def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
     """Keep a staged findings report the publish could not complete. Answer whether it was kept.
@@ -828,6 +868,10 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
             # answer. The rescue is the same one the pre-link divergence gets: copy the bytes
             # out through the descriptor. Nothing at the old staged name is ours to remove.
             return _copy_out_unpublished(dirfd, fd)
+        except _CustodyUnconfirmed:
+            # THE LINK MAY HAVE LANDED. False here means "no custody confirmed" and nothing
+            # more: the stage is left where it is, and no second reserved name is tried.
+            return False
         except OSError:
             continue                      # occupied, unusable, or unsupported — try the next
         # THE LINK IS THE HELD INODE BY CONSTRUCTION — made through the descriptor directory,
@@ -1098,7 +1142,10 @@ def _stage_report(dirfd, body, evidence=False):
     published under it.
     """
     nofollow = getattr(os, "O_NOFOLLOW", 0)
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow
+    # O_RDWR, NOT O_WRONLY: the rescue reads a diverged stage back through this descriptor when
+    # the reopen by the descriptor directory is refused (a 0200 stage whose chmod did not stick —
+    # cold leg, e1c1404). A write-only descriptor could only be read by that reopen.
+    flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | nofollow
     last = None
     for _ in range(_STAGE_ATTEMPTS):
         name = ".scan_report_" + "".join(
@@ -1168,8 +1215,9 @@ def _stage_report(dirfd, body, evidence=False):
                         # inside it jumped past (invariant leg, 4632326). Still ours: the name
                         # keeps the bytes. Swapped or unlinked: the bytes are copied out through
                         # the descriptor to a reserved name before the close would free them —
-                        # where a descriptor directory exists and a temporary name can be
-                        # made, which is the limit `_copy_out_unpublished` states.
+                        # where a descriptor directory exists, a temporary name can be made
+                        # and the source can be read, which is the limit `_copy_out_unpublished`
+                        # states.
                         try:
                             _narrow_leftover(fd)
                         finally:
@@ -1349,7 +1397,9 @@ def write_report(staging, hits):
                     # THE SWEEP IS AN AGE RULE INSIDE A SCANNER-OWNED NAMESPACE — the README's reserved
                     # names — and, since round thirty-five, it is applied to the inode that was aged
                     # and to nothing else: the entry is held open above, and the removal below is by
-                    # identity through that descriptor. What the rule cannot do is know who created an
+                    # identity — through that descriptor for a file; for a directory, which rmdir can only
+                    # take by name, by an lstat of the name immediately before the rmdir compared with the
+                    # held entry (invariant leg, e1c1404). What the rule cannot do is know who created an
                     # entry; a reserved name is scanner-owned by declaration, not by provenance.
                     if stat.S_ISDIR(_swept.st_mode):
                         # A directory at that name cannot be unlinked, and gate review reproduced
@@ -1386,8 +1436,9 @@ def write_report(staging, hits):
                 # because every destination was occupied. The gate measured the alternative — a
                 # populated directory at the quarantine name cost a run its findings. "Where
                 # they are" is the staged NAME while it still reaches them; a name that diverged
-                # is rescued by copy through the descriptor, which needs a descriptor directory
-                # and a creatable temporary name — the limit `_copy_out_unpublished` states.
+                # is rescued by copy through the descriptor, which needs a descriptor directory,
+                # a creatable temporary name and a readable source — the limit
+                # `_copy_out_unpublished` states.
                 # IDENTITY-CHECKED, like every other unlink of a name this file created. This
                 # was the CLEAN twin of the refusal writer's round-31 defect: a staged status
                 # line's cleanup unlinked the NAME, and the name had become findings report B's
@@ -1849,14 +1900,39 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
                 and (kept.st_dev, kept.st_ino) == (previous.st_dev, previous.st_ino)):
             linked = candidate
             break
-    for candidate in (_superseded_slot_names() if linked is None else ()):
-        try:
-            os.link(report_name, candidate, src_dir_fd=dirfd, dst_dir_fd=dirfd,
-                    follow_symlinks=False)
-        except OSError:
-            continue                      # occupied, unusable, or unsupported — try the next
-        linked = candidate
-        break
+    # THE LINK IS MADE FROM A HELD DESCRIPTOR, NOT FROM THE NAME. This was the one reserved-name
+    # link still made by pathname, and the cold leg reproduced what the README said that costs:
+    # a report substituted at the canonical name between the lookup above and the link took a
+    # reserved second name at whatever mode it had (e1c1404). The canonical name is opened and
+    # bound by identity to `previous`; the link is then the recorded inode by construction. A
+    # name that no longer holds that inode preserves nothing, and the replacement is declined.
+    _cfd = None
+    if linked is None:
+        _cfd, _cvia = _open_held_copy(dirfd, report_name, previous)
+        if _cfd is None:
+            return False
+    try:
+        for candidate in (_superseded_slot_names() if linked is None else ()):
+            try:
+                _link_held_inode(_cfd, candidate, dirfd)
+            except FileNotFoundError:
+                continue                  # no custody: taken under us, or the inode has no name left
+            except _CustodyUnconfirmed:
+                return False              # custody may have landed; a second name must not follow
+            except OSError:
+                continue                  # occupied, unusable, or unsupported — try the next
+            linked = candidate
+            break
+        if linked is None and _cfd is not None:
+            # NO SLOT TOOK THE HELD INODE. If its name has meanwhile stopped reaching it — the
+            # substitution that used to hand a decoy a reserved name now leaves the recorded
+            # inode with this descriptor as its last reference — the bytes are copied out
+            # through the descriptor to an unpublished name, the same rescue every stage path
+            # gets. Still at its name: nothing to do, and the replacement is declined below.
+            _false_or_rescue(dirfd, report_name, _cfd)
+    finally:
+        if _cfd is not None:
+            _close_quietly(_cfd)
 
     held_fd, held_via_proc = (None, False)
     if linked is not None:
