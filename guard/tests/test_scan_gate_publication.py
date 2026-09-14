@@ -6758,3 +6758,121 @@ def test_a_publish_cancelled_in_the_reference_stamp_read_still_closes_the_stage(
     if not seen:
         pytest.skip("the reference-stamp read never ran; this arm measured nothing")
     _assert_closed(seen[0], "the staged report descriptor (cancelled during the reference-stamp read)")
+
+
+# =============================================================================================
+# GROUP 46 — the thirty-seventh round. The cold leg's two on 3c075f0: the rescue read the whole
+# source into memory before any stage existed, so a mid-read failure lost the last copy; and
+# kept leftover stages were narrowed by mode alone, never stripped of an inherited ACL.
+# =============================================================================================
+
+
+def test_a_rescue_read_that_fails_midway_keeps_the_bytes_it_had(tmp_path: Path) -> None:
+    """REPAIRED (cold #1): the retained stage must exist BEFORE the source is read; partial reads land in it."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "rescue_partial_read")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    body = (b"aws\tkey\tassignment\tdocs/first.md:1\n" * 3000)   # > one 64 KiB read
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_WRONLY, 0o600)
+    os.write(src, body); os.close(src)
+    src = os.open(str(reports / ".scan_report_src"), os.O_RDONLY)
+    real_read = module.os.read
+    calls: list[int] = []
+
+    def read_then_fail(fd, n):
+        if sys._getframe(1).f_code.co_name == "_copy_out_unpublished":
+            calls.append(fd)
+            if len(calls) == 2:
+                raise OSError(5, "injected read failure")
+        return real_read(fd, n)
+
+    module.os.read = read_then_fail
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        published = module._copy_out_unpublished(dirfd, src)
+    finally:
+        module.os.read = real_read
+        os.close(src); os.close(dirfd)
+    if len(calls) < 2:
+        pytest.skip("the rescue never reached its second read; this arm measured nothing")
+    assert published is False, "CONTROL: a failed copy must not report custody"
+    kept = [p for p in reports.iterdir() if p.name.startswith(".scan_report_") and p.name != ".scan_report_src"]
+    assert kept and kept[0].stat().st_size >= 65536, (
+        f"REPAIRED: the read failed after one chunk and the rescue returned with nothing on disk "
+        f"({[(p.name, p.stat().st_size) for p in kept]}) — the bytes it already had were dropped with the stack")
+
+
+def test_a_kept_partial_stage_has_its_acl_stripped(tmp_path: Path) -> None:
+    """REPAIRED (cold #2a): the keep path narrows by mode alone; an inherited ACL survives on the leftover."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "partial_keep_strip")
+    if not module._XATTR_SUPPORTED:
+        pytest.skip("no xattr layer: no strip is possible here")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_fdopen, real_strip = module.os.fdopen, module._strip_acl_by_fd
+    stripped: list[int] = []
+    opened: list[int] = []
+    real_open = module.os.open
+
+    def open_and_record(path, flags, *a, **k):
+        fd = real_open(path, flags, *a, **k)
+        if sys._getframe(1).f_code.co_name == "_stage_report":
+            opened.append(fd)
+        return fd
+
+    class _HalfWriter:
+        def __init__(self, wrapped): self._wrapped = wrapped
+        def __enter__(self): return self
+        def __exit__(self, *exc): return self._wrapped.__exit__(*exc)
+        def write(self, data):
+            self._wrapped.write(data[: max(1, len(data) // 2)]); self._wrapped.flush()
+            raise OSError(errno.EFBIG, "injected write failure")
+
+    module.os.open = open_and_record
+    module.os.fdopen = lambda *a, **k: _HalfWriter(real_fdopen(*a, **k))
+    module._strip_acl_by_fd = lambda fd: stripped.append(fd)
+    try:
+        with pytest.raises(Exception):
+            module.write_report(str(staging), [("docs/k.md", 1, "SECRET", "generic_key_assignment", "contents")])
+    finally:
+        module.os.open, module.os.fdopen, module._strip_acl_by_fd = real_open, real_fdopen, real_strip
+    if not opened:
+        pytest.skip("no stage was created; this arm measured nothing")
+    assert opened[-1] in stripped, (
+        "REPAIRED: the kept partial stage was left with whatever ACL its directory gave it; the "
+        "keep path must attempt the strip, as every other retained inode does")
+
+
+def test_a_kept_stage_after_a_failed_quarantine_has_its_acl_stripped(tmp_path: Path) -> None:
+    """REPAIRED (cold #2b): write_report's kept-stage branch fchmods and never strips."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "kept_stage_strip")
+    if not module._XATTR_SUPPORTED:
+        pytest.skip("no xattr layer: no strip is possible here")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_install, real_quarantine, real_strip = module._install_posix_acl_policy, module._quarantine_unpublished, module._strip_acl_by_fd
+    stripped: list[int] = []
+    staged: list[int] = []
+
+    def install_that_fails(dirfd, src_name, dst_fd, dst_name):
+        staged.append(dst_fd)
+        raise OSError(5, "injected policy failure")
+
+    module._install_posix_acl_policy = install_that_fails
+    module._quarantine_unpublished = lambda dirfd, tmp_name, fd, hits: False   # custody not taken
+    module._strip_acl_by_fd = lambda fd: stripped.append(fd)
+    try:
+        with pytest.raises(Exception):
+            module.write_report(str(staging), [("docs/k.md", 1, "SECRET", "generic_key_assignment", "contents")])
+    finally:
+        module._install_posix_acl_policy, module._quarantine_unpublished, module._strip_acl_by_fd = real_install, real_quarantine, real_strip
+    if not staged:
+        pytest.skip("the policy install never ran; this arm measured nothing")
+    assert staged[0] in stripped, (
+        "REPAIRED: the stage kept after a failed quarantine was fchmod'd and never stripped; the "
+        "leftover keeps whatever ACL its directory gave it")

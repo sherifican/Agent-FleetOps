@@ -560,16 +560,17 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
     evidence rather than merely decline to label it. The mode
     is set through the descriptor either way, so a strip that is denied leaves the file at 0600
     with its entries masked to nothing rather than at whatever the umask allowed.
+
+    THE RETAINED STAGE EXISTS BEFORE THE FIRST BYTE IS READ, and the copy is streamed into it.
+    The previous shape read the whole source into memory and only then created a stage, so a
+    read that failed midway, or a stage that could not be created, returned with the bytes in
+    a local variable and the caller's next close freed the last inode reference (cold leg,
+    3c075f0). Now whatever was read is on disk when the read fails, and the stage is kept.
+    What this cannot do is retain without one creatable temporary name and a readable source;
+    when neither can be had the bytes are not on disk, and that is the limit, stated.
     """
     if _PROC_FD_DIR is None:
         return False
-    # THE SOURCE'S OWN MODE IS INSTALLED BEFORE IT IS READ BACK, and leaving that out made this
-    # whole path unreachable exactly when it was needed. _stage_report creates at 0600 and that
-    # number is UMASK-MASKED: at umask 0400 the staged inode is 0200 — owner-write, no owner-read
-    # — and the descriptor held over it is O_WRONLY. Reopening it through the descriptor
-    # directory for reading is then refused for its own owner, the copy returns False, and the
-    # caller closes the last reference to the findings. The ordinary quarantine path has always
-    # fchmod'd the source before linking it; this one was added later and never did.
     try:
         os.fchmod(fd, _REPORT_MODE)
     except OSError:
@@ -579,137 +580,104 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
     except OSError:
         return False
     try:
-        chunks = []
-        while True:
-            chunk = os.read(src, 65536)
-            if not chunk:
-                break
-            chunks.append(chunk)
-    except OSError:
-        return False
-    finally:
-        _close_quietly(src)
-    body = b"".join(chunks)
-    if not body:
-        return False                      # nothing readable; there is no evidence to carry
-    # STAGE FIRST, RESERVE AFTERWARDS. The previous shape created the reserved name and wrote
-    # into it, so a write that failed partway left a fragment under a name that means "retained
-    # evidence" — and the only thing that would have removed it is an unlink allowed to fail. A
-    # leg measured exactly that: a refused unlink left two bytes standing under the reserved name.
-    # Writing into a private staged name first makes the reservation an atomic link of a file that
-    # is already complete, which is the discipline the quarantine path has used all along.
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow
-    stage_name = None
-    stage_fd = None
-    for _ in range(_STAGE_ATTEMPTS):
-        name = ".scan_report_" + "".join(
-            _STAGE_ALPHABET[b % len(_STAGE_ALPHABET)] for b in os.urandom(8))
-        try:
-            stage_fd = os.open(name, flags, _REPORT_MODE, dir_fd=dirfd)
-        except FileExistsError:
-            continue
-        except OSError:
-            return False
-        stage_name = name
-        break
-    if stage_fd is None:
-        return False
-    # RETENTION IS THE DEFAULT FROM THE MOMENT A STAGE EXISTS. Round thirty set keep_stage only on
-    # the error paths it thought of, and a KeyboardInterrupt between two writes took none of
-    # them: the finally saw False and deleted three bytes of evidence. The flag now starts True
-    # and is cleared in exactly one place — after a confirmed publication — so cancellation,
-    # or any exit this code did not anticipate, keeps whatever reached the stage.
-    keep_stage = True
-    written = 0
-    try:
-        try:
-            os.fchmod(stage_fd, _REPORT_MODE)   # the create mode is umask-masked; this is not
-            if _XATTR_SUPPORTED:
-                try:
-                    _strip_acl_by_fd(stage_fd)
-                except OSError as exc:
-                    if exc.errno not in _ACL_ABSENT:
-                        pass            # kept anyway: see the exception in this docstring
-            written = 0
-            while written < len(body):
-                n = os.write(stage_fd, body[written:])
-                if n <= 0:
-                    # A write that reports no progress would otherwise spin here forever. It is
-                    # not a partial success; it is a failure that has not raised. The stage is
-                    # kept (retention is the default); an empty stage is harmless under the
-                    # temporary prefix and a partial one is evidence.
-                    return False
-                written += n
-            # THE BYTES ARE ON DISK BEFORE ANY DECISION ABOUT A RESERVED NAME. Round thirty-four
-            # put the mode verification above the copy, so a mismatch declined the name with an
-            # EMPTY stage kept as "the only copy" (invariant leg, 3c075f0). The deliberate
-            # exception below (a denied strip still takes a reserved name) rests on the mode
-            # being 0600 with the entries masked; if the mode did not land, the reserved name is
-            # declined — and the stage, now holding the bytes, is kept.
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow
+        stage_name = None
+        stage_fd = None
+        for _ in range(_STAGE_ATTEMPTS):
+            name = ".scan_report_" + "".join(
+                _STAGE_ALPHABET[b % len(_STAGE_ALPHABET)] for b in os.urandom(8))
             try:
-                if stat.S_IMODE(os.fstat(stage_fd).st_mode) != _REPORT_MODE:
+                stage_fd = os.open(name, flags, _REPORT_MODE, dir_fd=dirfd)
+            except FileExistsError:
+                continue
+            except OSError:
+                return False              # no creatable name: the stated limit
+            stage_name = name
+            break
+        if stage_fd is None:
+            return False                  # every attempt collided: the stated limit
+        # RETENTION IS THE DEFAULT FROM THE MOMENT A STAGE EXISTS. Round thirty set keep_stage only on
+        # the error paths it thought of, and a KeyboardInterrupt between two writes took none of
+        # them: the finally saw False and deleted three bytes of evidence. The flag now starts True
+        # and is cleared in exactly one place — after a confirmed publication — so cancellation,
+        # or any exit this code did not anticipate, keeps whatever reached the stage.
+        keep_stage = True
+        written = 0
+        try:
+            try:
+                os.fchmod(stage_fd, _REPORT_MODE)   # the create mode is umask-masked; this is not
+                if _XATTR_SUPPORTED:
+                    try:
+                        _strip_acl_by_fd(stage_fd)
+                    except OSError as exc:
+                        if exc.errno not in _ACL_ABSENT:
+                            pass        # kept anyway: see the exception in this docstring
+                # STREAMED, SOURCE TO STAGE. A read that fails partway leaves what was read on the
+                # stage, and retention is already on; the failure returns False with the bytes kept.
+                try:
+                    while True:
+                        chunk = os.read(src, 65536)
+                        if not chunk:
+                            break
+                        off = 0
+                        while off < len(chunk):
+                            n = os.write(stage_fd, chunk[off:])
+                            if n <= 0:
+                                # A write that reports no progress would otherwise spin here
+                                # forever. It is a failure that has not raised; the stage is kept.
+                                return False
+                            off += n
+                            written += n
+                except OSError:
+                    return False          # the stage holds what was read; retention is on
+                if written == 0:
+                    keep_stage = False    # nothing readable: an empty stage is not evidence
+                    return False
+                # THE BYTES ARE ON DISK BEFORE ANY DECISION ABOUT A RESERVED NAME. The deliberate
+                # exception above (a denied strip still takes a reserved name) rests on the mode
+                # being 0600 with the entries masked; if the mode did not land, the reserved name
+                # is declined — and the stage, holding the bytes, is kept.
+                try:
+                    if stat.S_IMODE(os.fstat(stage_fd).st_mode) != _REPORT_MODE:
+                        return False
+                except OSError:
                     return False
             except OSError:
                 return False
-        except OSError:
-            # A PARTIAL COPY IS KEPT under the temporary prefix — an explicitly partial artifact
-            # that claims nothing, per the staging policy — because the alternative measured by
-            # the gate was deleting the only recoverable bytes.
-            return False
-        # EVERY BYTE HAS BEEN WRITTEN BEFORE THIS FUNCTION LINKS A RESERVED NAME. That is an
-        # ordering statement, not a durability one: nothing here is fsync'd, and other reserved
-        # names may already exist. os.link refuses an occupied name, so an earlier run's
-        # retained findings cannot be overwritten to make room.
-        for candidate in _unpublished_slot_names():
-            try:
-                _link_held_inode(stage_fd, candidate, dirfd)
-            except FileNotFoundError:
-                # NO CUSTODY WAS TAKEN — the link helper refused, or its post-link check did — and
-                # the descriptor is the only thing holding the bytes. One more copy, from the
-                # stage descriptor into a fresh stage; the recursion is bounded by the writer
-                # having to win the same race again, and the limits section says so.
-                keep_stage = True         # whatever stands at the old stage name is not ours
-                if depth >= 1:
-                    # THE BOUND. Round thirty wrote "bounded to one level" and passed depth
-                    # unchanged, so the bound was a comment; the gate drove it to RecursionError.
-                    # A writer who takes the stage name twice in a row defeats retention here,
-                    # and the limits section says so.
-                    return False
-                return _copy_out_unpublished(dirfd, stage_fd, depth + 1)
-            except OSError:
-                continue                  # occupied or unusable — the next name
-            # THE LINK IS THE HELD INODE BY CONSTRUCTION: it was made through the descriptor
-            # directory, which cannot attach anything else. This is the one place retention is
-            # released — the bytes now have a reserved name.
-            keep_stage = False
-            return True
-        # EVERY RESERVED NAME WAS TAKEN — AND THE STAGE IS KEPT. The previous shape deleted a
-        # completed recovery stage here and the caller then closed the last descriptor: zero
-        # copies of the findings, eight occupied names untouched. A completed stage under the
-        # scanner's own temporary prefix promises nothing and claims nothing, which makes it the
-        # right place for evidence that no reserved name will take.
-        return False                      # retention still on: the stage is the only copy
-    finally:
-        # THE STAGE IS REMOVED ONLY WHEN IT HAS BEEN PUBLISHED under a confirmed reserved name,
-        # and only while its name still refers to the inode that was published. The sibling of
-        # the refusal writer's round-31 repair: the reserved link was verified and the stage
-        # NAME was then unlinked unverified, and a findings report B whose last name that had
-        # become was deleted (invariant leg, f153122). The check runs through the still-open
-        # descriptor, before it is closed. A stage holding bytes that reached no reserved name
-        # is kept: it is the only copy. Cleanup is attempted, not guaranteed: a foreign inode at
-        # the name is left, and a failed unlink leaves an extra name under the temporary prefix,
-        # which loses nothing. The interval between the check and its unlink is the documented
-        # limit, not a claim of atomicity.
-        # THE CLOSE IS UNDER ITS OWN FINALLY. Round thirty-two put the identity cleanup before the
-        # close (it needs the descriptor) and left the close after it unprotected; a cancellation
-        # inside the cleanup's lstat leaked the descriptor at three sites (invariant leg, 0829b97).
-        try:
-            if stage_name is not None and not keep_stage:
-                _remove_own_stage(dirfd, stage_name, stage_fd)
+            for candidate in _unpublished_slot_names():
+                try:
+                    _link_held_inode(stage_fd, candidate, dirfd)
+                except FileNotFoundError:
+                    # NO CUSTODY WAS TAKEN — the link helper refused, or its post-link check did — and
+                    # the stage keeps the bytes. One further copy is attempted (depth bounds it to
+                    # one level); past that the stage is kept under the temporary prefix.
+                    keep_stage = True
+                    if depth >= 1:
+                        return False
+                    return _copy_out_unpublished(dirfd, stage_fd, depth + 1)
+                except OSError:
+                    continue              # occupied or unusable — the next name
+                # THE LINK IS THE HELD INODE BY CONSTRUCTION: it was made through the descriptor
+                # directory, which cannot attach anything else. This is the one place retention is
+                # released — the bytes now have a reserved name.
+                keep_stage = False
+                return True
+            # EVERY RESERVED NAME WAS TAKEN — AND THE STAGE IS KEPT. A completed stage under the
+            # scanner's own temporary prefix promises nothing and claims nothing, which makes it the
+            # right place for evidence that no reserved name will take.
+            return False                  # retention still on: the stage is the only copy
         finally:
-            _close_quietly(stage_fd)
-
+            # THE CLOSE IS UNDER ITS OWN FINALLY. Round thirty-two put the identity cleanup before the
+            # close (it needs the descriptor) and left the close after it unprotected; a cancellation
+            # inside the cleanup's lstat leaked the descriptor at three sites (invariant leg, 0829b97).
+            try:
+                if stage_name is not None and not keep_stage:
+                    _remove_own_stage(dirfd, stage_name, stage_fd)
+            finally:
+                _close_quietly(stage_fd)
+    finally:
+        _close_quietly(src)
 
 def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
     """Keep a staged findings report the publish could not complete. Answer whether it was kept.
@@ -1117,13 +1085,11 @@ def _stage_report(dirfd, body, evidence=False):
                 if not keep:
                     _remove_own_stage(dirfd, name, fd)
                 else:
-                    # KEPT, AND READABLE. The caller never receives this descriptor, so the
-                    # policy install and the quarantine cannot set the mode on a kept partial
-                    # stage; under a umask that masks owner read it sat at 0200 (cold leg).
-                    try:
-                        os.fchmod(fd, _REPORT_MODE)
-                    except OSError:
-                        pass
+                    # KEPT, READABLE, AND STRIPPED. The caller never receives this descriptor, so
+                    # the policy install and the quarantine cannot narrow a kept partial stage;
+                    # under a umask that masks owner read it sat at 0200, and with a default ACL
+                    # on the directory it kept the inherited entries (cold leg, twice).
+                    _narrow_leftover(fd)
             finally:
                 _close_quietly(fd)        # under finally: a cancellation in the cleanup leaked it
             raise
@@ -1324,17 +1290,14 @@ def write_report(staging, hits):
                 if not _staged_holds_evidence(fd, hits):
                     _remove_own_stage(dirfd, tmp_name, fd)
                 else:
-                    # KEPT, AND READABLE BY ITS OWNER. The stage is created at the umask-masked
-                    # mode, which can be 0200; quarantine only sets the published mode on the
-                    # path that reserves a name. A kept stage whose policy could not be
-                    # installed, or whose evidence could not be read, was left at that create
-                    # mode — evidence nobody could read (two cold-leg residuals, rounds 24 and
-                    # 25). Best effort, through the held descriptor; the stage still promises
-                    # nothing and claims nothing.
-                    try:
-                        os.fchmod(fd, _REPORT_MODE)
-                    except OSError:
-                        pass
+                    # KEPT, READABLE BY ITS OWNER, AND STRIPPED. The stage is created at the
+                    # umask-masked mode, which can be 0200, with whatever ACL the directory gave
+                    # it; quarantine only installs the policy on the path that reserves a name. A
+                    # kept stage whose policy could not be installed, or whose evidence could not
+                    # be read, was left at that create mode — evidence nobody could read (rounds
+                    # 24 and 25) — and later with its inherited entries (cold leg, 3c075f0). Best
+                    # effort, through the held descriptor; the stage still promises nothing.
+                    _narrow_leftover(fd)
             raise
         finally:
             _close_quietly(fd)
@@ -1560,6 +1523,25 @@ def _replace_canonical_guarded(dirfd, tmp_name, fd, slot_guard):
         raise OSError(errno.EIO, "report-staged-name-diverged")
     os.replace(tmp_name, _REPORT_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
     return True
+
+
+def _narrow_leftover(fd):
+    """A kept leftover the caller never receives gets the strip and the mode, best effort.
+
+    Two keep paths — a partial stage after a write failure, and a stage kept after a failed
+    quarantine — set the mode and never attempted the strip, so a findings inode with whatever
+    ACL its directory gave it sat under a name that promises nothing (cold leg, 3c075f0). The
+    leftover still claims nothing; it is simply as narrow as this code can make it.
+    """
+    if _XATTR_SUPPORTED:
+        try:
+            _strip_acl_by_fd(fd)
+        except OSError:
+            pass
+    try:
+        os.fchmod(fd, _REPORT_MODE)
+    except OSError:
+        pass
 
 
 def _remove_own_stage(dirfd, tmp_name, fd):
