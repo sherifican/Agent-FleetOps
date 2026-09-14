@@ -386,8 +386,9 @@ def _install_posix_acl_policy(dirfd, src_name, dst_fd, dst_name):
     change of policy. A different gid is repaired where possible and refuses where not.
     """
     try:
-        # The staged inode itself, held open. Nothing between here and the publish reads the
-        # staged file by name, so nothing between here and the publish can be redirected.
+        # The staged inode itself, held open. The only thing between here and the publish that
+        # touches the staged NAME is the identity check immediately before the rename, so a
+        # redirection in between is detected rather than published.
         staged = os.fstat(dst_fd)
 
         try:
@@ -436,8 +437,9 @@ def _install_posix_acl_policy(dirfd, src_name, dst_fd, dst_name):
 # CLEAN survived beside an rc 2 because the one slot was taken, so the scanner declined to
 # invalidate a report that falsely said this tree had passed. Occupancy of one name must not be
 # able to deny preservation, so a bounded set of alternates is tried in order.
-# RESERVED NAMESPACE. These eight names in _reports/ belong to this scanner and are DELETED
-# after any successful publication, whoever wrote them. Before this became a set, seven of them
+# RESERVED NAMESPACE. These eight names in _reports/ belong to this scanner and are SWEPT after
+# a successful publication when they are older than the report that publication staged — an
+# entry newer than it, or whose age cannot be read, is left — whoever wrote them. Before this became a set, seven of them
 # were ordinary filenames a user could have used; gate review measured a pre-existing file at
 # scan_report.superseded.1.txt being destroyed by an ordinary clean scan, with no race and no
 # permission failure involved. A filename does not establish provenance, so the reservation is
@@ -515,8 +517,11 @@ def _link_held_inode(fd, candidate, dirfd):
     linkat(2) through the descriptor directory with AT_SYMLINK_FOLLOW is the documented,
     unprivileged way to link a held inode (the AT_EMPTY_PATH form needs CAP_DAC_READ_SEARCH).
     Measured on this box: while the inode still has at least one name the new link IS the held
-    inode; once its link count is zero the call fails ENOENT rather than linking anything else.
-    So this either attaches OUR bytes to CANDIDATE, or it fails — it cannot attach a decoy.
+    inode; once its link count is zero the call fails (ENOENT on the measured kernel) rather than
+    linking anything else. So this either attaches OUR bytes to CANDIDATE, or it fails — it
+    cannot attach a decoy. ENOENT out of this helper therefore means "no custody was taken": the
+    kernel refused, or the post-link identity check below did. It does not prove the link count
+    is zero, and no caller relies on that.
 
     Returns True on success. Raises FileNotFoundError when the inode has no names left (the
     caller's rescue path), and other OSError for an occupied or unusable candidate.
@@ -546,8 +551,9 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
 
     ONE DELIBERATE EXCEPTION IS TAKEN HERE, and it is the mirror of the one preservation takes.
     Everywhere else a reserved name is refused when the access policy could not be installed on
-    the file behind it. Here the copy is kept even then, because this is the ONLY remaining copy:
-    refusing the name would destroy the evidence rather than merely decline to label it. The mode
+    the file behind it. Here the copy is kept even then, because it may be the only remaining
+    copy — the source's names are not known from here — and refusing the name could destroy the
+    evidence rather than merely decline to label it. The mode
     is set through the descriptor either way, so a strip that is denied leaves the file at 0600
     with its entries masked to nothing rather than at whatever the umask allowed.
     """
@@ -943,7 +949,7 @@ def _open_dir_nofollow(name, parent_fd):
 
 
 def _makedirs_owner_only(path):
-    """Create a directory chain in which EVERY component is owner-only, resolving each step
+    """Create a directory chain in which every component THIS CALL CREATES is owner-only, resolving each step
     against a HELD DESCRIPTOR rather than a pathname.
 
     Two findings met here, one from each review leg, and they are the same defect seen from
@@ -1256,6 +1262,18 @@ def write_report(staging, hits):
                 # last one (cold leg, f153122).
                 if not _staged_holds_evidence(fd, hits):
                     _remove_own_stage(dirfd, tmp_name, fd)
+                else:
+                    # KEPT, AND READABLE BY ITS OWNER. The stage is created at the umask-masked
+                    # mode, which can be 0200; quarantine only sets the published mode on the
+                    # path that reserves a name. A kept stage whose policy could not be
+                    # installed, or whose evidence could not be read, was left at that create
+                    # mode — evidence nobody could read (two cold-leg residuals, rounds 24 and
+                    # 25). Best effort, through the held descriptor; the stage still promises
+                    # nothing and claims nothing.
+                    try:
+                        os.fchmod(fd, _REPORT_MODE)
+                    except OSError:
+                        pass
             raise
         finally:
             _close_quietly(fd)
@@ -1885,7 +1903,14 @@ def _write_refusal_report(staging, refusal):
     ADDS owner write, while removing group and other access. It is narrower for every reader
     other than the owner, which is the property that matters here, and the earlier blanket
     "never wider" was wrong."""
-    reports_dir = os.path.join(staging, "_reports")
+    # "NEVER RAISES" STARTS AT THE FIRST LINE. os.path.join on a staging value that is not a
+    # path raised TypeError before any guard below was reached; a leg traced it in round 27 and
+    # the ledger carried it unfixed for five rounds. A refusal writer with nothing to write into
+    # returns, as it does for every other unreachable directory.
+    try:
+        reports_dir = os.path.join(staging, "_reports")
+    except (TypeError, ValueError):
+        return
     if os.path.islink(reports_dir) or not os.path.isdir(reports_dir):
         # KNOWN STRUCTURAL LIMITATION, left in place deliberately and pinned by an arm.
         #
@@ -2090,6 +2115,13 @@ def _publish_refusal(dirfd, refusal):
                         if exc.errno not in _ACL_ABSENT:
                             raise
                 os.fchmod(fd, _REPORT_MODE)
+                # VERIFIED, as the ordinary path's policy install has been since round seventeen.
+                # Under a umask that masks owner read the stage is created 0200; an fchmod that
+                # returned without effect then published an owner-unreadable refusal (the ledger's
+                # oldest open item, from round 23's cold leg). Raising here lands in this
+                # fallback's own except, which publishes nothing — the original stays.
+                if stat.S_IMODE(os.fstat(fd).st_mode) != _REPORT_MODE:
+                    raise OSError(errno.EIO, "report-mode-verification-failed")
                 # THE SAME CHECK THE ORDINARY PATH MAKES, twelve lines above, for the reason
                 # stated there: renameat would otherwise publish a planted symlink under the
                 # canonical name. This is the path that runs when something has already gone

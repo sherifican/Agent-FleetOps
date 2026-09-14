@@ -125,8 +125,9 @@ wider.
 
 ## Reserved filenames in `_reports/`
 
-These names belong to the scanner, which DELETES them after any successful publication regardless
-of who wrote them:
+These names belong to the scanner, which SWEEPS them after a successful publication — those older
+than the report that publication staged; a newer entry, or one whose age cannot be read, is left —
+regardless of who wrote them:
 
     scan_report.txt
     scan_report.superseded.txt
@@ -257,6 +258,11 @@ which swaps two names atomically so the old inode is never nameless — and is n
 adopting it is a platform decision (Linux ≥ 3.15, filesystem support probed at runtime, a small
 `ctypes` shim because `os.replace` exposes no flags) and is recorded as the next step rather than
 claimed.
+
+Third, and not a concurrency limit: **nothing here is fsync'd.** The stage is written, linked and
+renamed with ordering guarantees only. A power loss or crash between the rename and the
+filesystem's own commit can leave the previous report, an empty report, or no report — whatever
+the filesystem's crash semantics give a rename-over. Durability of the report is not promised.
 
 **Precondition, therefore: the report directory must not be writable by anyone you are defending
 against, and no second writer should be publishing into it concurrently.** The scanner hardens

@@ -6274,3 +6274,99 @@ def test_narrowing_reports_false_when_the_mode_did_not_land(tmp_path: Path) -> N
     finally:
         os.close(fd)
     assert (os.stat(wide).st_mode & 0o777) == 0o600
+
+
+# =============================================================================================
+# GROUP 42 — the thirty-third round. The findings ledger (rounds 17–31, every leg output on
+# disk) listed fourteen items with no fixing commit and no documented limit. Three are code.
+# =============================================================================================
+
+
+def test_the_refusal_writer_does_not_raise_on_a_staging_path_that_is_not_a_string(tmp_path: Path) -> None:
+    """REPAIRED (ledger #8): "never raises" was true only once `staging` had survived os.path.join."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "refusal_none_staging")
+    try:
+        module._write_refusal_report(None, module.ScanRefused("report-path-unsafe 'x'"))
+    except BaseException as exc:      # noqa: BLE001 — the contract is that NOTHING escapes
+        pytest.fail(f"REPAIRED: the refusal writer raised {type(exc).__name__} on a non-string "
+                    f"staging path, before its own guard was reached")
+
+
+def test_the_refusal_fallback_does_not_publish_a_mode_it_did_not_verify(tmp_path: Path) -> None:
+    """REPAIRED (ledger #10): the fallback fchmods and never looks; the ordinary path has looked since round 17."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "fallback_mode_verified")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    canonical = reports / "scan_report.txt"
+    original = "aws\tkey\tassignment\tdocs/A.md:1\n"
+    canonical.write_text(original, encoding="utf-8")
+    real_install = module._install_posix_acl_policy
+    real_fchmod = module.os.fchmod
+
+    def install_that_fails(dirfd, src_name, dst_fd, dst_name):
+        raise OSError(5, "injected: force the fallback")
+
+    def fchmod_that_returns_without_effect(*args, **kwargs):
+        return None
+
+    module._install_posix_acl_policy = install_that_fails
+    module.os.fchmod = fchmod_that_returns_without_effect
+    old_umask = os.umask(0o400)           # the stage is created owner-unreadable (0200)
+    try:
+        module._write_refusal_report(str(tmp_path), module.ScanRefused("report-path-unsafe 'x'"))
+    finally:
+        os.umask(old_umask)
+        module._install_posix_acl_policy = real_install
+        module.os.fchmod = real_fchmod
+    mode = os.stat(canonical).st_mode & 0o777
+    assert mode & 0o400, (
+        f"REPAIRED: the fallback published a refusal at mode {oct(mode)} — owner-unreadable. It "
+        f"set the mode, never verified it landed, and published anyway")
+    body = canonical.read_bytes()
+    assert body == original.encode() or (body.startswith(b"scan_gate: REFUSED") and mode == 0o600), (
+        f"REPAIRED: the canonical name holds neither the original nor a 0600 refusal (mode {oct(mode)})")
+
+
+def test_a_kept_stage_is_left_owner_readable(tmp_path: Path) -> None:
+    """REPAIRED (ledger #11/#12): a stage the scanner keeps as the only copy must be readable by its owner.
+
+    The quarantine answers False when the strip is denied and the caller leaves the bytes at the
+    staged name — at the CREATE mode, which under a umask that masks owner read is 0200. The
+    evidence is kept and nobody can read it.
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "kept_stage_readable")
+    if not module._XATTR_SUPPORTED:
+        pytest.skip("no xattr layer: the strip-denied path is not reachable here")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_install = module._install_posix_acl_policy
+    real_strip = module._strip_acl_by_fd
+
+    def install_that_fails(dirfd, src_name, dst_fd, dst_name):
+        raise OSError(5, "injected: force the failure path")
+
+    def strip_that_is_denied(fd):
+        raise OSError(errno.EPERM, "injected: strip denied")
+
+    module._install_posix_acl_policy = install_that_fails
+    module._strip_acl_by_fd = strip_that_is_denied
+    old_umask = os.umask(0o400)
+    try:
+        with pytest.raises(Exception):
+            module.write_report(str(staging), [("docs/k.md", 1, "SECRET", "generic_key_assignment",
+                                                 "contents")])
+    finally:
+        os.umask(old_umask)
+        module._install_posix_acl_policy = real_install
+        module._strip_acl_by_fd = real_strip
+    kept = [p for p in reports.iterdir() if p.name.startswith(".scan_report_")]
+    if not kept:
+        pytest.skip("no stage was kept; this arm measured nothing")
+    modes = {p.name: oct(p.stat().st_mode & 0o777) for p in kept}
+    assert all(p.stat().st_mode & 0o400 for p in kept), (
+        f"REPAIRED: the kept stage is not owner-readable ({modes}); evidence kept as the only copy "
+        f"must be left at a mode its owner can read")
