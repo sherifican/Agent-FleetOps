@@ -6621,3 +6621,140 @@ def test_a_kept_partial_stage_is_left_owner_readable(tmp_path: Path) -> None:
         pytest.skip("no partial stage was kept; this arm measured nothing")
     assert all(p.stat().st_mode & 0o400 for p in kept), (
         f"REPAIRED: the kept partial stage is owner-unreadable ({[oct(p.stat().st_mode & 0o777) for p in kept]})")
+
+
+# =============================================================================================
+# GROUP 45 — the thirty-sixth round. The invariant leg's FIX-FORWARD on 3c075f0: a mode check
+# I put before the bytes were copied (an empty stage counted as retained evidence), and three
+# more descriptor lifetimes not under a finally.
+# =============================================================================================
+
+
+def test_rescue_copies_the_bytes_before_deciding_about_the_reserved_name(tmp_path: Path) -> None:
+    """REPAIRED (F1): declining the name is fine; declining before the copy leaves an EMPTY stage."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "rescue_bytes_first")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    real_fchmod = module.os.fchmod
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_WRONLY, 0o600)
+    os.write(src, b"aws\tkey\tassignment\tdocs/int.md:2\n"); os.close(src)
+    src = os.open(str(reports / ".scan_report_src"), os.O_RDONLY)
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    module.os.fchmod = lambda *a, **k: None
+    old_umask = os.umask(0o400)
+    try:
+        published = module._copy_out_unpublished(dirfd, src)
+    finally:
+        os.umask(old_umask)
+        module.os.fchmod = real_fchmod
+        os.close(src); os.close(dirfd)
+    assert published is False, "CONTROL: the reserved name must still be declined on a mode mismatch"
+    stages = [p for p in reports.iterdir() if p.name.startswith(".scan_report_") and p.name != ".scan_report_src"]
+    assert stages and all(p.stat().st_size > 0 for p in stages), (
+        f"REPAIRED: the rescue declined the reserved name BEFORE copying the bytes; the kept stage "
+        f"is empty ({[(p.name, p.stat().st_size) for p in stages]}) — an empty destination counted as retained evidence")
+
+
+def _fstat_that_cancels(module, target_fds: list, caller: str, seen: list):
+    real_fstat = module.os.fstat
+    def fstat_or_cancel(fd, *args, **kwargs):
+        if fd in target_fds and not seen and sys._getframe(1).f_code.co_name == caller:
+            seen.append(fd)
+            raise KeyboardInterrupt
+        return real_fstat(fd, *args, **kwargs)
+    return real_fstat, fstat_or_cancel
+
+
+def test_the_sweep_closes_its_entry_descriptor_when_the_age_read_is_cancelled(tmp_path: Path) -> None:
+    """REPAIRED (F2): acquisition and aging must sit under the same finally as the removal."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "sweep_age_cancel")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    old = reports / "scan_report.unpublished.txt"
+    old.write_text("aws\tkey\tassignment\tdocs/old.md:1\n", encoding="utf-8")
+    os.utime(old, ns=(1, 1))
+    real_open = module.os.open
+    opened: list[int] = []
+
+    def open_and_record(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        if (isinstance(path, str) and path.startswith("scan_report.") and flags & getattr(os, "O_PATH", 0)
+                and sys._getframe(1).f_code.co_name == "write_report"):
+            opened.append(fd)
+        return fd
+
+    seen: list[int] = []
+    real_fstat, cancelling = _fstat_that_cancels(module, opened, "write_report", seen)
+    module.os.open, module.os.fstat = open_and_record, cancelling
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module.write_report(str(staging), [])
+    finally:
+        module.os.open, module.os.fstat = real_open, real_fstat
+    if not seen:
+        pytest.skip("the sweep never aged an entry; this arm measured nothing")
+    _assert_closed(seen[0], "the sweep's entry descriptor (cancelled during the age read)")
+
+
+def test_a_stage_write_failure_cancelled_in_the_evidence_read_still_closes_the_descriptor(tmp_path: Path) -> None:
+    """REPAIRED (F3a): the evidence-size fstat sits before the cleanup's finally."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "stage_evidence_cancel")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    real_open, real_fdopen = module.os.open, module.os.fdopen
+    opened: list[int] = []
+
+    def open_and_record(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        if sys._getframe(1).f_code.co_name == "_stage_report":
+            opened.append(fd)
+        return fd
+
+    def fdopen_that_fails(fd, *args, **kwargs):
+        raise OSError(5, "injected write failure")
+
+    seen: list[int] = []
+    real_fstat, cancelling = _fstat_that_cancels(module, opened, "_stage_report", seen)
+    module.os.open, module.os.fdopen, module.os.fstat = open_and_record, fdopen_that_fails, cancelling
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._stage_report(dirfd, "aws\tkey\tx\n", evidence=True)
+    finally:
+        module.os.open, module.os.fdopen, module.os.fstat = real_open, real_fdopen, real_fstat
+        os.close(dirfd)
+    if not seen:
+        pytest.skip("the evidence-size read never ran; this arm measured nothing")
+    _assert_closed(seen[0], "the failed stage's descriptor (cancelled during the evidence-size read)")
+
+
+def test_a_publish_cancelled_in_the_reference_stamp_read_still_closes_the_stage(tmp_path: Path) -> None:
+    """REPAIRED (F3b): the reference-stamp fstat runs before the ownership try/finally begins."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "stamp_cancel")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_stage = module._stage_report
+    staged: list[int] = []
+
+    def stage_and_record(*args, **kwargs):
+        fd, name = real_stage(*args, **kwargs)
+        staged.append(fd)
+        return fd, name
+
+    seen: list[int] = []
+    real_fstat, cancelling = _fstat_that_cancels(module, staged, "write_report", seen)
+    module._stage_report, module.os.fstat = stage_and_record, cancelling
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module.write_report(str(staging), [])
+    finally:
+        module._stage_report, module.os.fstat = real_stage, real_fstat
+    if not seen:
+        pytest.skip("the reference-stamp read never ran; this arm measured nothing")
+    _assert_closed(seen[0], "the staged report descriptor (cancelled during the reference-stamp read)")

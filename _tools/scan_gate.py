@@ -371,7 +371,7 @@ def _install_posix_acl_policy(dirfd, src_name, dst_fd, dst_name):
     inspects says nothing about which of those the file is one chmod away from. Removing is always narrowing,
     so it cannot introduce the failure it prevents.
 
-    ANCHORED ON THE STAGED DESCRIPTOR. Every metadata call here operates on the descriptor
+    ANCHORED ON THE STAGED DESCRIPTOR. Every metadata call on the STAGED file operates on the descriptor
     write_report is still holding, never on the pathname the file was created under. os.chmod on
     this platform cannot decline to follow a symlink — os.chmod is not in
     os.supports_follow_symlinks, and follow_symlinks=False raises NotImplementedError, which is
@@ -450,8 +450,10 @@ _SUPERSEDED_SLOTS = 8
 
 
 # RESERVED NAME. Where a staged FINDINGS report goes when it could not be published. It belongs
-# to this scanner on the same terms as the preservation slots: it is removed at the next
-# successful publication, and nothing you care about should live at this name.
+# to this scanner on the same terms as the preservation slots: a later successful publication
+# attempts to remove it when it is older than that publication's own stage (newer or
+# unreadable-age entries are left, and the attempt may fail), and nothing you care about
+# should live at this name.
 _UNPUBLISHED_NAME = "scan_report.unpublished.txt"
 
 # A SET of quarantine names, for the same reason preservation needed one. A single name can be
@@ -623,11 +625,6 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
     try:
         try:
             os.fchmod(stage_fd, _REPORT_MODE)   # the create mode is umask-masked; this is not
-            # VERIFIED: the deliberate exception below (a denied strip still takes a reserved name)
-            # rests on the mode being 0600 with the entries masked. If the mode did not land, that
-            # rest is gone, and the reserved name is declined — the stage is kept, it is the only copy.
-            if stat.S_IMODE(os.fstat(stage_fd).st_mode) != _REPORT_MODE:
-                return False
             if _XATTR_SUPPORTED:
                 try:
                     _strip_acl_by_fd(stage_fd)
@@ -644,6 +641,17 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                     # temporary prefix and a partial one is evidence.
                     return False
                 written += n
+            # THE BYTES ARE ON DISK BEFORE ANY DECISION ABOUT A RESERVED NAME. Round thirty-four
+            # put the mode verification above the copy, so a mismatch declined the name with an
+            # EMPTY stage kept as "the only copy" (invariant leg, 3c075f0). The deliberate
+            # exception below (a denied strip still takes a reserved name) rests on the mode
+            # being 0600 with the entries masked; if the mode did not land, the reserved name is
+            # declined — and the stage, now holding the bytes, is kept.
+            try:
+                if stat.S_IMODE(os.fstat(stage_fd).st_mode) != _REPORT_MODE:
+                    return False
+            except OSError:
+                return False
         except OSError:
             # A PARTIAL COPY IS KEPT under the temporary prefix — an explicitly partial artifact
             # that claims nothing, per the staging policy — because the alternative measured by
@@ -657,7 +665,7 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
             try:
                 _link_held_inode(stage_fd, candidate, dirfd)
             except FileNotFoundError:
-                # THE STAGE HAS NO NAMES LEFT — its name was taken while we were writing — and
+                # NO CUSTODY WAS TAKEN — the link helper refused, or its post-link check did — and
                 # the descriptor is the only thing holding the bytes. One more copy, from the
                 # stage descriptor into a fresh stage; the recursion is bounded by the writer
                 # having to win the same race again, and the limits section says so.
@@ -790,7 +798,8 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
         try:
             _link_held_inode(fd, candidate, dirfd)
         except FileNotFoundError:
-            # THE STAGED INODE HAS NO NAMES LEFT. Its name was taken between the identity check
+            # NO CUSTODY WAS TAKEN — ENOENT here does not prove the count is zero, only that the
+            # reserved name is not ours. Its name may have been taken between the identity check
             # and this link, and the descriptor is the only thing still holding the findings.
             # Two review legs measured the previous shape closing that descriptor on a False
             # answer. The rescue is the same one the pre-link divergence gets: copy the bytes
@@ -864,8 +873,9 @@ def _harden_report_dir(reports_dir, restore_owner=False, parent_fd=None):
     The restriction to a just-created directory is the point, and the first draft of this fix did
     not have it: applying the restoration unconditionally made the scanner chmod a PRE-EXISTING
     0500 report directory up to 0700 and publish into it. A directory the operator set that way is
-    a configuration, and six existing arms were pinning exactly that — an unreadable directory
-    refuses the scan. A umask the operator did not choose, applied to a directory this code made
+    a configuration, and six existing arms were pinning exactly that — a directory the scanner
+    cannot write into refuses the scan (owner-unreadable 0300 is accepted; owner read is not
+    needed to publish). A umask the operator did not choose, applied to a directory this code made
     one line earlier, is not a configuration. Only the second one is repaired.
     """
     nofollow = getattr(os, "O_NOFOLLOW", 0)
@@ -1096,14 +1106,14 @@ def _stage_report(dirfd, body, evidence=False):
             # STATUS line is not evidence and is removed: half of "scan_gate: CLEAN" sitting
             # beside a refusal is the confusion the rest of this file exists to prevent.
             keep = evidence
-            if keep:
-                try:
-                    keep = os.fstat(fd).st_size > 0
-                except OSError:
-                    keep = True           # cannot tell; keeping is the direction that cannot lose
-            # The unlink is identity-checked through the descriptor, so it runs BEFORE the close:
-            # a name that has stopped being this inode is someone else's and is left.
             try:
+                if keep:
+                    try:
+                        keep = os.fstat(fd).st_size > 0
+                    except OSError:
+                        keep = True       # cannot tell; keeping is the direction that cannot lose
+                # The unlink is identity-checked through the descriptor, so it runs BEFORE the
+                # close: a name that has stopped being this inode is someone else's and is left.
                 if not keep:
                     _remove_own_stage(dirfd, name, fd)
                 else:
@@ -1179,13 +1189,16 @@ def write_report(staging, hits):
                            for rel, i, cls, name, surface in hits)
 
         fd, tmp_name = _stage_report(dirfd, body, evidence=bool(hits))
+        _staged_ctime_ns = None           # unknown age until read: no reference stamp means no sweep
         try:
-            # THE REFERENCE STAMP FOR THE SWEEP BELOW, taken on the staged inode before anything
-            # is published. Read through the held descriptor, so no name is involved.
-            _staged_ctime_ns = os.fstat(fd).st_ctime_ns
-        except OSError:
-            _staged_ctime_ns = None       # unknown age: no reference stamp means no sweep
-        try:
+            # Inside the ownership try, so a cancellation during this read still reaches the close
+            # in the finally (invariant leg, 3c075f0).
+            try:
+                # THE REFERENCE STAMP FOR THE SWEEP BELOW, taken on the staged inode before
+                # anything is published. Read through the held descriptor, so no name is involved.
+                _staged_ctime_ns = os.fstat(fd).st_ctime_ns
+            except OSError:
+                _staged_ctime_ns = None
             # THE CANONICAL NAME IS JUDGED AFTER THE FINDINGS ARE ON DISK, and the order is the
             # finding. This check used to sit above _stage_report, so a symlink planted at the
             # report name raised before anything was staged: the hits existed only in the argument
@@ -1215,8 +1228,8 @@ def write_report(staging, hits):
             # inside the scanner's own report directory, which the hardening removes from group
             # and other. It narrows the window; it does not close it, and renameat would
             # otherwise publish a planted symlink under the canonical name.
+            _held = os.fstat(fd)          # the held side first; the name lookup is the syscall before the rename
             _named = os.lstat(tmp_name, dir_fd=dirfd)
-            _held = os.fstat(fd)
             if (_named.st_dev, _named.st_ino) != (_held.st_dev, _held.st_ino):
                 raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
             os.replace(tmp_name, _REPORT_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
@@ -1255,35 +1268,28 @@ def write_report(staging, hits):
                 # only while the name still refers to that descriptor's inode. What remains is
                 # the helper's own lookup-to-unlink interval, the same as everywhere else.
                 _swept_fd = None
-                try:
-                    _swept_fd = os.open(_name, getattr(os, "O_PATH", os.O_RDONLY) | _NOFOLLOW_FLAG,
-                                        dir_fd=dirfd)
-                    _swept = os.fstat(_swept_fd)
-                    if _swept.st_ctime_ns > _staged_ctime_ns:
-                        _close_quietly(_swept_fd); _swept_fd = None
-                        continue          # newer than this run's own staging; not ours to end
-                except FileNotFoundError:
-                    if _swept_fd is not None:
-                        _close_quietly(_swept_fd)
-                    continue              # already gone; nothing to remove
-                except OSError:
-                    if _swept_fd is not None:
-                        _close_quietly(_swept_fd)
-                    # A QUESTION THIS CODE CANNOT ANSWER NEVER AUTHORIZES DESTRUCTION. The
-                    # previous shape fell through to the unlink here, which is precisely the
-                    # outcome the age check was added to prevent — the check protects a
-                    # concurrent writer's retained findings, and an unreadable answer was letting
-                    # them be removed anyway. `_staged_holds_evidence` was rewritten to invert
-                    # this same reasoning; the sweep had kept the old direction.
-                    continue
-                # THE ONE DELETION NOT MADE BY IDENTITY. Every other unlink in this file removes a
-                # name it holds a descriptor for. The sweep removes reserved names by AGE — older
-                # than the report this run just staged — inside a namespace the README declares
-                # scanner-owned. It cannot hold what it did not create, so an entry substituted
-                # between the age check and this unlink is deleted on the strength of its name
-                # and age alone. That is the reserved-namespace rule, stated as a rule and not as
-                # an identity guarantee.
-                try:
+                try:                      # ONE finally owns the descriptor from open to removal
+                    try:
+                        _swept_fd = os.open(_name, getattr(os, "O_PATH", os.O_RDONLY) | _NOFOLLOW_FLAG,
+                                            dir_fd=dirfd)
+                        _swept = os.fstat(_swept_fd)
+                        if _swept.st_ctime_ns > _staged_ctime_ns:
+                            continue      # newer than this run's own staging; not ours to end
+                    except FileNotFoundError:
+                        continue          # already gone; nothing to remove
+                    except OSError:
+                        # A QUESTION THIS CODE CANNOT ANSWER NEVER AUTHORIZES DESTRUCTION. The
+                        # previous shape fell through to the unlink here, which is precisely the
+                        # outcome the age check was added to prevent — the check protects a
+                        # concurrent writer's retained findings, and an unreadable answer was letting
+                        # them be removed anyway. `_staged_holds_evidence` was rewritten to invert
+                        # this same reasoning; the sweep had kept the old direction.
+                        continue
+                    # THE SWEEP IS AN AGE RULE INSIDE A SCANNER-OWNED NAMESPACE — the README's reserved
+                    # names — and, since round thirty-five, it is applied to the inode that was aged
+                    # and to nothing else: the entry is held open above, and the removal below is by
+                    # identity through that descriptor. What the rule cannot do is know who created an
+                    # entry; a reserved name is scanner-owned by declaration, not by provenance.
                     if stat.S_ISDIR(_swept.st_mode):
                         # A directory at that name cannot be unlinked, and gate review reproduced
                         # one blocking every later preservation permanently. An EMPTY one is
@@ -1298,7 +1304,8 @@ def write_report(staging, hits):
                     else:
                         _remove_own_stage(dirfd, _name, _swept_fd)
                 finally:
-                    _close_quietly(_swept_fd)
+                    if _swept_fd is not None:
+                        _close_quietly(_swept_fd)
         except BaseException:
             # KEEP THE FINDINGS if there are any and they made it to disk. Unlinking here
             # destroyed the hits this scan had just written, and the refusal that follows cannot
@@ -1556,7 +1563,7 @@ def _replace_canonical_guarded(dirfd, tmp_name, fd, slot_guard):
 
 
 def _remove_own_stage(dirfd, tmp_name, fd):
-    """Remove a name this call created, ONLY if it still refers to the held inode. Best effort.
+    """Remove NAME only if it still refers to the held inode. Best effort. Identity, not provenance.
 
     Used for refusal stages, published rescue stages and released status slots alike: the
     module's rule against deleting a name it has not just verified applies to each, and one
