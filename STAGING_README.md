@@ -80,8 +80,9 @@ in a hostile tree it may stop doing so between the link and the removal — at w
 the name back destroys the findings. POSIX cannot express "remove this name only if it is not the
 last one", so the fix is not a better check. Keeping it costs nothing, because the replacement was
 declined: the inode goes on standing at the canonical name, so an ACL on the reserved name is an
-ACL already on the report itself. Both reserved families are deleted after any successful
-publication.
+ACL already on the report itself. After a successful scan publication the sweep attempts cleanup of
+the older entries in both reserved families; newer entries, and entries whose age cannot be read, are
+left.
 
 Neither case costs a byte. Preserving evidence outranks labelling it; claiming a policy it does
 not have does not.

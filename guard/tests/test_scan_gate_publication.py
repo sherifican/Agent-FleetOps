@@ -6370,3 +6370,150 @@ def test_a_kept_stage_is_left_owner_readable(tmp_path: Path) -> None:
     assert all(p.stat().st_mode & 0o400 for p in kept), (
         f"REPAIRED: the kept stage is not owner-readable ({modes}); evidence kept as the only copy "
         f"must be left at a mode its owner can read")
+
+
+# =============================================================================================
+# GROUP 43 — the thirty-fourth round. The invariant leg's FIX-FORWARD on 0829b97: identity
+# cleanup was put before the close (right), but not under a finally — a cancellation inside the
+# helper leaks the descriptor at three sites. And two chmod sites still trust the return code.
+# =============================================================================================
+
+
+def _interrupting_remover(module, seen: list):
+    def remove_that_is_interrupted(dirfd, name, fd):
+        seen.append(fd)
+        raise KeyboardInterrupt
+    return remove_that_is_interrupted
+
+
+def _assert_closed(fd: int, what: str) -> None:
+    try:
+        os.fstat(fd)
+    except OSError as exc:
+        assert exc.errno == errno.EBADF, exc
+        return
+    os.close(fd)                          # do not leak it into the rest of the suite
+    pytest.fail(f"REPAIRED (F1): {what} — a cancellation inside the identity cleanup left the "
+                f"descriptor open; the close must be in a finally")
+
+
+def test_a_rescue_interrupted_in_cleanup_still_closes_its_stage_descriptor(tmp_path: Path) -> None:
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "rescue_cleanup_interrupt")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    real_remove = module._remove_own_stage
+    seen: list[int] = []
+    module._remove_own_stage = _interrupting_remover(module, seen)
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_WRONLY, 0o600)
+    os.write(src, b"aws\tkey\tassignment\tdocs/int.md:2\n"); os.close(src)
+    src = os.open(str(reports / ".scan_report_src"), os.O_RDONLY)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._copy_out_unpublished(dirfd, src)
+    finally:
+        module._remove_own_stage = real_remove
+        os.close(src); os.close(dirfd)
+    if not seen:
+        pytest.skip("the rescue never reached its cleanup; this arm measured nothing")
+    _assert_closed(seen[0], "the rescue's stage descriptor")
+
+
+def test_a_stage_write_failure_interrupted_in_cleanup_still_closes_the_descriptor(tmp_path: Path) -> None:
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "stage_cleanup_interrupt")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    real_remove = module._remove_own_stage
+    real_fdopen = module.os.fdopen
+    seen: list[int] = []
+
+    def fdopen_that_fails(fd, *args, **kwargs):
+        raise OSError(5, "injected write failure")
+
+    module._remove_own_stage = _interrupting_remover(module, seen)
+    module.os.fdopen = fdopen_that_fails
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._stage_report(dirfd, "scan_gate: CLEAN\n")
+    finally:
+        module._remove_own_stage = real_remove
+        module.os.fdopen = real_fdopen
+        os.close(dirfd)
+    if not seen:
+        pytest.skip("the stage cleanup never ran; this arm measured nothing")
+    _assert_closed(seen[0], "the failed stage's descriptor")
+
+
+def test_a_status_slot_release_interrupted_still_closes_the_held_descriptor(tmp_path: Path) -> None:
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "status_release_interrupt")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    (reports / "scan_report.txt").write_bytes(module._STATUS_LINE_PREFIX + b" CLEAN\n")
+    real_remove = module._remove_own_stage
+    seen: list[int] = []
+    module._remove_own_stage = _interrupting_remover(module, seen)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            preserve_superseded(module, reports)
+    finally:
+        module._remove_own_stage = real_remove
+    if not seen:
+        pytest.skip("the status-slot release never ran; this arm measured nothing")
+    _assert_closed(seen[0], "the held slot descriptor")
+
+
+def test_quarantine_declines_a_reserved_name_when_its_mode_did_not_land(tmp_path: Path) -> None:
+    """REPAIRED: a reserved name asserts the report's policy; a chmod that did not take does not install it."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quarantine_mode_verified")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    real_fchmod = module.os.fchmod
+    old_umask = os.umask(0o400)
+    try:
+        fd = os.open(str(reports / ".scan_report_stage"), os.O_CREAT | os.O_RDWR, 0o600)  # lands 0200
+    finally:
+        os.umask(old_umask)
+    os.write(fd, b"aws\tkey\tassignment\tdocs/q.md:1\n")
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    module.os.fchmod = lambda *a, **k: None
+    try:
+        taken = module._quarantine_unpublished(dirfd, ".scan_report_stage", fd,
+                                               [("docs/q.md", 1, "SECRET", "generic_key_assignment", "c")])
+    finally:
+        module.os.fchmod = real_fchmod
+        os.close(fd); os.close(dirfd)
+    # existence, not content: under this umask the file is 0200 and cannot be read back
+    assert any(p.name == ".scan_report_stage" or p.name.startswith("scan_report.unpublished")
+               for p in reports.iterdir()), "CONTROL: the bytes must survive under some name"
+    assert taken is False and not any(p.name.startswith("scan_report.unpublished") for p in reports.iterdir()), (
+        "REPAIRED: quarantine reserved a name for a stage whose mode it set and never verified — "
+        "the retained copy is presented as carrying a policy that is not on it")
+
+
+def test_rescue_declines_a_reserved_name_when_its_mode_did_not_land(tmp_path: Path) -> None:
+    """REPAIRED: same as quarantine, in the rescue — the stage is kept, the reserved name is not taken."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "rescue_mode_verified")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    real_fchmod = module.os.fchmod
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_WRONLY, 0o600)
+    os.write(src, b"aws\tkey\tassignment\tdocs/int.md:2\n"); os.close(src)
+    src = os.open(str(reports / ".scan_report_src"), os.O_RDONLY)
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    module.os.fchmod = lambda *a, **k: None
+    old_umask = os.umask(0o400)
+    try:
+        published = module._copy_out_unpublished(dirfd, src)
+    finally:
+        os.umask(old_umask)
+        module.os.fchmod = real_fchmod
+        os.close(src); os.close(dirfd)
+    assert _findings_anywhere(reports, "docs/int.md:2"), "CONTROL: the copied bytes must survive somewhere"
+    assert published is False and not any(p.name.startswith("scan_report.unpublished") for p in reports.iterdir()), (
+        "REPAIRED: the rescue reserved a name for a copy whose mode it set and never verified")
