@@ -7980,3 +7980,134 @@ def test_a_rescue_reads_the_held_descriptor_when_the_reopen_is_refused(tmp_path:
     assert _findings_anywhere(reports, "docs/r.md:1"), (
         "REPAIRED: the reopen through the descriptor directory was refused and the rescue gave up; the "
         "held descriptor was the last reference and the close freed the findings")
+
+
+# =============================================================================================
+# GROUP 55 — the forty-seventh round. Gate 42's invariant leg (Gemini) on 4e0be0a: an unconfirmed
+# custody made preservation return before its rescue block, so a recorded report whose name had
+# been taken lost its last reference at the close.
+# =============================================================================================
+
+
+def test_an_unconfirmed_custody_still_rescues_a_recorded_report_whose_name_is_gone(tmp_path: Path) -> None:
+    """REPAIRED (invariant leg, gate 42): the custody-unconfirmed exit of preservation must still run
+    the held-descriptor rescue when the canonical name no longer reaches the recorded inode."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "preserve_unconfirmed_rescue")
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    canonical = reports / "scan_report.txt"
+    canonical.write_text("aws\tkey\tassignment\tdocs/P.md:1\n", encoding="utf-8")
+    os.chmod(canonical, 0o600)
+    real_lstat = module.os.lstat
+    fired: list[str] = []
+
+    def take_both_names_then_fail_the_confirmation(path, *a, **k):
+        if (sys._getframe(1).f_code.co_name == "_link_held_inode"
+                and sys._getframe(2).f_code.co_name == "_preserve_superseded" and not fired):
+            fired.append("lstat")
+            slot = reports / str(path)
+            decoy = reports / "decoy.txt"
+            decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+            os.replace(decoy, slot)                   # the just-made link is taken by a decoy…
+            decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+            os.replace(decoy, canonical)              # …and so is the canonical name: the fd is the last reference
+            raise OSError(errno.EIO, "injected confirmation failure")
+        return real_lstat(path, *a, **k)
+
+    module.os.lstat = take_both_names_then_fail_the_confirmation
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        authorized = module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        module.os.lstat = real_lstat
+        os.close(dirfd)
+    if not fired:
+        pytest.skip("the post-link confirmation never ran; this arm measured nothing")
+    assert authorized is False, "CONTROL: an unconfirmed custody must not authorize the replacement"
+    assert _findings_anywhere(reports, "docs/P.md:1"), (
+        "REPAIRED: custody was unconfirmed, both names were taken, and preservation returned before its "
+        "rescue block — the close freed the last reference to the recorded report")
+
+
+def test_preservation_rescues_an_owner_unreadable_report_whose_name_is_taken(tmp_path: Path) -> None:
+    """REPAIRED (executed review, gate 42): the copy-out narrows with fchmod, which a path-only descriptor
+    refuses (EBADF), so a mode-000 report whose name was taken could not be reopened for reading and was
+    freed at the close; the narrowing must fall back to chmod through the descriptor directory."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "preserve_unreadable_rescue")
+    if module._PROC_FD_DIR is None or not hasattr(os, "O_PATH"):
+        pytest.skip("no descriptor directory or O_PATH here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    canonical = reports / "scan_report.txt"
+    canonical.write_text("aws\tkey\tassignment\tdocs/U.md:1\n", encoding="utf-8")
+    os.chmod(canonical, 0o000)                        # owner-unreadable, as preservation must tolerate
+    real_link = module.os.link
+    fired: list[str] = []
+
+    def take_the_name_then_link(*a, **k):
+        callers = {sys._getframe(1).f_code.co_name, sys._getframe(2).f_code.co_name}
+        if "_preserve_superseded" in callers and not fired:
+            fired.append("link")
+            os.unlink(canonical)                      # the recorded inode now has no name: the held fd is its last reference
+        return real_link(*a, **k)
+
+    module.os.link = take_the_name_then_link
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        authorized = module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        module.os.link = real_link
+        os.close(dirfd)
+        for p in reports.iterdir():
+            try: os.chmod(p, 0o600)
+            except OSError: pass
+    if not fired:
+        pytest.skip("preservation never linked; this arm measured nothing")
+    assert authorized is False, "CONTROL: nothing preserved by link must not authorize the replacement"
+    assert _findings_anywhere(reports, "docs/U.md:1"), (
+        "REPAIRED: the recorded report was owner-unreadable and its name was taken; the rescue could not "
+        "narrow the path-only descriptor (fchmod EBADF), the reopen was refused, and the close freed it")
+
+
+def test_an_unconfirmed_custody_in_the_copy_out_still_rescues_a_diverged_stage(tmp_path: Path) -> None:
+    """REPAIRED (inventory trace, gate 42): the copy-out's custody-unconfirmed exit kept its stage by
+    retention alone; a stage whose name was taken meanwhile lost its last reference at the close."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "copyout_unconfirmed_rescue")
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_RDWR, 0o600)
+    os.write(src, b"aws\tkey\tassignment\tdocs/C.md:1\n")
+    os.unlink(str(reports / ".scan_report_src"))      # the source has no name: the rescue is its last chance
+    real_lstat = module.os.lstat
+    fired: list[str] = []
+
+    def take_both_names_then_fail(path, *a, **k):
+        if (sys._getframe(1).f_code.co_name == "_link_held_inode"
+                and sys._getframe(2).f_code.co_name == "_copy_out_unpublished" and not fired):
+            fired.append("lstat")
+            decoy = reports / "decoy.txt"
+            for victim in [p for p in reports.iterdir() if p.name.startswith(".scan_report_")] + [reports / str(path)]:
+                decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+                os.replace(decoy, victim)             # the copy's stage name AND its reserved name are taken
+            raise OSError(errno.EIO, "injected confirmation failure")
+        return real_lstat(path, *a, **k)
+
+    module.os.lstat = take_both_names_then_fail
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._copy_out_unpublished(dirfd, src)
+    finally:
+        module.os.lstat = real_lstat
+        os.close(src); os.close(dirfd)
+    if not fired:
+        pytest.skip("the post-link confirmation never ran; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/C.md:1"), (
+        "REPAIRED: custody was unconfirmed and both of the copy's names were taken; the copy-out returned "
+        "on retention alone and the closes freed the last references to the findings")

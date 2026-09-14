@@ -544,7 +544,9 @@ def _link_held_inode(fd, candidate, dirfd):
     is zero, and no caller relies on that.
 
     Returns True on success. Raises FileNotFoundError when no custody was taken — the kernel refused, or the check below did (the
-    caller's rescue path), and other OSError for an occupied or unusable candidate.
+    caller's rescue path); `_CustodyUnconfirmed` when the link was made and the check after it
+    could not run (custody MAY have been taken — callers stop linking); and other OSError for an
+    occupied or unusable candidate, raised by the link itself before any custody.
     """
     if _PROC_FD_DIR is None:
         raise OSError(errno.ENOSYS, "descriptor-directory-unavailable")
@@ -724,7 +726,14 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                     return _copy_out_unpublished(dirfd, stage_fd, depth + 1)
                 except _CustodyUnconfirmed:
                     # THE LINK MAY HAVE LANDED. The next name would be a second one for this
-                    # inode; the stage keeps the bytes (retention is on) and no more is tried.
+                    # inode; the stage keeps the bytes (retention is on) and no more is tried —
+                    # after the same question the stage paths ask before a close: is the stage
+                    # name still this inode? A stage whose name was taken meanwhile has this
+                    # descriptor as its last reference, and is copied out once more (depth bounds
+                    # it) rather than freed (inventory trace, 4e0be0a).
+                    keep_stage = True
+                    if depth < 1:
+                        _false_or_rescue(dirfd, stage_name, stage_fd)
                     return False
                 except OSError:
                     continue              # occupied or unusable — the next name
@@ -1715,7 +1724,18 @@ def _narrow_leftover(fd):
     try:
         os.fchmod(fd, _REPORT_MODE)
     except OSError:
-        pass
+        # A PATH-ONLY DESCRIPTOR CANNOT BE FCHMOD'ED (EBADF — the platform fact recorded at the
+        # top of the file), and preservation's no-slot rescue hands exactly such a descriptor to
+        # the copy-out, whose reopen then needs owner-read on an inode this could not narrow: a
+        # mode-000 findings report whose name was taken was freed at the close (cold leg and an
+        # executed review, both on 4e0be0a). The same detour `_narrow_held_copy` uses reaches
+        # the held inode: chmod through the descriptor directory, which follows the magic link
+        # to the inode this descriptor pins and to nothing else.
+        if _PROC_FD_DIR is not None:
+            try:
+                os.chmod("%s/%d" % (_PROC_FD_DIR, fd), _REPORT_MODE)
+            except OSError:
+                pass
 
 
 def _false_or_rescue(dirfd, tmp_name, fd):
@@ -1907,6 +1927,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
     # bound by identity to `previous`; the link is then the recorded inode by construction. A
     # name that no longer holds that inode preserves nothing, and the replacement is declined.
     _cfd = None
+    _unconfirmed = False
     if linked is None:
         _cfd, _cvia = _open_held_copy(dirfd, report_name, previous)
         if _cfd is None:
@@ -1918,7 +1939,12 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             except FileNotFoundError:
                 continue                  # no custody: taken under us, or the inode has no name left
             except _CustodyUnconfirmed:
-                return False              # custody may have landed; a second name must not follow
+                # CUSTODY MAY HAVE LANDED; a second name must not follow. This does NOT return
+                # here: the rescue below still runs, because a slot that was taken under us after
+                # the link and a canonical name taken meanwhile leave this descriptor as the last
+                # reference (invariant leg, 4e0be0a — the early return closed it unrescued).
+                _unconfirmed = True
+                break
             except OSError:
                 continue                  # occupied, unusable, or unsupported — try the next
             linked = candidate
@@ -1927,12 +1953,18 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             # NO SLOT TOOK THE HELD INODE. If its name has meanwhile stopped reaching it — the
             # substitution that used to hand a decoy a reserved name now leaves the recorded
             # inode with this descriptor as its last reference — the bytes are copied out
-            # through the descriptor to an unpublished name, the same rescue every stage path
-            # gets. Still at its name: nothing to do, and the replacement is declined below.
+            # through the descriptor to an unpublished name: the same copy-out the stage paths
+            # get, except that this descriptor is path-only, so the copy-out's narrowing reaches
+            # it through the descriptor directory rather than fchmod, and its bytes are read by
+            # the reopen rather than pread (round forty-seven; the sentence here used to say
+            # "the same rescue", which a cold leg measured as false for a mode-000 report).
+            # Still at its name: nothing to do, and the replacement is declined below.
             _false_or_rescue(dirfd, report_name, _cfd)
     finally:
         if _cfd is not None:
             _close_quietly(_cfd)
+    if _unconfirmed:
+        return False                      # nothing this call can vouch for; the replacement is declined
 
     held_fd, held_via_proc = (None, False)
     if linked is not None:
