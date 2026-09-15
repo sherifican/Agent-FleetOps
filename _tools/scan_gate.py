@@ -516,6 +516,20 @@ def _staged_holds_evidence(fd, hits):
         return True
 
 
+class _Answer(Exception):
+    """The copy-out's answer, carried from the body to the point AFTER its cleanup has run.
+
+    The body used to `return`, and every return was committed before the finally that re-asks
+    the stage name and may find the copy nameless; two reviewers on 5850e01 traced write_report
+    trusting a True that the cleanup had already hollowed out. Raising the answer instead lets
+    the same frame decide it after the cleanup, with no nested function (the review arms key on
+    this frame's name) and no return inside a finally (a syntax warning on this Python).
+    """
+    def __init__(self, value):
+        super().__init__(value)
+        self.value = value
+
+
 class _CustodyUnconfirmed(OSError):
     """The link succeeded and the confirmation after it did not: custody MAY have been taken.
 
@@ -580,9 +594,13 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
     THE ANSWER IS WHETHER A COMPLETE COPY IS ON DISK UNDER A NAME THIS SCANNER CONTROLS — a
     reserved name, or the kept stage under the temporary prefix. False means no complete copy
     was made (no source, no stage, a read that failed partway, nothing written): the caller may
-    try again. It used to mean "no reserved name was linked", and a caller that read it as "no
-    copy" — write_report, through quarantine — made a second copy of the same findings beside
-    a complete kept one (invariant leg, 5b1a014).
+    try again — and a retry after a read that failed partway leaves that partial stage beside
+    the retry's complete copy, under the temporary prefix; a leftover, not a second copy of the
+    findings (invariant leg, 5850e01). It used to mean "no reserved name was linked", and a
+    caller that read it as "no copy" — write_report, through quarantine — made a second copy of
+    the same findings beside a complete kept one (invariant leg, 5b1a014). THE ANSWER IS
+    DECIDED AFTER THE CLEANUP: a copy that lost its name while it streamed and could not be
+    copied again is no custody, and answers False (cold leg and inventory, 5850e01).
 
     This runs when the staged name has stopped naming the staged inode, or its state could not be read — neither of which proves that no
     rename, link or unlink can reach those bytes by name any more. The descriptor still can. The
@@ -627,197 +645,220 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
         except OSError:
             return False
     _src_off = 0
+    _hollow = []                      # set by the cleanup when the copy ended nameless
+    _answer = False
     try:
-        nofollow = getattr(os, "O_NOFOLLOW", 0)
-        flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | nofollow   # readable: a nested rescue can pread it
-        stage_name = None
-        stage_fd = None
-        keep_stage = True                 # set before the open, with `written`, so the acquisition
-        written = 0                       # try below hands straight to the try that owns the fd
         try:
-            for _ in range(_STAGE_ATTEMPTS):
-                name = ".scan_report_" + "".join(
-                    _STAGE_ALPHABET[b % len(_STAGE_ALPHABET)] for b in os.urandom(8))
-                try:
-                    stage_fd = os.open(name, flags, _REPORT_MODE, dir_fd=dirfd)
-                except FileExistsError:
-                    continue
-                except OSError:
-                    return False          # no creatable name: the stated limit
-                stage_name = name
-                break
-            if stage_fd is None:
-                return False              # every attempt collided: the stated limit
-        except BaseException:
-            if stage_fd is not None:
-                _close_quietly(stage_fd)  # a cancellation between the open and the owning try
-            raise
-        # RETENTION IS THE DEFAULT FROM THE MOMENT A STAGE EXISTS. Round thirty set keep_stage only on
-        # the error paths it thought of, and a KeyboardInterrupt between two writes took none of
-        # them: the finally saw False and deleted three bytes of evidence. The flag now starts True
-        # and is cleared in exactly one place — after a confirmed publication — so cancellation,
-        # or any exit this code did not anticipate, keeps whatever reached the stage.
-        try:
+            nofollow = getattr(os, "O_NOFOLLOW", 0)
+            flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | nofollow   # readable: a nested rescue can pread it
+            stage_name = None
+            stage_fd = None
+            keep_stage = True                 # set before the open, with `written`, so the acquisition
+            written = 0                       # try below hands straight to the try that owns the fd
             try:
-                # THE STAGE'S CHMOD AND STRIP ARE BEST EFFORT BEFORE THE STREAM. A chmod that
-                # RAISED here sat inside the except that returns before any byte was copied, so
-                # the copy never happened and the caller's close freed the source (invariant
-                # leg, 0c28c5e). Whatever can be written is written; the mode verify after the
-                # stream still declines a reserved name when 0600 cannot be established.
-                _narrow_leftover(stage_fd)
-                _strip_denied = False
-                if _XATTR_SUPPORTED:
+                for _ in range(_STAGE_ATTEMPTS):
+                    name = ".scan_report_" + "".join(
+                        _STAGE_ALPHABET[b % len(_STAGE_ALPHABET)] for b in os.urandom(8))
                     try:
-                        _strip_acl_by_fd(stage_fd)
-                    except OSError as exc:
-                        if exc.errno not in _ACL_ABSENT:
-                            _strip_denied = True      # decided AFTER the bytes are on disk
-                # STREAMED, SOURCE TO STAGE. A read that fails partway leaves what was read on the
-                # stage, and retention is already on; the failure returns False with the bytes kept.
-                # A failure BEFORE THE FIRST BYTE leaves nothing, and an empty stage is not
-                # evidence: an error releases retention, and the finally removes an EMPTY stage
-                # by identity whether or not retention was released — a cancellation here
-                # releases nothing, and the stage is removed because it is measured empty (an
-                # executed review of d7e4a3c found the first-read failure keeping one forever;
-                # gate 41 found this comment claiming the release for the cancellation too).
-                try:
-                    while True:
-                        if src is not None:
-                            chunk = os.read(src, 65536)
-                        else:
-                            chunk = os.pread(fd, 65536, _src_off)
-                            _src_off += len(chunk)
-                        if not chunk:
-                            break
-                        off = 0
-                        while off < len(chunk):
-                            n = os.write(stage_fd, chunk[off:])
-                            if n <= 0:
-                                # A write that reports no progress would otherwise spin here
-                                # forever. It is a failure that has not raised; the stage is
-                                # kept when it holds anything.
-                                if written == 0:
-                                    keep_stage = False
-                                return False
-                            off += n
-                            written += n
-                except OSError:
-                    if written == 0:
-                        keep_stage = False    # nothing reached the stage: not evidence
-                    return False          # otherwise the stage holds what was read; retention is on
-                if written == 0:
-                    keep_stage = False    # nothing readable: an empty stage is not evidence
-                    return False
-                # THE BYTES ARE ON DISK BEFORE ANY DECISION ABOUT A RESERVED NAME. A mode that did
-                # not land, or a strip that was denied (recorded above, decided below), declines
-                # the reserved name — and the stage, holding the bytes, is kept.
-                try:
-                    if stat.S_IMODE(os.fstat(stage_fd).st_mode) != _REPORT_MODE:
-                        return True       # complete bytes, kept under the temporary prefix (see the docstring)
-                except OSError:
-                    return True           # cannot verify the mode: the same — kept, no reserved name
-                if _strip_denied:
-                    # THE SAME RULE AS QUARANTINE: a reserved name asserts the report's access
-                    # policy, and a denied strip means it is not on the file. The bytes are on
-                    # the stage and retention is on, so declining the name loses nothing — the
-                    # "only remaining copy" exception this function used to take was written
-                    # before the stage was kept by default (cold leg, 0c28c5e).
-                    return True           # complete bytes, kept; no reserved name
-            except OSError:
-                return False
-            for candidate in _unpublished_slot_names():
-                try:
-                    _link_held_inode(stage_fd, candidate, dirfd)
-                except FileNotFoundError:
-                    # NO CUSTODY WAS TAKEN — the link helper refused, or its post-link check did — and
-                    # the stage keeps the bytes. Nothing more is done HERE: the finally below asks
-                    # once whether the stage name still reaches the stage and copies out only if
-                    # it does not. This arm used to make its own further copy first, and with the
-                    # finally's re-ask added in round forty-eight a taken stage name produced two
-                    # copies of the same findings (invariant leg, e71e440).
-                    keep_stage = True
-                    return True           # complete bytes, kept; the finally re-asks the name
-                except _CustodyUnconfirmed:
-                    # THE LINK MAY HAVE LANDED. The next name would be a second one for this
-                    # inode; the stage keeps the bytes (retention is on) and no more is tried —
-                    # after the same question the stage paths ask before a close: is the stage
-                    # name still this inode? A stage whose name was taken meanwhile has this
-                    # descriptor as its last reference, and is copied out once more (depth bounds
-                    # it) rather than freed (inventory trace, 4e0be0a).
-                    keep_stage = True
-                    # The re-ask of the stage name happens in the finally below, for this exit
-                    # and every other retention exit alike, one level deep. Round forty-seven
-                    # asked it here through a helper that dropped the depth, so every level
-                    # restarted at zero and a racer who kept taking names drove the chain until
-                    # the reserved names, or the descriptors, ran out (invariant leg, cold leg
-                    # and an inventory trace, all on 407a89c).
-                    return True           # complete bytes, kept (and possibly linked)
-                except OSError:
-                    continue              # occupied or unusable — the next name
-                # THE LINK IS THE HELD INODE BY CONSTRUCTION: it was made through the descriptor
-                # directory, which cannot attach anything else. This is the one place retention is
-                # released — the bytes now have a reserved name.
-                keep_stage = False
-                return True
-            # EVERY RESERVED NAME WAS TAKEN — AND THE STAGE IS KEPT. A completed stage under the
-            # scanner's own temporary prefix promises nothing and claims nothing, which makes it the
-            # right place for evidence that no reserved name will take.
-            return True                   # retention on: the kept stage IS the copy, complete
-        finally:
-            # THE CLOSE IS UNDER ITS OWN FINALLY. Round thirty-two put the identity cleanup before the
-            # close (it needs the descriptor) and left the close after it unprotected; a cancellation
-            # inside the cleanup's lstat leaked the descriptor at three sites (invariant leg, 0829b97).
-            try:
-                if stage_name is not None:
-                    # EMPTINESS IS MEASURED ON THE STAGE, NOT INFERRED FROM THE COUNTER. A
-                    # cancellation inside a write lands after the bytes are on disk and before
-                    # `written` advances (the mid-copy arm of round thirty); the counter says
-                    # nothing reached the stage, the stage says otherwise, and the stage is
-                    # what is believed. Unreadable: keeping is the direction that cannot lose.
-                    try:
-                        _empty = os.fstat(stage_fd).st_size == 0
+                        stage_fd = os.open(name, flags, _REPORT_MODE, dir_fd=dirfd)
+                    except FileExistsError:
+                        continue
                     except OSError:
-                        _empty = False
-                    if _empty:
-                        # AN EMPTY STAGE HOLDS NOTHING, and has only ever had one name — the
-                        # nlink rule below would keep it forever (gate 37). Identity alone
-                        # authorizes removing it, and retention does not apply to it:
-                        # retention keeps BYTES through a cancellation, and there are none
-                        # (executed review, 4632326 — an interrupt before the first read
-                        # kept an empty stage).
-                        _remove_own_stage(dirfd, stage_name, stage_fd)
-                    elif not keep_stage and depth < 1:
-                        # only while the reserved name (or any other) still reaches the copy
-                        _remove_stage_if_another_name_remains(dirfd, stage_name, stage_fd, depth)
-                    # AT DEPTH ONE THE STAGE IS KEPT, LINKED OR NOT. The rescue-of-a-rescue used to
-                    # release its stage after its link, and a racer's second act on the reserved
-                    # name then left the copy nameless with no further rescue (cold leg,
-                    # 5b1a014). Kept, the module takes no last name of its own at that depth: a
-                    # leftover under the temporary prefix is the whole cost, and both names must
-                    # be taken by someone else before the close can free anything.
-                    elif depth < 1:
-                        # KEPT — AND THE NAME IS RE-ASKED BEFORE THE CLOSE. Retention means "do
-                        # not unlink the stage name"; it was being read as "the stage name still
-                        # reaches this inode", which is a different fact (cold leg, 407a89c). A
-                        # stage name taken while the copy was being made leaves this descriptor
-                        # as the copy's last reference, on every retention exit — a denied strip,
-                        # a mode that did not land, every slot occupied, custody unconfirmed, a
-                        # cancellation. The same question write_report and _stage_report ask
-                        # before their closes, asked here for the copy, one level deep: at depth
-                        # one the close is the limit (§5 needs a racer acting twice).
-                        _false_or_rescue(dirfd, stage_name, stage_fd, depth + 1)
+                        raise _Answer(False)          # no creatable name: the stated limit
+                    stage_name = name
+                    break
+                if stage_fd is None:
+                    raise _Answer(False)              # every attempt collided: the stated limit
+            except BaseException:
+                if stage_fd is not None:
+                    _close_quietly(stage_fd)  # a cancellation between the open and the owning try
+                raise
+            # RETENTION IS THE DEFAULT FROM THE MOMENT A STAGE EXISTS. Round thirty set keep_stage only on
+            # the error paths it thought of, and a KeyboardInterrupt between two writes took none of
+            # them: the finally saw False and deleted three bytes of evidence. The flag now starts True
+            # and is cleared in exactly one place — after a confirmed publication — so cancellation,
+            # or any exit this code did not anticipate, keeps whatever reached the stage.
+            try:
+                try:
+                    # THE STAGE'S CHMOD AND STRIP ARE BEST EFFORT BEFORE THE STREAM. A chmod that
+                    # RAISED here sat inside the except that returns before any byte was copied, so
+                    # the copy never happened and the caller's close freed the source (invariant
+                    # leg, 0c28c5e). Whatever can be written is written; the mode verify after the
+                    # stream still declines a reserved name when 0600 cannot be established.
+                    _narrow_leftover(stage_fd)
+                    _strip_denied = False
+                    if _XATTR_SUPPORTED:
+                        try:
+                            _strip_acl_by_fd(stage_fd)
+                        except OSError as exc:
+                            if exc.errno not in _ACL_ABSENT:
+                                _strip_denied = True      # decided AFTER the bytes are on disk
+                    # STREAMED, SOURCE TO STAGE. A read that fails partway leaves what was read on the
+                    # stage, and retention is already on; the failure returns False with the bytes kept.
+                    # A failure BEFORE THE FIRST BYTE leaves nothing, and an empty stage is not
+                    # evidence: an error releases retention, and the finally removes an EMPTY stage
+                    # by identity whether or not retention was released — a cancellation here
+                    # releases nothing, and the stage is removed because it is measured empty (an
+                    # executed review of d7e4a3c found the first-read failure keeping one forever;
+                    # gate 41 found this comment claiming the release for the cancellation too).
+                    try:
+                        while True:
+                            if src is not None:
+                                chunk = os.read(src, 65536)
+                            else:
+                                chunk = os.pread(fd, 65536, _src_off)
+                                _src_off += len(chunk)
+                            if not chunk:
+                                break
+                            off = 0
+                            while off < len(chunk):
+                                n = os.write(stage_fd, chunk[off:])
+                                if n <= 0:
+                                    # A write that reports no progress would otherwise spin here
+                                    # forever. It is a failure that has not raised; the stage is
+                                    # kept when it holds anything.
+                                    if written == 0:
+                                        keep_stage = False
+                                    raise _Answer(False)
+                                off += n
+                                written += n
+                    except OSError:
+                        if written == 0:
+                            keep_stage = False    # nothing reached the stage: not evidence
+                        raise _Answer(False)          # otherwise the stage holds what was read; retention is on
+                    if written == 0:
+                        keep_stage = False    # nothing readable: an empty stage is not evidence
+                        raise _Answer(False)
+                    # THE BYTES ARE ON DISK BEFORE ANY DECISION ABOUT A RESERVED NAME. A mode that did
+                    # not land, or a strip that was denied (recorded above, decided below), declines
+                    # the reserved name — and the stage, holding the bytes, is kept.
+                    try:
+                        if stat.S_IMODE(os.fstat(stage_fd).st_mode) != _REPORT_MODE:
+                            raise _Answer(True)       # complete bytes, kept under the temporary prefix (see the docstring)
+                    except OSError:
+                        raise _Answer(True)           # cannot verify the mode: the same — kept, no reserved name
+                    if _strip_denied:
+                        # THE SAME RULE AS QUARANTINE: a reserved name asserts the report's access
+                        # policy, and a denied strip means it is not on the file. The bytes are on
+                        # the stage and retention is on, so declining the name loses nothing — the
+                        # "only remaining copy" exception this function used to take was written
+                        # before the stage was kept by default (cold leg, 0c28c5e).
+                        raise _Answer(True)           # complete bytes, kept; no reserved name
+                except OSError:
+                    raise _Answer(False)
+                for candidate in _unpublished_slot_names():
+                    try:
+                        _link_held_inode(stage_fd, candidate, dirfd)
+                    except FileNotFoundError:
+                        # NO CUSTODY WAS TAKEN — the link helper refused, or its post-link check did — and
+                        # the stage keeps the bytes. Nothing more is done HERE: the finally below asks
+                        # once whether the stage name still reaches the stage and copies out only if
+                        # it does not. This arm used to make its own further copy first, and with the
+                        # finally's re-ask added in round forty-eight a taken stage name produced two
+                        # copies of the same findings (invariant leg, e71e440).
+                        keep_stage = True
+                        raise _Answer(True)           # complete bytes, kept; the finally re-asks the name
+                    except _CustodyUnconfirmed:
+                        # THE LINK MAY HAVE LANDED. The next name would be a second one for this
+                        # inode; the stage keeps the bytes (retention is on) and no more is tried —
+                        # after the same question the stage paths ask before a close: is the stage
+                        # name still this inode? A stage whose name was taken meanwhile has this
+                        # descriptor as its last reference, and is copied out once more (depth bounds
+                        # it) rather than freed (inventory trace, 4e0be0a).
+                        keep_stage = True
+                        # The re-ask of the stage name happens in the finally below, for this exit
+                        # and every other retention exit alike, one level deep. Round forty-seven
+                        # asked it here through a helper that dropped the depth, so every level
+                        # restarted at zero and a racer who kept taking names drove the chain until
+                        # the reserved names, or the descriptors, ran out (invariant leg, cold leg
+                        # and an inventory trace, all on 407a89c).
+                        raise _Answer(True)           # complete bytes, kept (and possibly linked)
+                    except OSError:
+                        continue              # occupied or unusable — the next name
+                    # THE LINK IS THE HELD INODE BY CONSTRUCTION: it was made through the descriptor
+                    # directory, which cannot attach anything else. This is the one place retention is
+                    # released — the bytes now have a reserved name.
+                    keep_stage = False
+                    raise _Answer(True)
+                # EVERY RESERVED NAME WAS TAKEN — AND THE STAGE IS KEPT. A completed stage under the
+                # scanner's own temporary prefix promises nothing and claims nothing, which makes it the
+                # right place for evidence that no reserved name will take.
+                raise _Answer(True)                   # retention on: the kept stage IS the copy, complete
             finally:
-                _close_quietly(stage_fd)
+                # THE CLOSE IS UNDER ITS OWN FINALLY. Round thirty-two put the identity cleanup before the
+                # close (it needs the descriptor) and left the close after it unprotected; a cancellation
+                # inside the cleanup's lstat leaked the descriptor at three sites (invariant leg, 0829b97).
+                try:
+                    if stage_name is not None:
+                        # EMPTINESS IS MEASURED ON THE STAGE, NOT INFERRED FROM THE COUNTER. A
+                        # cancellation inside a write lands after the bytes are on disk and before
+                        # `written` advances (the mid-copy arm of round thirty); the counter says
+                        # nothing reached the stage, the stage says otherwise, and the stage is
+                        # what is believed. Unreadable: keeping is the direction that cannot lose.
+                        try:
+                            _empty = os.fstat(stage_fd).st_size == 0
+                        except OSError:
+                            _empty = False
+                        if _empty:
+                            # AN EMPTY STAGE HOLDS NOTHING, and has only ever had one name — the
+                            # nlink rule below would keep it forever (gate 37). Identity alone
+                            # authorizes removing it, and retention does not apply to it:
+                            # retention keeps BYTES through a cancellation, and there are none
+                            # (executed review, 4632326 — an interrupt before the first read
+                            # kept an empty stage).
+                            _remove_own_stage(dirfd, stage_name, stage_fd)
+                        elif not keep_stage and depth < 1:
+                            # only while the reserved name (or any other) still reaches the copy —
+                            # and the helper says whether a name still does afterwards
+                            if not _remove_stage_if_another_name_remains(dirfd, stage_name, stage_fd, depth):
+                                _hollow.append(True)
+                        # AT DEPTH ONE THE STAGE IS KEPT, LINKED OR NOT. The rescue-of-a-rescue used to
+                        # release its stage after its link, and a racer's second act on the reserved
+                        # name then left the copy nameless with no further rescue (cold leg,
+                        # 5b1a014). Kept, the module takes no last name of its own at that depth: a
+                        # leftover under the temporary prefix is the whole cost, and both names must
+                        # be taken by someone else before the close can free anything.
+                        elif keep_stage:
+                            # KEPT — AND THE NAME IS RE-ASKED BEFORE THE CLOSE, AT ANY DEPTH.
+                            # Retention means "do not unlink the stage name"; it was being read
+                            # as "the stage name still reaches this inode", which is a different
+                            # fact (cold leg, 407a89c). A stage name taken while the copy was
+                            # being made leaves this descriptor as the copy's last reference on
+                            # every retention exit. At depth zero the bytes are copied out once
+                            # more; at depth one they cannot be, and the answer says so — a
+                            # nameless copy is no custody, and the caller above retries from
+                            # what it still holds (cold leg and inventory, 5850e01).
+                            try:
+                                _held = os.fstat(stage_fd)
+                                _named = os.lstat(stage_name, dir_fd=dirfd)
+                                _still = (_named.st_dev, _named.st_ino) == (_held.st_dev, _held.st_ino)
+                            except OSError:
+                                _still = False
+                            if not _still:
+                                _rescued = (_copy_out_unpublished(dirfd, stage_fd, depth + 1)
+                                            if depth < 1 else False)
+                                if not _rescued:
+                                    _hollow.append(True)
+                finally:
+                    _close_quietly(stage_fd)
+        except _Answer as _a:
+            _answer = _a.value
     finally:
         if src is not None:
             _close_quietly(src)
+    # THE ANSWER IS DECIDED HERE, AFTER THE CLEANUP. A complete copy that lost its name while
+    # it streamed, whose nested copy could not be made, is no custody — and a True over it made
+    # write_report skip the re-ask that rescued this corner from the original descriptor
+    # (cold leg and inventory, 5850e01).
+    return False if _hollow else _answer
 
 def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
     """Keep a staged findings report the publish could not complete. Answer whether it was kept.
 
     A False answer means THIS FUNCTION DID NOT TAKE CUSTODY of the staged file — nothing more.
-    Custody is a reserved name, or a complete copy kept under the temporary prefix by the
-    copy-out (its answer is passed through unchanged). It
+    Custody is a reserved name that still reaches the inode after the stage is released, or a
+    complete copy kept under the temporary prefix by the copy-out (the release helper's and
+    the copy-out's answers are passed through unchanged). It
     does not mean the file should be removed, and the gate required that distinction to be written
     down rather than inferred. The caller decides separately, from _staged_holds_evidence, whether
     removing it would destroy anything: a staged CLEAN or an empty stage is removed, staged
@@ -933,8 +974,7 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
         # AND, SINCE ROUND FORTY-NINE, THE LINK COUNT IS RE-READ AFTER THE UNLINK: a reserved name
         # ended inside the helper's own four-syscall window made that unlink the last one, and
         # the helper now copies the bytes out before this function answers and the caller closes.
-        _remove_stage_if_another_name_remains(dirfd, tmp_name, fd)
-        return True
+        return _remove_stage_if_another_name_remains(dirfd, tmp_name, fd)
     return False
 
 
@@ -1805,7 +1845,8 @@ def _false_or_rescue(dirfd, tmp_name, fd, depth=0):
 def _remove_stage_if_another_name_remains(dirfd, name, fd, depth=0):
     """Remove NAME (identity-checked) only if the held inode has at least one other name — and
     if that unlink turns out to have taken the last name anyway, copy the bytes out before the
-    caller's close can free them — where a copy can be made; when none can (no creatable name,
+    caller's close can free them. Answers whether custody still holds afterwards: a name still
+    reaches the inode, or the copy-out kept a named complete copy — where a copy can be made; when none can (no creatable name,
     no readable source) the close frees them, which is the copy-out's stated limit, and the
     caller still answers "custody taken" for a link that no longer exists (invariant leg, 5b1a014).
 
@@ -1822,9 +1863,9 @@ def _remove_stage_if_another_name_remains(dirfd, name, fd, depth=0):
     try:
         nlink = os.fstat(fd).st_nlink
     except OSError:
-        return                            # cannot tell BEFORE any act: keep the name
+        return True                       # cannot tell BEFORE any act: keep the name, nothing changed
     if nlink == 1:
-        return                            # the stage may be the last name: keep it
+        return True                       # the stage may be the last name: keep it
     if nlink >= 2:
         _remove_own_stage(dirfd, name, fd)
     # nlink was ZERO ON ENTRY (every name already taken — the racer's two acts, and no act of
@@ -1840,7 +1881,14 @@ def _remove_stage_if_another_name_remains(dirfd, name, fd, depth=0):
             # (executed review, 5b1a014).
             nameless = True
         if nameless:
-            _copy_out_unpublished(dirfd, fd, depth + 1)
+            # THE ANSWER IS THE COPY-OUT'S: custody holds only if it kept a named complete copy.
+            # Ignoring it let quarantine answer "custody taken" over nothing (cold leg, 5850e01).
+            return bool(_copy_out_unpublished(dirfd, fd, depth + 1))
+        return True
+    try:
+        return os.fstat(fd).st_nlink >= 1
+    except OSError:
+        return False
 
 
 def _remove_own_stage(dirfd, tmp_name, fd):

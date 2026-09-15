@@ -8515,3 +8515,82 @@ def test_a_link_count_already_zero_on_entry_to_the_release_is_rescued(tmp_path: 
     assert _findings_anywhere(reports, "docs/Z.md:1"), (
         "REPAIRED: the link count was already zero when the release helper started; it skipped the case, "
         "custody was reported taken, and the close freed the findings")
+
+
+# =============================================================================================
+# GROUP 59 — the fifty-first round. Gate 46's inventory on 5850e01: a stage name taken while the
+# copy streamed, plus no creatable name for the depth-one rescue, left the copy-out answering
+# True over no copy, and write_report then skipped the re-ask that had rescued this corner
+# from the original descriptor at 5b1a014.
+# =============================================================================================
+
+
+@pytest.mark.parametrize("mode", ["depth1_no_name", "depth1_name_taken", "release_nlink0_no_name"])
+def test_the_copy_outs_answer_is_false_when_its_kept_stage_lost_its_name_and_the_rescue_failed(tmp_path: Path, mode: str) -> None:
+    """REPAIRED (cold #1–3 and the inventory, gate 46): the answer must be decided after the cleanup — False
+    whenever the copy's inode has no name left and no nested copy kept a named complete one — so that
+    write_report's False handler still runs against the original descriptor it holds open."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "hollow_true_" + mode)
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    if mode != "release_nlink0_no_name":
+        for slot in module._unpublished_slot_names():
+            (reports / slot).write_text("scan_gate: CLEAN\n", encoding="utf-8")   # every reserved name occupied
+    real_install, real_write, real_open, real_fstat = module._install_posix_acl_policy, module.os.write, module.os.open, module.os.fstat
+    swapped: list[str] = []
+    refused: list[str] = []
+
+    def _decoy_over(target: Path) -> None:
+        decoy = reports / ("decoy-%d.txt" % len(swapped))
+        decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+        os.replace(decoy, target)
+
+    def install_fails(dirfd, src_name, dst_fd, dst_name):
+        if mode != "release_nlink0_no_name" and not swapped:
+            stages = [p for p in reports.iterdir() if p.name.startswith(".scan_report_")]
+            if len(stages) == 1:
+                swapped.append(stages[0].name); _decoy_over(stages[0])   # the primary stage diverges: quarantine copies out
+        raise OSError(5, "injected policy failure")
+
+    def write_hook(fd, data):
+        f = sys._getframe(1)
+        if f.f_code.co_name == "_copy_out_unpublished":
+            d, stage = f.f_locals.get("depth", 0), f.f_locals.get("stage_name")
+            want = {"depth1_no_name": 0, "depth1_name_taken": None, "release_nlink0_no_name": None}[mode]
+            if stage and ((mode == "depth1_no_name" and d == 0 and len(swapped) == 1)
+                          or (mode == "depth1_name_taken" and d in (0, 1) and stage not in swapped and len(swapped) <= 2)):
+                swapped.append(stage); _decoy_over(reports / stage)   # the copy's own stage name is taken while it streams
+        return real_write(fd, data)
+
+    def open_hook(path, *a, **k):
+        f = sys._getframe(1)
+        if (mode in ("depth1_no_name", "release_nlink0_no_name") and f.f_code.co_name == "_copy_out_unpublished"
+                and f.f_locals.get("depth", 0) >= 1 and str(path).startswith(".scan_report_")):
+            refused.append(str(path)); raise OSError(errno.ENOSPC, "injected: no creatable name at depth one")
+        return real_open(path, *a, **k)
+
+    def fstat_hook(f_, *a, **k):
+        f = sys._getframe(1)
+        if mode == "release_nlink0_no_name" and f.f_code.co_name == "_remove_stage_if_another_name_remains" and not swapped:
+            swapped.append("both")
+            for p in list(reports.iterdir()):
+                if p.name.startswith("scan_report.unpublished") or p.name.startswith(".scan_report_"):
+                    os.unlink(p)                       # reserved name AND stage name gone before the helper's first read
+        return real_fstat(f_, *a, **k)
+
+    module._install_posix_acl_policy, module.os.write, module.os.open, module.os.fstat = install_fails, write_hook, open_hook, fstat_hook
+    try:
+        with pytest.raises(Exception):
+            module.write_report(str(staging), [("docs/H.md", 1, "SECRET", "generic_key_assignment", "contents")])
+    finally:
+        module._install_posix_acl_policy, module.os.write, module.os.open, module.os.fstat = real_install, real_write, real_open, real_fstat
+    needed = {"depth1_no_name": (2, 1), "depth1_name_taken": (3, 0), "release_nlink0_no_name": (1, 1)}[mode]
+    if len(swapped) < needed[0] or len(refused) < needed[1]:
+        pytest.skip(f"the schedule did not complete (swapped={swapped}, refused={len(refused)}); this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/H.md:1"), (
+        f"REPAIRED ({mode}): the copy's inode had no name left and no nested copy kept one, yet the answer "
+        f"reaching write_report was True; its False handler was skipped and the close freed the findings")
