@@ -1625,7 +1625,20 @@ def _open_held_copy(dirfd, name, expect):
             _close_quietly(fd)
             return None, False
     except BaseException:
-        _close_quietly(fd)
+        # THE INTERRUPT LANDS ON A DESCRIPTOR THAT MAY BE THE LAST REFERENCE (cold leg,
+        # 8dd9edd, the fourth instance): the name may already be gone. Identity is asked here,
+        # since the caller never received the descriptor and the check above may not have run;
+        # ours -> the last-reference question, then the close; not ours or unknowable -> close.
+        _ours = False
+        try:
+            _g = os.fstat(fd)
+            _ours = stat.S_ISREG(_g.st_mode) and (_g.st_dev, _g.st_ino) == (expect.st_dev, expect.st_ino)
+        except BaseException:
+            _ours = False                 # a second interrupt here must not skip the close below
+        if _ours:
+            _rescue_then_close(dirfd, fd, via_proc)   # its finally closes even if the rescue is interrupted
+        else:
+            _close_quietly(fd)
         raise
     return fd, via_proc
 
@@ -1993,10 +2006,24 @@ def _canonical_still_classified(dirfd, guard):
     return (seen.st_dev, seen.st_ino) == (dev, ino)
 
 
-def _rescue_before_close(dirfd, fd, depth=0):
+def _rescue_before_close(dirfd, fd, via_proc, depth=0):
     """THE LAST-REFERENCE QUESTION, ASKED BEFORE A CLOSE. If no name reaches the held inode any
     more — or the count cannot be read — its bytes are copied out through the descriptor first,
-    so the close that follows does not free the only copy of a findings report.
+    so the close that follows does not free the only copy of a findings report — where a copy
+    can be made. The copy-out's stated limits (no descriptor directory, no creatable temporary
+    name, a source it cannot read back) apply here as everywhere; its answer is not consulted,
+    because the caller has nothing left to do with the descriptor but close it (cold leg,
+    8dd9edd, which also asked that the question and the close be one try/finally — see
+    `_rescue_then_close`, the form every site uses).
+
+    A STATUS LINE IS NEVER COPIED. The prefix is read through the descriptor before any copy,
+    and a CLEAN or REFUSED whose names were taken is let go: it is not evidence, and a copy of
+    it under the reserved unpublished name would tell a reader this tree passed beside an exit
+    status of 2 (invariant leg, 8dd9edd — the first shape asked only the count, before the
+    classification had run). An unreadable prefix is treated as findings, the costly direction.
+    Preservation's cancellation closes (an interrupt inside a narrowing or a classification)
+    and its already-preserved-slot cleanup ask here too, during the unwinding, as the copy-out's
+    own finally does (same leg).
 
     Every other findings-bearing close in this module already asks (quarantine and the stage
     writer through `_false_or_rescue`, the copy-out through its own finally); preservation asked
@@ -2010,8 +2037,21 @@ def _rescue_before_close(dirfd, fd, depth=0):
         nameless = os.fstat(fd).st_nlink == 0
     except OSError:
         nameless = True
-    if nameless:
-        _copy_out_unpublished(dirfd, fd, depth)
+    if not nameless:
+        return
+    if _read_prefix_held(fd, via_proc, len(_STATUS_LINE_PREFIX)) == _STATUS_LINE_PREFIX:
+        return                            # a status line: not evidence, and no reserved name for it
+    _copy_out_unpublished(dirfd, fd, depth)
+
+
+def _rescue_then_close(dirfd, fd, via_proc, depth=0):
+    """The question and the close as ONE try/finally: a copy-out that raised (a cancellation, an
+    error that is not an I/O error) used to skip the close and leak the descriptor to process
+    exit (cold leg, 8dd9edd). Best effort on the way out, and the close always runs."""
+    try:
+        _rescue_before_close(dirfd, fd, via_proc, depth)
+    finally:
+        _close_quietly(fd)
 
 
 def _preserve_superseded(dirfd, report_name, guard_out=None):
@@ -2116,7 +2156,10 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         try:
             _policy_on_held = _narrow_held_copy(_cfd, _cvia)
         except BaseException:
-            _close_quietly(_cfd)          # an interrupt here leaked the held descriptor (inventory, 884e6c2)
+            # An interrupt here leaked the held descriptor (inventory, 884e6c2); closing it
+            # unasked freed the findings when the name had been taken meanwhile (invariant leg,
+            # 8dd9edd). Asked during the unwinding, then closed.
+            _rescue_then_close(dirfd, _cfd, _cvia)
             raise
     try:
         for candidate in (_superseded_slot_names() if linked is None and _policy_on_held else ()):
@@ -2144,8 +2187,11 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             # it through the descriptor directory rather than fchmod, and its bytes are read by
             # the reopen rather than pread (round forty-seven; the sentence here used to say
             # "the same rescue", which a cold leg measured as false for a mode-000 report).
-            # Still at its name: nothing to do, and the replacement is declined below.
-            _false_or_rescue(dirfd, report_name, _cfd)
+            # Still at its name: nothing to do, and the replacement is declined below. ASKED BY
+            # LINK COUNT AND BY PREFIX through the same helper as every other close here: the
+            # name-identity question copied a CLEAN whose name had been taken to a reserved
+            # unpublished name (executed review, 8dd9edd) — a status line is let go.
+            _rescue_before_close(dirfd, _cfd, _cvia)
     finally:
         if _cfd is not None:
             if linked is not None:
@@ -2153,8 +2199,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
                 # above runs only with no slot; with one, both names could be taken between the
                 # confirmation and this close, and the close freed the previous report's findings
                 # (cold leg, 884e6c2). Asked by count, since the name to ask about is now two.
-                _rescue_before_close(dirfd, _cfd)
-            _close_quietly(_cfd)
+                _rescue_then_close(dirfd, _cfd, _cvia)
     if _unconfirmed:
         return False                      # nothing this call can vouch for; the replacement is declined
 
@@ -2195,7 +2240,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         try:
             narrowed = _narrow_held_copy(held_fd, held_via_proc)
         except BaseException:
-            _close_quietly(held_fd)       # an interrupt here used to leak the descriptor
+            _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
             raise
 
     # Classify only AFTER the link, so a failed read cannot prevent preservation — and classify
@@ -2224,7 +2269,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             except OSError:
                 _slot_has_another_name = False
         except BaseException:
-            _close_quietly(held_fd)
+            _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
             raise
         # The descriptor stays open past this point: the release decision below needs it to
         # confirm the slot NAME still refers to this inode before anything is unlinked.
@@ -2255,8 +2300,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             if _ask_before_close:
                 # ONE UNLINK OF THE ONLY REMAINING NAME during this read left the descriptor as
                 # the last reference, and the close freed it (cold leg, 884e6c2).
-                _rescue_before_close(dirfd, _cfd)
-            _close_quietly(_cfd)
+                _rescue_then_close(dirfd, _cfd, _cvia)
 
     if is_status_line:
         # A CLEAN or REFUSED report is not worth a slot, and parking one there was measured
@@ -2281,8 +2325,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         # FINDINGS, CLASSIFIED THROUGH THE SLOT — and both names may have been taken while they
         # were being read (cold leg, 884e6c2): asked before the close, like every other findings
         # close in this module.
-        _rescue_before_close(dirfd, held_fd)
-        _close_quietly(held_fd)
+        _rescue_then_close(dirfd, held_fd, held_via_proc)
         held_fd = None
 
     if linked is not None:
@@ -2358,7 +2401,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
                         guard_out.append(("slot", candidate, previous.st_dev, previous.st_ino))
                     return True           # already preserved by an earlier call; oldest wins
             finally:
-                _close_quietly(_kept_fd)
+                _rescue_then_close(dirfd, _kept_fd, _kept_via_proc)   # both names may be gone (invariant leg, 8dd9edd)
             # AND THE NAME STAYS. This copy is a second name for the SAME inode the report is
             # standing on — the identity check above is what establishes that — so an ACL on it
             # is an ACL already on the report itself, not a channel this call opened. Unlinking a

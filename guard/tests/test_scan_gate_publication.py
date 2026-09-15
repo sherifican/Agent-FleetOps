@@ -8948,3 +8948,162 @@ def test_a_cancellation_inside_the_pre_link_narrowing_does_not_leak_the_held_des
     leaked = _held_report_fds()
     assert not leaked, f"REPAIRED: the interrupt inside the pre-link narrowing left the held descriptor open: {leaked}"
     assert (reports / "scan_report.txt").exists()
+
+
+# =============================================================================================
+# GROUP 63 — the fifty-fifth round. Gate 50's invariant leg on 8dd9edd: the last-reference
+# rescue after the link loop ran before classification, so a CLEAN whose names were taken was
+# copied to a reserved unpublished name; the cancellation closes in preservation (the pre-link
+# narrowing, the slot classification) and the already-preserved-slot close were still unasked.
+# =============================================================================================
+
+
+def _preserve_arm_setup(tmp_path: Path, tag: str, body: str):
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, tag)
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    reports = tmp_path / "staging" / "_reports"
+    reports.mkdir(parents=True)
+    (reports / "scan_report.txt").write_text(body, encoding="utf-8")
+    return module, reports
+
+
+def _take(reports: Path, names) -> None:
+    for p in list(reports.iterdir()):
+        if p.name in names:
+            os.unlink(p)
+
+
+def test_a_clean_whose_names_were_taken_is_never_copied_to_a_reserved_name(tmp_path: Path) -> None:
+    """REPAIRED (invariant leg #4, gate 50): the last-reference rescue reads the prefix through the
+    descriptor first — a status line is not evidence and never takes a reserved unpublished name."""
+    module, reports = _preserve_arm_setup(tmp_path, "preserve_clean_not_copied", "scan_gate: CLEAN\n")
+    real_lstat = module.os.lstat
+    acts: list[str] = []
+
+    def lstat_hook(path, *a, **k):
+        r = real_lstat(path, *a, **k)
+        if sys._getframe(1).f_code.co_name == "_link_held_inode" and not acts:
+            acts.append("took"); _take(reports, {"scan_report.txt", str(path)})
+        return r
+
+    module.os.lstat = lstat_hook
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        module.os.lstat = real_lstat
+        os.close(dirfd)
+    if not acts:
+        pytest.skip("the racer never acted; this arm measured nothing")
+    reserved = [p.name for p in reports.iterdir() if p.name.startswith("scan_report.unpublished")]
+    assert not reserved, f"REPAIRED: a CLEAN was copied to a reserved unpublished name {reserved} — a false authorization beside an exit status of 2"
+
+
+@pytest.mark.parametrize("site", ["pre_link_narrowing", "slot_classification", "already_preserved_slot"])
+def test_preservations_remaining_closes_ask_before_closing(tmp_path: Path, site: str) -> None:
+    """REPAIRED (invariant leg #1–#3, gate 50): a cancellation inside the pre-link narrowing or the
+    slot classification, and the already-preserved-slot cleanup, close a findings-bearing descriptor
+    only after the last-reference question — the racer's acts before them are answered by a copy."""
+    module, reports = _preserve_arm_setup(tmp_path, "preserve_close_" + site, "generic\tkey\tassignment\tdocs/W.md:1\n")
+    if site == "already_preserved_slot":
+        for slot in module._superseded_slot_names():
+            (reports / slot).write_text("other\tkey\tassignment\tdocs/O.md:1\n", encoding="utf-8")
+    real_strip, real_prefix = module._strip_acl_by_fd, module._read_prefix_held
+    acts: list[str] = []
+    strips: list[int] = []
+
+    def strip_hook(fd):
+        f1, f2 = sys._getframe(1), sys._getframe(2)
+        if f1.f_code.co_name == "_narrow_held_copy" and f2.f_code.co_name == "_preserve_superseded":
+            strips.append(fd)
+            if site == "pre_link_narrowing" and len(strips) == 1:
+                acts.append("took+kbi"); _take(reports, {"scan_report.txt"}); raise KeyboardInterrupt()
+            if site == "already_preserved_slot" and len(strips) == 2:
+                acts.append("took"); _take(reports, {"scan_report.txt"} | set(module._superseded_slot_names()))
+        return real_strip(fd)
+
+    def prefix_hook(fd, via_proc, count):
+        if site == "slot_classification" and not acts:
+            acts.append("took+kbi")
+            _take(reports, {"scan_report.txt"} | {p.name for p in reports.iterdir() if p.name.startswith("scan_report.superseded")})
+            raise KeyboardInterrupt()
+        r = real_prefix(fd, via_proc, count)
+        if site == "already_preserved_slot" and not acts:
+            slot = next(iter(module._superseded_slot_names()))
+            os.unlink(reports / slot); os.link(reports / "scan_report.txt", reports / slot)   # preserved meanwhile by another run
+            acts.append("slot-appeared")
+        return r
+
+    module._strip_acl_by_fd, module._read_prefix_held = strip_hook, prefix_hook
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        if site == "already_preserved_slot":
+            module._preserve_superseded(dirfd, "scan_report.txt")
+        else:
+            with pytest.raises(KeyboardInterrupt):
+                module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        module._strip_acl_by_fd, module._read_prefix_held = real_strip, real_prefix
+        os.close(dirfd)
+    if site == "already_preserved_slot" and "took" not in acts:
+        pytest.skip(f"the already-preserved branch was not reached (acts={acts}); this arm measured nothing")
+    if site != "already_preserved_slot" and not acts:
+        pytest.skip("the injection never fired; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/W.md:1"), (
+        f"REPAIRED ({site}): the descriptor was closed unasked while it was the last reference; the findings are gone (acts={acts})")
+
+
+def test_a_clean_whose_name_diverged_with_no_slot_is_never_copied_to_a_reserved_name(tmp_path: Path) -> None:
+    """REPAIRED (executed review v-j, gate 50): the no-slot rescue in preservation asked only whether the
+    canonical name still held the inode; a CLEAN whose name was taken was copied to a reserved
+    unpublished name. The last-reference question there reads the prefix first, like the others."""
+    module, reports = _preserve_arm_setup(tmp_path, "preserve_clean_noslot", "scan_gate: CLEAN\n")
+    for slot in module._superseded_slot_names():
+        (reports / slot).write_text("other\tkey\tassignment\tdocs/O.md:1\n", encoding="utf-8")   # no slot free
+    real_link = module.os.link
+    acts: list[str] = []
+
+    def link_hook(src, dst, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_link_held_inode" and not acts:
+            acts.append("took"); _take(reports, {"scan_report.txt"})   # the canonical name goes while the slots are tried
+        return real_link(src, dst, *a, **k)
+
+    module.os.link = link_hook
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        module.os.link = real_link
+        os.close(dirfd)
+    if not acts:
+        pytest.skip("the racer never acted; this arm measured nothing")
+    reserved = [p.name for p in reports.iterdir() if p.name.startswith("scan_report.unpublished")]
+    assert not reserved, f"REPAIRED: a CLEAN whose name diverged was copied to a reserved unpublished name {reserved}"
+
+
+def test_a_cancellation_inside_the_held_copy_opener_does_not_close_the_last_reference_unasked(tmp_path: Path) -> None:
+    """REPAIRED (cold #2 fourth instance, gate 50): the opener's own cancellation guard, between the
+    open and the return, asks the last-reference question before it closes what it just opened."""
+    module, reports = _preserve_arm_setup(tmp_path, "opener_kbi", "generic\tkey\tassignment\tdocs/W.md:1\n")
+    real_fstat = module.os.fstat
+    acts: list[str] = []
+
+    def fstat_hook(f_, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_open_held_copy" and not acts:
+            acts.append("took+kbi"); _take(reports, {"scan_report.txt"}); raise KeyboardInterrupt()
+        return real_fstat(f_, *a, **k)
+
+    module.os.fstat = fstat_hook
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        module.os.fstat = real_fstat
+        os.close(dirfd)
+    if not acts:
+        pytest.skip("the opener's identity read was never reached; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/W.md:1"), (
+        "REPAIRED: the opener closed the descriptor it had just opened, unasked, while the name was already gone")
