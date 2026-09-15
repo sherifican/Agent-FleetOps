@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""fd_ownership_check.py — does any STATEMENT stand between a descriptor acquisition and the
-``try`` whose ``finally`` releases it?
+"""fd_ownership_check.py — does anything stand between a descriptor acquisition and the ``try``
+whose ``finally`` releases it: a STATEMENT, or a BLOCK the interpreter has to leave?
 
-THAT IS THE WHOLE QUESTION, and the scope is deliberate. An earlier draft of this checker tried to
+THAT IS THE WHOLE QUESTION, and the scope is deliberate. The block half was added in the
+sixty-fifth round, after two reviewers found by reading what this file passed by counting: an
+acquisition in one ``try`` and its release in the ``finally`` of a different one has zero
+statements between the two and is still a window, because leaving the first block and entering
+the second is work done with the descriptor allocated and nothing registered to release it. An earlier draft of this checker tried to
 certify a stronger property: that the shape "slot = None; try: slot = acquire(); finally: if slot
 is not None: release(slot)" CLOSES the leak class. It does not, and an adversarial review refuted
 it before this file was finished. ``os.open`` returns a raw integer. A cancellation delivered
@@ -13,9 +17,12 @@ say this plainly: a KeyboardInterrupt can arrive between any two virtual machine
 
 So:
 
-  WHAT THIS COVERS. Source-level gaps. A statement standing between an acquisition and its owner
-  is a window wide enough to hold arbitrary work — another call, another open, a return — and
-  every historical instance of this defect in the scanned module is one. A lint can see those.
+  WHAT THIS COVERS. Source-level gaps, of two kinds. A STATEMENT standing between an acquisition
+  and its owner is a window wide enough to hold arbitrary work — another call, another open, a
+  return — and every historical instance of this defect in the scanned module is one. A BLOCK
+  standing between them is narrower and just as real: the statement count is zero, and the
+  interpreter still has to unwind one ``try`` and install another. A lint can see both, because
+  both are structure.
 
   WHAT THIS DOES NOT COVER, and cannot. The window between the acquiring syscall returning and
   the name being bound. No source check can see it, and this one does not pretend to: the
@@ -71,6 +78,28 @@ REJECTED BY CONSTRUCTION — each of these is a shape that LOOKS like ownership 
   * TWO SLOTS SHARING ONE FINALLY as siblings — if the first release raises, the second never
     runs. The isolated spelling (``try: release(a) finally: release(b)``) is accepted.
   * A RELEASE OF A DIFFERENT SLOT than the one acquired.
+  * AN ACQUISITION IN ONE ``try`` AND ITS RELEASE IN A DIFFERENT ONE — the ``cross-try`` verdict,
+    added in the sixty-fifth round because shape A above could not see it:
+        try:
+            fd = os.open(...)
+        except OSError:
+            return None
+        # a comment, which is not a statement
+        try:
+            ...
+        finally:
+            _close_quietly(fd)
+    ZERO STATEMENTS stand between those two blocks, so the statement counter says nothing and the
+    site read as ``acquire-then-own``. But the interpreter has to LEAVE the first block and ENTER
+    the second, and while it is between them nothing is registered to release the descriptor: the
+    handlers of the first block are gone and the ``finally`` of the second has not been installed.
+    A comment cannot launder this — comments are not statements, and the statement count is 0 with
+    or without one.
+    THE TEST IS BLOCK CONTAINMENT, NOT ADJACENCY. A ``try`` that encloses the acquisition is
+    harmless when it also encloses the owner (the owner is reached without leaving it) or when it
+    is itself nested inside the owner (leaving it does not leave the owner). What is reported is a
+    ``try`` holding the acquisition that holds NEITHER — a block the interpreter must exit, on a
+    path where no ``finally`` names the slot.
 
 DERIVED ACQUIRERS AND RELEASERS. The module's own helpers hand descriptors out
 (``_open_dir_nofollow`` returns one, ``_stage_report`` returns a pair) and take them back
@@ -98,10 +127,12 @@ from pathlib import Path
 # The sentence a clean run must carry. Printed, not commented: the scope limit travels with the
 # verdict or it is not a scope limit.
 COVERAGE_DISCLOSURE = (
-    "COVERAGE: no source-level statement stands between an acquisition and its owner. This does "
-    "NOT close the window between the acquiring syscall returning and the name being bound — a "
-    "cancellation there leaves the slot unset and the descriptor unowned, and no source check can "
-    "see it."
+    "COVERAGE: no source-level statement stands between an acquisition and its owner, and no "
+    "block boundary does either — an acquisition whose enclosing try is not the try whose finally "
+    "releases it is reported as cross-try, not as clean. This does NOT close the window between "
+    "the acquiring syscall returning and the name being bound — a cancellation there leaves the "
+    "slot unset and the descriptor unowned, and no source check can see it, because it falls "
+    "between two bytecodes and not between two statements."
 )
 
 # Standard-library calls that hand back a NEW descriptor. Narrow on purpose: a name not in here is
@@ -521,6 +552,38 @@ def _preset_to_none_before(container: list, owner: ast.Try, slot: str) -> bool:
     return False
 
 
+def _enclosing_trys(scope: ast.AST, call: ast.Call) -> list[ast.Try]:
+    """Every ``try`` in SCOPE that holds CALL anywhere — body, handler, orelse or finalbody —
+    innermost last. These are the blocks the interpreter is inside at the moment the descriptor
+    comes back."""
+    holders = [stmt for stmt in _own_statements(scope)
+               if isinstance(stmt, ast.Try) and _contains(stmt, call)]
+    # Innermost last: a try that contains another is the outer one.
+    holders.sort(key=lambda t: sum(1 for other in holders if other is not t and _contains(other, t)))
+    return holders
+
+
+def _escaped_blocks(scope: ast.AST, call: ast.Call, owner: ast.Try) -> list[ast.Try]:
+    """The ``try`` blocks the interpreter must LEAVE to get from the acquisition to OWNER.
+
+    A try enclosing the acquisition is harmless in exactly two situations, and this returns
+    neither of them:
+
+      * it also encloses OWNER — control reaches the owning block without leaving it;
+      * it is nested INSIDE owner — leaving it does not leave the block that releases the slot.
+
+    Anything else is a block the interpreter exits while the descriptor is allocated and nothing
+    is registered to release it. Note that the count of STATEMENTS between the two can be zero in
+    this shape, which is exactly why the statement counter could not see it.
+    """
+    out = []
+    for block in _enclosing_trys(scope, call):
+        if block is owner or _contains(block, owner) or _contains(owner, block):
+            continue
+        out.append(block)
+    return out
+
+
 def _statements_between(container: list, acq_stmt: ast.stmt, owner: ast.Try):
     try:
         i = container.index(acq_stmt)
@@ -691,12 +754,42 @@ def _classify(scope, call, site, releasers) -> None:
                        "acquisition; the nearest is the try at line %d" % (slot, owner.lineno))
         return
     if best["gap"] > 0:
+        # STATEMENTS FIRST, BLOCKS SECOND. When a site has both, the older and more specific
+        # message is the one printed; it already fails the gate, and two names for one site would
+        # make the baseline below ambiguous.
         site.verdict = "gap"
         site.gap = best["gap"]
         site.detail = ("%d statement(s) stand between the acquisition and the try at line %d whose "
                        "finally releases %s — every one of them is a raise that leaks it"
                        % (best["gap"], owner.lineno, slot))
         return
+
+    # --- ZERO STATEMENTS BETWEEN. Now ask whether a BLOCK stands between. ----------------------
+    #
+    # CONSERVATISM IS THE `gap is None` BRANCH ABOVE, not a second check here. A DELETED DRAFT of
+    # this rule refused sites whose releasing block the ranking could not separate from another
+    # candidate. It could never fire: by the time control reaches this line the owner is in the
+    # same statement list as the acquisition and is the very next statement in it, and two
+    # distinct statements cannot both be the next one. Anything genuinely undetermined — a release
+    # in one branch and another in a sibling branch, a finally in a block the acquisition is not
+    # in — has already returned unsupported-shape above with the acquisition's block unlocated,
+    # and `cross-try-owner-in-another-block` in the arm file is the fixture that proves it. A rule
+    # that can only ever say "clean" is not a rule, so that draft was removed rather than kept as
+    # reassurance.
+    escaped = _escaped_blocks(scope, call, owner)
+    if escaped:
+        inner = escaped[-1]
+        site.verdict = "cross-try"
+        site.gap = 0
+        site.detail = ("the acquisition is inside the try at line %d, and the finally that "
+                       "releases %s belongs to a DIFFERENT try at line %d. No statement stands "
+                       "between them, but the interpreter must leave the first block and enter "
+                       "the second, and in that interval the handlers of the first are gone and "
+                       "the finally of the second is not installed yet, so a cancellation there "
+                       "leaves %s bound with nothing to close it"
+                       % (inner.lineno, slot, owner.lineno, slot))
+        return
+
     site.verdict, site.shape, site.gap = "ok", "acquire-then-own", 0
 
 
@@ -704,8 +797,9 @@ def _classify(scope, call, site, releasers) -> None:
 # Reporting
 # ---------------------------------------------------------------------------------------------
 
-MARKS = {"ok": "OK", "gap": "GAP", "unowned": "UNOWNED", "falsy-guard": "FALSY-GUARD",
-         "shared-finally": "SHARED-FINALLY", "unsupported-shape": "UNSUPPORTED"}
+MARKS = {"ok": "OK", "gap": "GAP", "cross-try": "CROSS-TRY", "unowned": "UNOWNED",
+         "falsy-guard": "FALSY-GUARD", "shared-finally": "SHARED-FINALLY",
+         "unsupported-shape": "UNSUPPORTED"}
 
 
 def report(sites: list[Site]) -> str:
@@ -721,7 +815,8 @@ def report(sites: list[Site]) -> str:
     out.append("")
     out.append("%d acquisition site(s): %d in the accepted language, %d not"
                % (len(sites), len(sites) - len(bad), len(bad)))
-    for verdict in ("gap", "unowned", "falsy-guard", "shared-finally", "unsupported-shape"):
+    for verdict in ("gap", "cross-try", "unowned", "falsy-guard", "shared-finally",
+                    "unsupported-shape"):
         n = sum(1 for s in sites if s.verdict == verdict)
         if n:
             out.append("   %-16s %d" % (MARKS[verdict], n))

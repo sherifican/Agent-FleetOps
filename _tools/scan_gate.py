@@ -99,7 +99,20 @@ DOC_IP = re.compile(r"\b(192\.0\.2|198\.51\.100|203\.0\.113)\.\d{1,3}\b")
 _ALLOW_REL = "_tools/scan_allow.tsv"
 
 
-def _allowlist(staging: str, entries=None):
+def _index_selected(staging):
+    """Whether this run judges the INDEX rather than the working tree. ASKED ONCE PER RUN.
+
+    This test used to be made independently in two places — once to choose where the payload comes
+    from and once to choose where the exemption policy comes from — which is a check-then-act on the
+    MODE itself. A writer removing the marker between the two calls got the payload out of the index
+    and the policy out of the working tree: the same snapshot mismatch the previous round closed,
+    reachable again through a narrower door (team review, 169e8de). One probe, one answer, passed to
+    both, so there is no interval for the answer to change in.
+    """
+    return os.path.lexists(os.path.join(staging, ".git"))
+
+
+def _allowlist(staging: str, entries=None, from_index=None):
     """Explicit, reviewable exceptions: _tools/scan_allow.tsv lines of
     'exact-relative-path<TAB>pattern-name[<TAB>surface]' — a hit matching all three is deliberate
     (e.g. the owner's public GitHub handle in the root README). Every entry is a human decision on
@@ -126,6 +139,11 @@ def _allowlist(staging: str, entries=None):
     parse, REFUSES rather than being skipped: a silently dropped row is an exemption the operator
     believes exists and the scanner does not, which is the more dangerous of the two mistakes.
 
+    FROM_INDEX IS DECIDED BY THE CALLER, ONCE. None means "ask now", which is only correct for a
+    caller that is not also selecting the payload — a test exercising the export branch. A caller
+    that reads the index must pass the same answer it used there, or the two selections can disagree
+    and the mismatch this function exists to prevent comes back through the mode probe.
+
     ENTRIES IS OPTIONAL IN SYNTAX AND NOT IN MEANING. A caller in a checkout that does not pass the
     index entries gets NO exemptions — the fail-closed direction, but a silently different answer
     from the one it probably wanted. The single production caller reads the index first and passes
@@ -136,7 +154,9 @@ def _allowlist(staging: str, entries=None):
     the only snapshot there is, and that is a statement about what export mode can promise rather
     than an oversight.
     """
-    if os.path.lexists(os.path.join(staging, ".git")):
+    if from_index is None:
+        from_index = _index_selected(staging)
+    if from_index:
         oid = None
         for _rel, _oid in (entries or ()):
             if _rel == _ALLOW_REL and _oid is not None:
@@ -232,14 +252,16 @@ def _git(staging, args, reason, rel="."):
         raise ScanRefused(f"{reason} {rel!r}") from None
 
 
-def _publishable_files(staging: str, skip_dirs):
+def _publishable_files(staging: str, skip_dirs, from_index=None):
     """Return (relative path, staged blob OID), or (path, None) for an export.
 
     A local .git directory/file selects Git, including linked worktrees. An export nested in
     another checkout has no such marker and must not accidentally scan the ancestor's index.
     A selected Git failure never falls back to worktree bytes; an empty index stays empty.
     """
-    if os.path.lexists(os.path.join(staging, ".git")):
+    if from_index is None:
+        from_index = _index_selected(staging)
+    if from_index:
         top = _git(staging, ["rev-parse", "--show-toplevel"], "git-root-error")
         if os.path.realpath(os.fsdecode(top.removesuffix(b"\n"))) != os.path.realpath(staging):
             raise ScanRefused("git-root-mismatch '.'")
@@ -338,8 +360,11 @@ def _scan_into(staging: str, hits):
     # loaded before this scanner had decided which snapshot it was judging, which is how the policy
     # and the payload came from different ones (team review, df87c71).
     skip_dirs = {".git", "_reports", "__pycache__", ".pytest_cache", ".venv", "node_modules"}
-    entries = _publishable_files(staging, skip_dirs)
-    allow = _allowlist(staging, entries)
+    # ONE SELECTION, USED BY BOTH. The payload and the policy must come from the same snapshot, and
+    # that is only true if the choice of snapshot is made once (team review, 169e8de).
+    _from_index = _index_selected(staging)
+    entries = _publishable_files(staging, skip_dirs, _from_index)
+    allow = _allowlist(staging, entries, _from_index)
     personal = personal_patterns()
     for rel, oid in entries:
             # THE NAME ARM. A path is published bytes too: a file called after a private host or
@@ -412,19 +437,6 @@ def _scan_into(staging: str, hits):
                             continue
                         hits.append((rel, i, "PERSONAL", name, "content"))
     return list(dict.fromkeys(hits))
-
-def _current_umask():
-    """Read the process umask without leaving it changed.
-
-    There is no getter, so the value must be set to read it and then restored. Between those two
-    calls the mask IS 0o022 process-wide, so a concurrent thread creating a file in that window
-    would get that mask instead of the real one. This tool is a single-threaded CLI and never
-    opens that window in practice; the honest statement is that the window is narrow, not absent.
-    Should this ever be imported into a threaded process, read the mask once at startup.
-    """
-    mask = os.umask(0o022)
-    os.umask(mask)
-    return mask
 
 ACL_XATTR = "system.posix_acl_access"
 # THE DEFAULT ACL IS THE ONE THAT SPREADS. A directory carrying `system.posix_acl_default` gives

@@ -10886,6 +10886,39 @@ ACCEPTED_SHAPES = {
         def f(path):
             os.close(os.open(path, os.O_RDONLY))
     """,
+    # THE FALSE-POSITIVE CONTROL FOR THE BLOCK RULE, half one. An outer try encloses BOTH the
+    # acquisition and the owning try, so control never leaves it to reach the owner. A rule that
+    # merely noticed "the acquisition is inside a try" would redden this, and would then be
+    # reporting the presence of a try rather than a boundary between two of them.
+    "owner-nested-in-the-same-outer-try": """
+        import os
+        def f(path):
+            try:
+                fd = os.open(path, os.O_RDONLY)
+                try:
+                    return os.read(fd, 10)
+                finally:
+                    os.close(fd)
+            except OSError:
+                return None
+    """,
+    # THE FALSE-POSITIVE CONTROL, half two. The acquisition sits in an INNER try that is itself
+    # nested inside the owner: leaving that inner block does not leave the block whose finally
+    # releases the slot, so nothing is unowned at any point.
+    "acquiring-try-nested-inside-the-owner": """
+        import os
+        def f(path):
+            fd = None
+            try:
+                try:
+                    fd = os.open(path, os.O_RDONLY)
+                except OSError:
+                    return None
+                return os.read(fd, 10)
+            finally:
+                if fd is not None:
+                    os.close(fd)
+    """,
     # two descriptors, one per level: the isolated spelling, where a release that raises cannot
     # skip the other one
     "nested-owners": """
@@ -11029,6 +11062,131 @@ REJECTED_SHAPES = {
                 os.close(fd)
                 raise
     """, "unowned"),
+
+    # ------------------------------------------------------------------------------------------
+    # THE SIXTY-FIFTH ROUND'S SHAPE. Each of these is the accepted `acquire-then-own` fixture
+    # above with the acquisition moved into a try of its own. ZERO statements still stand between
+    # the two blocks, so the statement counter is satisfied by every one of them; the block rule
+    # is the only thing that can tell them apart from the fixture they were derived from.
+    # ------------------------------------------------------------------------------------------
+
+    # THE MUTATION OF `acquire-then-own`: the same code, split into two adjacent trys.
+    "cross-try-split": ("""
+        import os
+        def f(path):
+            try:
+                fd = os.open(path, os.O_RDONLY)
+            except OSError:
+                return None
+            try:
+                return os.read(fd, 10)
+            finally:
+                os.close(fd)
+    """, "cross-try"),
+    # A COMMENT IS NOT A STATEMENT, and must not launder the shape. Identical to the case above
+    # with a comment wedged between the two blocks: the statement count is 0 either way, the AST
+    # does not carry the comment at all, and the verdict must not move.
+    "cross-try-with-a-comment-between": ("""
+        import os
+        def f(path):
+            try:
+                fd = os.open(path, os.O_RDONLY)
+            except OSError:
+                return None
+            # this comment is not a statement and changes nothing about the window
+            try:
+                return os.read(fd, 10)
+            finally:
+                os.close(fd)
+    """, "cross-try"),
+    # A DOCSTRING-SHAPED STRING between them IS a statement, so the older gap rule catches it.
+    # Kept beside the comment case so the difference between the two is pinned, not assumed.
+    "cross-try-with-an-expression-between": ("""
+        import os
+        def f(path):
+            try:
+                fd = os.open(path, os.O_RDONLY)
+            except OSError:
+                return None
+            "this string is an expression statement"
+            try:
+                return os.read(fd, 10)
+            finally:
+                os.close(fd)
+    """, "gap"),
+    # THE SPLIT SHAPE WITH THE RELEASE IN AN except RATHER THAN A finally. There is then no
+    # releasing try to compare the acquiring one against, and the site is rejected by the older
+    # and blunter rule instead of being read as cross-try. Pinned because a conservative rule must
+    # not manufacture an owner in order to have something to report.
+    "cross-try-release-in-except": ("""
+        import os
+        def f(path):
+            try:
+                fd = os.open(path, os.O_RDONLY)
+            except OSError:
+                return None
+            try:
+                return os.read(fd, 10)
+            except OSError:
+                os.close(fd)
+                raise
+    """, "unowned"),
+    # THE SPLIT SHAPE GUARDED ON TRUTHINESS. Descriptor 0 is legitimately acquired and falsy, so
+    # `if fd:` skips exactly the acquisition that succeeded. That is the worse of the two defects
+    # and is what the site is reported as; the block boundary is real as well.
+    "cross-try-truthiness-guard": ("""
+        import os
+        def f(path):
+            fd = None
+            try:
+                fd = os.open(path, os.O_RDONLY)
+            except OSError:
+                return None
+            try:
+                return os.read(fd, 10)
+            finally:
+                if fd:
+                    os.close(fd)
+    """, "falsy-guard"),
+    # THE SPLIT SHAPE WITH TWO RELEASES SHARING ONE finally. If the first release raises, the
+    # second never runs, and that is reported ahead of the boundary.
+    "cross-try-shared-finally": ("""
+        import os
+        def f(a, b):
+            try:
+                first = os.open(a, os.O_RDONLY)
+                second = os.open(b, os.O_RDONLY)
+            except OSError:
+                return None
+            try:
+                return os.read(first, 1) + os.read(second, 1)
+            finally:
+                os.close(first)
+                os.close(second)
+    """, "shared-finally"),
+    # THE CONSERVATIVE EXIT. The releasing blocks are in two sibling branches and neither is in
+    # the block that holds the acquisition, so which one owns it is a control-flow question this
+    # lint does not ask. It must report the site as unclassifiable rather than pick one and then
+    # call the site clean or cross-try with the same confidence either way. This is the arm that
+    # earns the word "conservative" in the rule's description; without it the claim is decoration.
+    "cross-try-owner-in-another-block": ("""
+        import os
+        def f(path, flag):
+            try:
+                fd = os.open(path, os.O_RDONLY)
+            except OSError:
+                return None
+            if flag:
+                try:
+                    return os.read(fd, 10)
+                finally:
+                    os.close(fd)
+            else:
+                try:
+                    return os.read(fd, 1)
+                finally:
+                    os.close(fd)
+    """, "unsupported-shape"),
 }
 
 
@@ -11044,6 +11202,94 @@ def test_the_fd_lint_rejects_the_shapes_it_says_it_rejects(shape: str) -> None:
         "%s must be rejected as %r; the lint said %r (%r)" % (shape, expected, sorted(verdicts), sites))
     assert not any(s.ok and s.verdict == expected for s in sites), \
         "CONTROL: a rejected verdict must not also read as accepted"
+
+
+def test_a_comment_cannot_launder_a_block_boundary() -> None:
+    """THE PAIR THAT MAKES THE RULE A RULE. The same function three ways, differing only in what
+    sits between the acquisition and the block that releases it:
+
+      * one try holding both      -> accepted, and the lint must stay QUIET;
+      * two adjacent trys         -> cross-try;
+      * two adjacent trys + a comment between them -> cross-try, unchanged.
+
+    The third is the one that matters. Comments are not statements and do not survive into the
+    AST, so the statement counter reads 0 in every one of these and cannot tell them apart. If a
+    comment moved the verdict, the rule would be counting source lines rather than blocks; if the
+    first case were reported, the rule would be flagging the presence of a try rather than a
+    boundary between two of them. Both failures are silent in the direction that looks like work.
+    """
+    _, quiet = _lint(ACCEPTED_SHAPES["owner-nested-in-the-same-outer-try"])
+    assert [t.verdict for t in quiet] == ["ok"] and [t.shape for t in quiet] == ["acquire-then-own"], (
+        "CONTROL: one try enclosing BOTH the acquisition and its owner is not a boundary and the "
+        "rule must stay quiet on it (got %r)" % (quiet,))
+
+    _, split = _lint(REJECTED_SHAPES["cross-try-split"][0])
+    _, commented = _lint(REJECTED_SHAPES["cross-try-with-a-comment-between"][0])
+    assert [t.verdict for t in split] == ["cross-try"], "the split shape is the defect (%r)" % (split,)
+    assert [t.verdict for t in commented] == ["cross-try"], (
+        "a comment is not a statement and must not launder the boundary (%r)" % (commented,))
+    assert [t.gap for t in split] == [t.gap for t in commented] == [0], (
+        "CONTROL: the statement counter reads zero in BOTH, which is why it could not see this "
+        "shape and why the block rule had to be added")
+
+
+def test_the_block_rule_is_measured_on_the_real_module_in_both_directions() -> None:
+    """POSITIVE AND NEGATIVE CONTROL, ON `_tools/scan_gate.py` ITSELF, not on a fixture.
+
+    Take one site the lint currently accepts and wrap its acquisition statement in a try of its
+    own. Nothing else moves: no statement is added, no line is reordered, the acquisition and the
+    owner stay adjacent. The verdict must go to cross-try.
+
+    Then wrap the SAME region again, this time extending the wrapper past the owning try so the
+    new block encloses both. That is the same edit by every measure the statement counter has —
+    one try introduced, zero statements between — and the verdict must go back to accepted. A
+    rule that reddened both would be reporting the presence of a try; a rule that reddened
+    neither could not have produced the findings below.
+    """
+    module = fd_checker()
+    source = SCANNER.read_text(encoding="utf8")
+    sites = module.analyse(SCANNER, source=source)
+    accepted = [t for t in sites if t.ok and t.shape == "acquire-then-own" and t.owner_lineno]
+    assert accepted, "CONTROL: no accepted acquire-then-own site on the real module to mutate"
+    subject = accepted[0]
+
+    tree = ast.parse(source)
+    holder = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.stmt) and not isinstance(node, (ast.Try, ast.If, ast.With)) \
+                and node.lineno <= subject.lineno <= (node.end_lineno or node.lineno):
+            if holder is None or node.lineno > holder.lineno:
+                holder = node
+    assert holder is not None, "CONTROL: could not locate the acquiring statement to wrap"
+    owner = next((n for n in ast.walk(tree)
+                  if isinstance(n, ast.Try) and n.lineno == subject.owner_lineno), None)
+    assert owner is not None, "CONTROL: could not locate the owning try to wrap past"
+
+    lines = source.splitlines(keepends=True)
+
+    def wrapped(first: int, last: int) -> str:
+        """Indent lines [first, last] under a try of their own. Statements added: none."""
+        head = lines[:first - 1]
+        body = ["    " + ln if ln.strip() else ln for ln in lines[first - 1:last]]
+        tail = lines[last:]
+        pad = lines[first - 1][:len(lines[first - 1]) - len(lines[first - 1].lstrip())]
+        return "".join(head + [pad + "try:\n"] + body
+                       + [pad + "except OSError:\n", pad + "    pass\n"] + tail)
+
+    acq_end = holder.end_lineno or holder.lineno
+    split = module.analyse(SCANNER, source=wrapped(holder.lineno, acq_end))
+    moved = [t for t in split if t.lineno == subject.lineno + 1]
+    assert moved and moved[0].verdict == "cross-try", (
+        "POSITIVE CONTROL: putting the acquisition at line %d in a try of its own must be "
+        "reported as cross-try, else the findings on this module come from an instrument that "
+        "cannot go red here (got %r)" % (subject.lineno, moved))
+
+    both = module.analyse(SCANNER, source=wrapped(holder.lineno, owner.end_lineno))
+    quiet = [t for t in both if t.lineno == subject.lineno + 1]
+    assert quiet and quiet[0].ok and quiet[0].shape == "acquire-then-own", (
+        "NEGATIVE CONTROL: the SAME wrapper extended past the owning try encloses both, so no "
+        "block stands between them and the rule must stay quiet. A rule that reddens this is "
+        "counting trys, not boundaries (got %r)" % (quiet,))
 
 
 def test_zero_statements_between_is_accepted_and_the_lint_says_what_that_leaves_open() -> None:
@@ -11063,6 +11309,18 @@ def test_zero_statements_between_is_accepted_and_the_lint_says_what_that_leaves_
         "the class that stays open")
     assert "syscall" in module.COVERAGE_DISCLOSURE and "no source check" in module.COVERAGE_DISCLOSURE, (
         "the disclosure must name what it does not cover, not merely exist")
+    # AND WHAT IT NOW DOES COVER. The sixty-fifth round widened the checker from "no statement
+    # stands between" to "no statement and no BLOCK stands between", and a scope sentence that
+    # still describes only the narrower question understates the instrument in the direction that
+    # makes a later reader trust a pass less than it deserves — while a sentence that stopped
+    # naming the syscall window would overstate it in the direction that matters more. Both halves
+    # are pinned here, because a disclosure is only load-bearing while it is accurate in both.
+    assert "cross-try" in module.COVERAGE_DISCLOSURE, (
+        "the disclosure must say that a block boundary is covered now, not only a statement")
+    assert "bytecodes" in module.COVERAGE_DISCLOSURE, (
+        "and it must still say why the remaining window is invisible to a source check: it falls "
+        "between two bytecodes, which is the one interval no statement-level or block-level rule "
+        "can ever reach")
 
 
 def test_a_borrowed_descriptor_is_not_counted_as_an_acquisition() -> None:
@@ -11116,13 +11374,56 @@ def test_no_statement_stands_between_an_acquisition_and_its_owner() -> None:
     assert not gaps, (
         "a descriptor is acquired away from the block that owns it:\n%s" % module.report(sites))
 
+    # AND THE CLAIM THE SIXTY-FIFTH ROUND ADDED: the sites where a BLOCK, rather than a statement,
+    # stands between the acquisition and its owner. These are NOT zero, and pinning them at zero
+    # would have meant repairing nine call sites in the same change that introduced the rule.
+    # Pinned as an EXACT SET instead, by (function, acquirer), for the reason the list below is:
+    # a count only ever grows and becomes a place to hide a tenth. A new one fails this arm; a
+    # repaired one comes off this list in the commit that repairs it.
+    #
+    # WHAT IS AND IS NOT ON THIS LIST, because a reviewer read it as six and it is nine.
+    #   * `_scan_into`'s blob-reading arm is NOT here and was claimed to be. Its `os.open` and the
+    #     try that owns it are both inside the same outer `except OSError` block, so the
+    #     interpreter never leaves a block to reach the owner. The residual window it does have is
+    #     the bind-to-SETUP_FINALLY one, which shape A has too and which the disclosure covers.
+    #   * `_open_untrusted_text` is NOT here either: its release is in an `except`, not a
+    #     `finally`, so there is no owning try to compare the acquiring one against, and it is
+    #     already rejected — more bluntly — as UNOWNED in the list further down.
+    #   * `_open_held_copy` is NOT here: it hands the descriptor to its caller, so shape D answers
+    #     first and no block in that function is the owner. The obligation is the caller's, and
+    #     every caller of it in `_preserve_superseded` reads as acquired-inside-owner.
+    #   * `_makedirs_owner_only`, `write_report` (three sites) and `_write_refusal_report` (two)
+    #     ARE here and were not claimed by anyone. They are the reason this is a lint and not a
+    #     reading: the same shape, in the two functions that publish, found by the same rule.
+    #   * `_narrow_kept_copy` IS here and has no call site in `_tools/scan_gate.py` — the module
+    #     reaches it only through a docstring reference. It cannot leak in production for that
+    #     reason and not because its shape is sound; `test_a_planted_status_line...` calls it
+    #     directly, so the shape is still reachable from this suite.
+    cross_try = sorted((s.function, s.callee) for s in sites if s.verdict == "cross-try")
+    assert cross_try == sorted([
+        ("_copy_out_unpublished", "os.open"),
+        ("_makedirs_owner_only", "_open_dir_nofollow"),
+        ("_narrow_kept_copy", "os.open"),
+        ("_read_prefix_held", "os.open"),
+        ("_write_refusal_report", "_harden_report_dir"),
+        ("_write_refusal_report", "_open_dir_nofollow"),
+        ("write_report", "_harden_report_dir"),
+        ("write_report", "_open_dir_nofollow"),
+        ("write_report", "_stage_report"),
+    ]), (
+        "the set of acquisitions whose enclosing try is not the try that releases them has "
+        "CHANGED. A new entry is a new window and belongs in the accepted language, not in this "
+        "list; a removed one is a repair and comes out of this list in the same commit.\n%s"
+        % module.report(sites))
+
     # AND THE SHAPES IT DECLINES TO READ ARE PINNED, NOT PASSED OVER. These are not defects; they
     # are shapes this lint conservatively refuses to call ownership — a `with` on a helper's return,
     # a helper that hands a descriptor to its caller on success and closes it on failure, a
     # directory open, and the self-test's bare opens. Left as a bare count they would drift, and a
     # count that only ever grows is how a baseline becomes a place to hide. Pinned as an exact set
     # instead: a NEW unclassifiable site fails this arm, and removing one is a deliberate edit here.
-    unowned = sorted((s.function, s.callee) for s in sites if not s.ok)
+    unowned = sorted((s.function, s.callee) for s in sites
+                     if not s.ok and s.verdict != "cross-try")
     assert unowned == sorted([
         ("_allowlist", "_open_untrusted_text"),
         ("_load_identity_terms", "_open_untrusted_text"),
