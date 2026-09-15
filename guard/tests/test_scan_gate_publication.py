@@ -9862,10 +9862,17 @@ def test_a_cancellation_at_the_rescue_call_itself_still_closes_the_descriptor(tm
 
 def test_the_emission_does_not_carry_the_matched_text(tmp_path: Path) -> None:
     """DECIDED (executed review, gate 55): the emission exists so a scan that found secrets cannot tell
-    nobody. It does not need to carry the secret ITSELF. The class, the pattern name and the path and
-    line say what and where; the matched surface is the one field that is the material. The error
-    stream is a descriptor this tool did not choose and cannot narrow, and an adversary picks the
-    moment it is used, so that field stays out of it."""
+    nobody. It does not need to carry the fifth field. The class, the pattern name and the path and
+    line say what and where. The error stream is a descriptor this tool did not choose and cannot
+    narrow, and an adversary picks the moment it is used, so that field stays out of it.
+
+    THE PREMISE THIS ARM USED TO CARRY WAS FALSE, AND THE FIXTURE BELOW STILL CARRIES IT ON PURPOSE.
+    The docstring said the fifth field "is the material". `scan()` never puts material there: it
+    writes the literal "content" or "name", which is which ARM fired, and GROUP 79 below pins that
+    domain against a real scan so this cannot drift. The fixture here hands in a secret-shaped fifth
+    field anyway, because an arm asserting a field is withheld should feed the worst thing that
+    field could ever hold — but it is a WORST CASE, not a description of production, and reading it
+    as one is how a false sentence survived three rounds (guarantee inventory, 3adf105)."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "emission_no_surface")
     staging = tmp_path / "staging"
@@ -10424,3 +10431,40 @@ def test_the_scan_does_not_wait_for_a_writer_on_a_planted_fifo(tmp_path: Path) -
     assert armed.returncode == 0 and "HITS" in armed.stdout, (
         "the scan must complete with a non-regular entry in the tree, skipping it — got rc=%r "
         "stderr=%r" % (armed.returncode, armed.stderr[-400:]))
+
+
+# GROUP 79 — the sixty-first round, from the guarantee re-map. Two halves of this suite disagreed
+# about what the fifth field of a hit tuple holds, and nothing compared them. One arm asserts
+# `surface in ("content", "name")` against a real scan; the emission arm hands `write_report` a
+# tuple whose fifth field is a secret and asserts it is withheld. Both pass. The second one cannot
+# fail for the reason its docstring gave, because production never puts material in that field —
+# so a sentence claiming it did survived in the module, in STAGING_README and in the arm's own
+# docstring, and the emission was made less diagnostic than the success path to protect something
+# that was not there. This arm is the comparison nobody was making: the domain of field five,
+# measured on the real scanner over a planted tree, so the fixture's worst case stays a worst case
+# and cannot quietly become a description of what the module does.
+
+def test_the_fifth_field_of_every_hit_names_an_arm_and_never_the_material(tmp_path: Path) -> None:
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "hit_tuple_domain")
+    staging = make_staging(tmp_path)
+    (staging / "skills").mkdir(parents=True, exist_ok=True)
+    secret = "AKIA" + "IOSFODNN7EXAMPLE"
+    (staging / "skills" / "content_arm.md").write_text("k = '%s'\n" % secret, encoding="utf8")
+    (staging / "skills" / ("notes-%s.md" % IDENTITY_TERM)).write_text("clean\n", encoding="utf8")
+
+    hits = module.scan(str(staging))
+    assert hits, ("CONTROL: the planted tree must produce hits, or the domain below is measured "
+                  "over nothing")
+    surfaces = {h[4] for h in hits}
+    assert surfaces <= {"content", "name"}, (
+        "the fifth field of a hit is which ARM fired, and these values are outside that domain: "
+        "%r. If this module now carries matched material there, every sentence about the error "
+        "stream withholding it has to be re-decided, and the emission's own comment with them."
+        % sorted(surfaces - {"content", "name"}))
+    assert not any(secret in str(h[4]) for h in hits), (
+        "the fifth field carried the matched material itself; the emission drops that field but "
+        "the report body prints it, so this would publish the secret into the report")
+    assert len(surfaces) == 2, (
+        "CONTROL: both arms must have fired, or this measured only one branch of the domain "
+        "(saw %r)" % sorted(surfaces))

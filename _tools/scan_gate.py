@@ -1481,8 +1481,11 @@ def _emit_unwritten_findings(hits):
 
 
 def write_report(staging, hits):
-    reports_dir = os.path.join(staging, "_reports")
-
+    # THE NAME IS BUILT INSIDE THE GUARD, NOT ABOVE IT. This join sat above every handler in the
+    # function, so a failure or a cancellation at the very first statement took this run's findings
+    # with it and gave the operator an exit status and nothing else (executed review, 3adf105).
+    # It costs nothing to be inside.
+    #
     # NOTHING DURABLE EXISTS YET, AND THE REFUSAL WRITER WILL NOT BE GIVEN THE HITS. Every
     # raise between here and the stage below happens while this run's findings exist only in
     # the argument list: the caller hands the exception to `_write_refusal_report`, which
@@ -1494,6 +1497,7 @@ def write_report(staging, hits):
     # stage anything. So the findings go to the operator instead, which needs no filesystem
     # at all (cold leg, 2dac6c6).
     try:
+        reports_dir = os.path.join(staging, "_reports")
         if os.path.islink(reports_dir):
             raise ScanRefused("report-path-unsafe '_reports'")
 
@@ -1545,11 +1549,6 @@ def write_report(staging, hits):
         # that: a substitution immediately after the hardening published the findings OVER a file
         # outside the scanned tree and deleted an outside preservation slot on the way past, with
         # every in-function check still passing because each one re-resolved the same swapped name.
-        if not hits:
-            body = "scan_gate: CLEAN\n"
-        else:
-            body = "".join(f"{cls}\t{name}\t{surface}\t{rel}:{i}\n"
-                           for rel, i, cls, name, surface in hits)
 
         # AND THE STAGE ITSELF IS ABOVE THE FIRST DURABLE BYTE. The guard further up covers the
         # region that obtains the directory; a stage that cannot be MADE — a report directory with
@@ -1567,6 +1566,25 @@ def write_report(staging, hits):
         # everything the stage call returns.
         _staged_ctime_ns = None           # unknown age until read: no reference stamp means no sweep
         _published = False                # flips the instant the replace lands: from then on the
+        # THE BODY IS BUILT UNDER ITS OWN GUARD. It was assembled between the directory guard and
+        # the stage guard, owned by neither, and the join is a loop over the very findings that are
+        # about to be lost: a cancellation or an encoding failure part-way through it left no file,
+        # no stream and no operator, only an exit status (executed review, 3adf105). The emission
+        # reads `hits[:40]`, a slice and not an iteration, so it still prints when the iteration
+        # itself is what failed — which is exactly the case this covers.
+        # ITS OWN GUARD, NOT THE STAGE'S. Folding these lines into the try below would put two
+        # statements in a block an arm reads structurally to prove nothing stands between the stage
+        # call and the handler that owns its descriptor; that arm then reports it measured nothing,
+        # which is the right answer and the reason this is a second try rather than a bigger one.
+        try:
+            if not hits:
+                body = "scan_gate: CLEAN\n"
+            else:
+                body = "".join(f"{cls}\t{name}\t{surface}\t{rel}:{i}\n"
+                               for rel, i, cls, name, surface in hits)
+        except BaseException:
+            _emit_unwritten_findings(hits)
+            raise
         try:
             fd, tmp_name = _stage_report(dirfd, body, evidence=bool(hits))
         except BaseException as _stage_exc:
@@ -2462,22 +2480,29 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
     _cfd = None
     _unconfirmed = False
     _policy_on_held = True
-    if linked is None:
-        _cfd, _cvia = _open_held_copy(dirfd, report_name, previous)
-        if _cfd is None:
-            return False
-        # THE INODE IS NARROWED BEFORE IT IS LINKED. A hard link carries the inode's mode and
-        # ACL, so a reserved name made first and narrowed afterwards published a 0644 findings
-        # report under a well-known second name for the width of a few syscalls — and for good
-        # if the process died inside them (cold leg, 2fb1625). The narrowing is the one this
-        # call ran after the link anyway ("the direction that cannot hurt": the canonical name
-        # is about to be replaced, and if it is not, the report stands narrower than it was);
-        # it now runs on the held descriptor first, so every reserved name this call creates is
-        # born at 0600 with the strip done. Where the policy cannot be installed on the held
-        # inode, NO reserved name is taken — a reserved name asserts the policy, and the copy-out
-        # has declined one in that state since round twenty-three — and the replacement is
-        # declined below unless the report is a status line, which may always be replaced.
+    # THE OPEN IS INSIDE THE BLOCK WHOSE FINALLY ASKS AND CLOSES. This acquisition and its own
+    # None-guard stood one statement above that finally, so a cancellation between them leaked a
+    # descriptor on the canonical FINDINGS report — the cost this function states two screens down:
+    # the hold survives to process exit and a name taken afterwards takes the findings with it
+    # (executed review, 3adf105). Third instance in this file of one shape: a resource acquired
+    # above the block that owns it. `return False` from in here runs the finally, which finds no
+    # descriptor recorded and does nothing, so the early exit is unchanged.
     try:
+        if linked is None:
+            _cfd, _cvia = _open_held_copy(dirfd, report_name, previous)
+            if _cfd is None:
+                return False
+            # THE INODE IS NARROWED BEFORE IT IS LINKED. A hard link carries the inode's mode and
+            # ACL, so a reserved name made first and narrowed afterwards published a 0644 findings
+            # report under a well-known second name for the width of a few syscalls — and for good
+            # if the process died inside them (cold leg, 2fb1625). The narrowing is the one this
+            # call ran after the link anyway ("the direction that cannot hurt": the canonical name
+            # is about to be replaced, and if it is not, the report stands narrower than it was);
+            # it now runs on the held descriptor first, so every reserved name this call creates is
+            # born at 0600 with the strip done. Where the policy cannot be installed on the held
+            # inode, NO reserved name is taken — a reserved name asserts the policy, and the copy-out
+            # has declined one in that state since round twenty-three — and the replacement is
+            # declined below unless the report is a status line, which may always be replaced.
         if _cfd is not None:
             # NARROWED INSIDE THE BLOCK THAT CLOSES IT. This had its own handler, which asked and
             # closed and then re-raised — outside the try below, so a cancellation delivered AT
