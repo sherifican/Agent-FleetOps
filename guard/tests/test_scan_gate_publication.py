@@ -5825,8 +5825,14 @@ def test_the_rescue_recursion_actually_advances_its_depth(tmp_path: Path) -> Non
 
     real_link = module._link_held_inode
     def link_that_always_finds_no_names(fd, candidate, dirfd):
-        # Every attempt: the stage has "lost its last name". Without an advancing depth this
+        # Every attempt: the stage has "lost its last name" — and, since round forty-nine, the
+        # name really is taken, because the recursion now lives in the finally's re-ask and only
+        # fires when the stage name no longer reaches the stage. Without an advancing depth this
         # recurses until Python gives up.
+        decoy = reports / "decoy.txt"
+        for victim in [p for p in reports.iterdir() if p.name.startswith(".scan_report_") and p.name != ".scan_report_src"]:
+            decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+            os.replace(decoy, victim)
         raise FileNotFoundError(errno.ENOENT, "no names (injected, every time)")
     module._link_held_inode = link_that_always_finds_no_names
 
@@ -8207,3 +8213,102 @@ def test_the_copy_outs_finally_re_asks_the_stage_name_before_the_close(tmp_path:
     assert _findings_anywhere(reports, "docs/S.md:1"), (
         "REPAIRED: the strip was denied (a retention exit) and the stage name had been taken; the finally "
         "closed the stage without re-asking whether its name still reached it, and the copy was freed")
+
+
+# =============================================================================================
+# GROUP 57 — the forty-ninth round. Gate 44's invariant leg (Gemini) on e71e440: the copy-out's
+# no-custody arm made its own nested copy and the round-48 finally then asked again, so a taken
+# stage name produced two copies of the same findings.
+# =============================================================================================
+
+
+def test_a_taken_stage_name_after_a_refused_link_yields_exactly_one_copy(tmp_path: Path) -> None:
+    """REPAIRED (invariant leg, gate 44): the no-custody arm must defer to the finally's single
+    re-ask rather than copy on its own and then be copied again."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "single_rescue_copy")
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_RDWR, 0o600)
+    os.write(src, b"aws\tkey\tassignment\tdocs/E.md:1\n")
+    os.unlink(str(reports / ".scan_report_src"))
+    real_lstat = module.os.lstat
+    fired: list[str] = []
+
+    def take_the_candidate_and_the_stage_once(path, *a, **k):
+        if (sys._getframe(1).f_code.co_name == "_link_held_inode"
+                and sys._getframe(2).f_code.co_name == "_copy_out_unpublished" and not fired):
+            fired.append("lstat")
+            decoy = reports / "decoy.txt"
+            for victim in [p for p in reports.iterdir() if p.name.startswith(".scan_report_")] + [reports / str(path)]:
+                decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+                os.replace(decoy, victim)             # the candidate AND the stage name are taken
+        return real_lstat(path, *a, **k)              # …and the post-link check then sees a decoy: no custody
+
+    module.os.lstat = take_the_candidate_and_the_stage_once
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._copy_out_unpublished(dirfd, src)
+    finally:
+        module.os.lstat = real_lstat
+        os.close(src); os.close(dirfd)
+    if not fired:
+        pytest.skip("the post-link check never ran; this arm measured nothing")
+    copies = sorted(p.name for p in reports.iterdir()
+                    if "docs/E.md:1" in p.read_text(encoding="utf-8", errors="replace"))
+    assert len(copies) >= 1, "CONTROL: the findings must survive"
+    assert len(copies) == 1, (
+        f"REPAIRED: one refused link plus one taken stage name produced {len(copies)} copies {copies}; "
+        f"the no-custody arm copied on its own and the finally's re-ask copied again")
+
+
+@pytest.mark.parametrize("site", ["quarantine", "copy_out"])
+def test_a_reserved_name_taken_before_the_stage_release_does_not_free_the_findings(tmp_path: Path, site: str) -> None:
+    """REPAIRED (cold #1, gate 44): the release path read nlink >= 2 and then unlinked the stage four
+    syscalls later; a reserved name removed in between made that unlink the last name, custody was
+    reported taken, and the caller's close freed the findings."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "release_last_name_" + site)
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    body = "aws\tkey\tassignment\tdocs/R.md:1\n"
+    real_unlink = module.os.unlink
+    fired: list[str] = []
+
+    def take_the_reserved_names_then_unlink(path, *a, **k):
+        if (sys._getframe(1).f_code.co_name == "_remove_own_stage"
+                and sys._getframe(2).f_code.co_name == "_remove_stage_if_another_name_remains" and not fired):
+            fired.append("unlink")
+            for p in reports.iterdir():
+                if p.name.startswith("scan_report.unpublished"):
+                    os.unlink(p)                          # the racer ends the reserved name first
+        return real_unlink(path, *a, **k)                 # …and the stage unlink now takes the LAST name
+
+    module.os.unlink = take_the_reserved_names_then_unlink
+    try:
+        if site == "quarantine":
+            fd, name = module._stage_report(dirfd, body, evidence=True)
+            try:
+                custody = module._quarantine_unpublished(dirfd, name, fd, [("docs/R.md", 1, "SECRET", "generic_key_assignment", "contents")])
+            finally:
+                os.close(fd)                              # write_report's close, on a True answer
+        else:
+            src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_RDWR, 0o600)
+            os.write(src, body.encode()); os.unlink(str(reports / ".scan_report_src"))
+            try:
+                custody = module._copy_out_unpublished(dirfd, src)
+            finally:
+                os.close(src)
+    finally:
+        module.os.unlink = real_unlink
+        os.close(dirfd)
+    if not fired:
+        pytest.skip("the stage release never ran; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/R.md:1"), (
+        f"REPAIRED ({site}): the reserved name was ended between the nlink read and the stage unlink; the "
+        f"unlink took the last name, custody was reported {custody!r}, and the close freed the findings")

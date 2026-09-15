@@ -541,9 +541,10 @@ def _link_held_inode(fd, candidate, dirfd):
     linking anything else. So this either attaches OUR bytes to CANDIDATE, or it fails — it
     cannot attach a decoy. ENOENT out of this helper therefore means "no custody was taken": the
     kernel refused, or the post-link identity check below did. It does not prove the link count
-    is zero, and no caller relies on that. Callers answer it two ways: the stage paths take
-    their rescue (copy out through the descriptor); preservation, whose link was a retry away,
-    moves to the next reserved name.
+    is zero, and no caller relies on that. Callers answer it two ways: the stage paths keep
+    the stage and let their cleanup re-ask the stage name before the close; preservation,
+    whose link was a retry away, moves to the next reserved name and takes its rescue only
+    once every name has been tried.
 
     Returns True on success. Raises FileNotFoundError when no custody was taken — the kernel refused, or the check below did (the
     caller's rescue path); `_CustodyUnconfirmed` when the link was made and the check after it
@@ -720,12 +721,13 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                     _link_held_inode(stage_fd, candidate, dirfd)
                 except FileNotFoundError:
                     # NO CUSTODY WAS TAKEN — the link helper refused, or its post-link check did — and
-                    # the stage keeps the bytes. One further copy is attempted (depth bounds it to
-                    # one level); past that the stage is kept under the temporary prefix.
+                    # the stage keeps the bytes. Nothing more is done HERE: the finally below asks
+                    # once whether the stage name still reaches the stage and copies out only if
+                    # it does not. This arm used to make its own further copy first, and with the
+                    # finally's re-ask added in round forty-eight a taken stage name produced two
+                    # copies of the same findings (invariant leg, e71e440).
                     keep_stage = True
-                    if depth >= 1:
-                        return False
-                    return _copy_out_unpublished(dirfd, stage_fd, depth + 1)
+                    return False
                 except _CustodyUnconfirmed:
                     # THE LINK MAY HAVE LANDED. The next name would be a second one for this
                     # inode; the stage keeps the bytes (retention is on) and no more is tried —
@@ -777,7 +779,7 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                         _remove_own_stage(dirfd, stage_name, stage_fd)
                     elif not keep_stage:
                         # only while the reserved name (or any other) still reaches the copy
-                        _remove_stage_if_another_name_remains(dirfd, stage_name, stage_fd)
+                        _remove_stage_if_another_name_remains(dirfd, stage_name, stage_fd, depth)
                     elif depth < 1:
                         # KEPT — AND THE NAME IS RE-ASKED BEFORE THE CLOSE. Retention means "do
                         # not unlink the stage name"; it was being read as "the stage name still
@@ -1777,16 +1779,26 @@ def _false_or_rescue(dirfd, tmp_name, fd, depth=0):
     return _copy_out_unpublished(dirfd, fd, depth)   # the depth travels with the rescue (gate 43)
 
 
-def _remove_stage_if_another_name_remains(dirfd, name, fd):
-    """Remove NAME (identity-checked) only if the held inode has at least one other name.
+def _remove_stage_if_another_name_remains(dirfd, name, fd, depth=0):
+    """Remove NAME (identity-checked) only if the held inode has at least one other name — and
+    if that unlink turns out to have taken the last name anyway, copy the bytes out before the
+    caller's close can free them.
 
-    The nlink read and the unlink are two syscalls; the interval between them is the documented
-    limit, the same as every check-then-act in this file. What it closes is the wide case: a
-    reserved name ended before the stage removal, which took the inode's last name.
+    The nlink read and the unlink are FOUR syscalls apart (the nlink fstat, then the helper's
+    fstat, lstat and unlink), and the interval is the same check-then-act limit as everywhere
+    in this file. What the pre-check closes is the wide case: a reserved name ended before the
+    stage removal. What the post-check closes is the narrow one a cold leg named on e71e440:
+    the reserved name ended INSIDE that interval, the stage unlink took the last name, the
+    caller was told custody was taken, and its close freed the findings. The release-path
+    question is not "is the name still ours" (after a deliberate unlink it never is) but "does
+    the inode still have a name": the link count is re-read on the held descriptor after the
+    unlink, and zero sends the bytes through the copy-out, one level deep.
     """
     try:
         if os.fstat(fd).st_nlink >= 2:
             _remove_own_stage(dirfd, name, fd)
+            if depth < 1 and os.fstat(fd).st_nlink == 0:
+                _copy_out_unpublished(dirfd, fd, depth + 1)
     except OSError:
         pass                              # cannot tell: keep the name
 
