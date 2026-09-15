@@ -2166,8 +2166,13 @@ def _open_held_copy(dirfd, name, expect):
     # the verdict on this function was identical before and after a repair that flips a real arm
     # from red to green, which is a rule carrying no information at this site.
     #
-    # The slot is set before the owning try so the finally can name it either way, the acquisition
-    # happens inside, and the acquisition's own handler stays nested where it was.
+    # The slot is set before the owning try so the handler can name it either way, the acquisition
+    # happens inside, and the acquisition's own handler stays nested where it was. THE OWNER HERE IS
+    # AN `except BaseException`, NOT A `finally`: on success this function hands the descriptor back
+    # and the caller's finally owns it from there. The sentence said "finally" for two rounds,
+    # copied from the two sites repaired beside it, which do have one (team review, gate 61). The
+    # interval is covered either way -- the try is entered before the open -- but a comment naming
+    # a construct this block does not have is the defect this module refuses in its own source.
     fd = None
     try:
         try:

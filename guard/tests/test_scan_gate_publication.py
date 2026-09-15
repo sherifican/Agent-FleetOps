@@ -37,6 +37,7 @@ import hashlib
 import importlib.util
 import io
 import os
+import re
 import signal
 import shutil
 import stat
@@ -84,6 +85,16 @@ def ant_key(kind: str) -> str:
     if kind == "A95":
         return ANT_PREFIX + ANT_API03 + _body(89, "Xy9_Zw8-")
     raise ValueError(kind)
+
+
+# THE HARNESS CONVENTION AT THE TOP OF THIS FILE, APPLIED TO THE VALUE BELOW. Five arms
+# added in the last eight rounds wrote this value as one contiguous literal, and the
+# package's own publication gate refused the tree for all eight of the commits that
+# carried it -- `guard/hooks/pre-push` scans every commit in a push range, so a later
+# repair does not clean an earlier tree. Assembled here, the value handed to the code
+# under test at run time is byte-identical and this tracked source carries no key-shaped
+# literal. guard/tests/test_repository_is_publishable.py is what notices next time.
+KEY_SHAPED = "AKIA" + "IOSFODNN7EXAMPLE"          # AWS's published documentation example
 
 
 def wrap(shape: str, key: str) -> str:
@@ -9612,7 +9623,7 @@ def test_findings_reach_the_operator_when_no_report_can_be_written(tmp_path: Pat
         target.write_text("not a directory\n", encoding="utf-8")
     else:
         os.mkfifo(target)
-    hits = [("docs/H.md", 1, "SECRET", "generic_key_assignment", "k = '" + "AKIA" + "IOSFODNN7EXAMPLE" + "'"),
+    hits = [("docs/H.md", 1, "SECRET", "generic_key_assignment", "k = '%s'" % KEY_SHAPED),
             ("docs/J.md", 7, "PERSONAL", "email_address", "someone@example.test")]
     capsys.readouterr()
     with pytest.raises((module.ScanRefused, OSError)):
@@ -9710,7 +9721,7 @@ def test_findings_reach_the_operator_when_the_stage_itself_cannot_be_made(tmp_pa
     reports = staging / "_reports"
     reports.mkdir(parents=True)
     os.chmod(reports, 0o500)                       # owner may read and traverse, not create
-    hits = [("docs/H.md", 1, "SECRET", "generic_key_assignment", "k = '" + "AKIA" + "IOSFODNN7EXAMPLE" + "'")]
+    hits = [("docs/H.md", 1, "SECRET", "generic_key_assignment", "k = '%s'" % KEY_SHAPED)]
     capsys_err = io.StringIO()
     real_stderr = sys.stderr
     sys.stderr = capsys_err
@@ -9880,7 +9891,7 @@ def test_the_emission_does_not_carry_the_matched_text(tmp_path: Path) -> None:
     staging.mkdir()
     (tmp_path / "payload").mkdir()
     os.symlink(tmp_path / "payload", staging / "_reports")
-    secret = "AKIA" + "IOSFODNN7EXAMPLE" + "-do-not-print-me"
+    secret = KEY_SHAPED + "-do-not-print-me"
     buf = io.StringIO()
     real_stderr = sys.stderr
     sys.stderr = buf
@@ -9895,6 +9906,40 @@ def test_the_emission_does_not_carry_the_matched_text(tmp_path: Path) -> None:
     assert secret not in err, (
         f"DECIDED: the emission carried the matched text itself onto a stream this tool did not choose "
         f"and cannot narrow (stderr was {err!r})")
+    # STRENGTHENED (team review, gate 62). The line above is an exact-string check, so an emission
+    # that carried the value with one character changed at either end would satisfy it. The core is
+    # the identifying half; require that too.
+    assert KEY_SHAPED not in err, (
+        f"DECIDED: the emission carried the identifying core of the matched text, which an exact "
+        f"check on the whole string would have passed (stderr was {err!r})")
+    # AND THE SAME PAIR, PROVED ABLE TO FIRE. Both assertions above pass by finding nothing, and a
+    # check that can only find nothing reports the same green on a tool that started printing the
+    # field. This replays the identical path with an emitter that DOES write the fifth field, and
+    # requires the buffer and the two checks to see it.
+    mutant_buf = io.StringIO()
+    real_emit = module._emit_unwritten_findings
+
+    def emit_with_the_field(hits):
+        for rel, line, cls, name, surface in hits:
+            mutant_buf.write("%s\t%s\t%s:%d\t%s\n" % (cls, name, rel, line, surface))
+
+    module._emit_unwritten_findings = emit_with_the_field
+    real_stderr = sys.stderr
+    sys.stderr = io.StringIO()
+    try:
+        with pytest.raises((module.ScanRefused, OSError)):
+            module.write_report(str(staging), [("docs/H.md", 1, "SECRET", "generic_key_assignment", secret)])
+    finally:
+        sys.stderr = real_stderr
+        module._emit_unwritten_findings = real_emit
+    mutant = mutant_buf.getvalue()
+    assert mutant, (
+        "CONTROL: the mutant emitter never ran, so this arm did not reach the emission at all and "
+        "the two assertions above are unproven on this path.")
+    assert secret in mutant and KEY_SHAPED in mutant, (
+        f"CONTROL: an emitter that deliberately writes the fifth field produced a stream in which "
+        f"neither the value nor its core is findable, so neither check above could ever fire "
+        f"(mutant stream was {mutant!r})")
 
 
 def test_a_failure_after_the_stage_does_not_emit(tmp_path: Path) -> None:
@@ -10025,7 +10070,7 @@ def test_a_retention_answer_of_false_after_the_stage_still_reaches_the_operator(
         declines.append(depth)
         return False                       # the copy-out's stated limit: no name, or no readable source
 
-    hits = [("docs/H.md", 1, "SECRET", "generic_key_assignment", "k = '" + "AKIA" + "IOSFODNN7EXAMPLE" + "'")]
+    hits = [("docs/H.md", 1, "SECRET", "generic_key_assignment", "k = '%s'" % KEY_SHAPED)]
     module._install_posix_acl_policy, module._copy_out_unpublished = install_fails, copy_out_declines
     buf = io.StringIO()
     real_stderr = sys.stderr
@@ -10255,7 +10300,7 @@ def test_a_publication_is_refused_when_the_held_inode_is_not_owner_only(tmp_path
                 return _Wide()
         return st
 
-    hits = [("docs/H.md", 1, "SECRET", "generic_key_assignment", "k = '" + "AKIA" + "IOSFODNN7EXAMPLE" + "'")]
+    hits = [("docs/H.md", 1, "SECRET", "generic_key_assignment", "k = '%s'" % KEY_SHAPED)]
     module.os.fstat = fstat_reports_group_readable
     raised = None
     try:
@@ -10450,7 +10495,7 @@ def test_the_fifth_field_of_every_hit_names_an_arm_and_never_the_material(tmp_pa
     module = import_driver(driver, "hit_tuple_domain")
     staging = make_staging(tmp_path)
     (staging / "skills").mkdir(parents=True, exist_ok=True)
-    secret = "AKIA" + "IOSFODNN7EXAMPLE"
+    secret = KEY_SHAPED
     (staging / "skills" / "content_arm.md").write_text("k = '%s'\n" % secret, encoding="utf8")
     (staging / "skills" / ("notes-%s.md" % IDENTITY_TERM)).write_text("clean\n", encoding="utf8")
 
@@ -12433,3 +12478,112 @@ def test_a_cancellation_before_the_held_copy_guard_does_not_lose_the_preserved_f
         "acquisition INSIDE the guard, with the slot preset to None and the existing "
         "`if fd is None: raise` left as the acquisition-failure arm, closes it."
         % (rig.fired_at, taken, sorted(p.name for p in reports.iterdir())))
+
+
+# =============================================================================================
+# GROUP 94 — the sixty-seventh round. TWO CLAIMS THAT THE CODE DOES NOT SUPPORT, both found by a
+# reviewer at gate 61 and both re-measured here before being believed.
+#
+# The first is a hand-maintained count inside the coverage instrument's own coverage sentence: it
+# says three sites have the shape it declines to examine, and the module has two. The sentence's
+# load-bearing qualification is true; the numeral is not. A count written by hand beside the thing
+# it counts drifts the moment the thing changes, and this one had -- which is the same defect,
+# one size smaller, as the unqualified sentence the round before it repaired.
+#
+# The arm below does not forbid a count. It binds one: if the disclosure makes a numeric claim
+# about how many sites in the scanned module have that shape, the number must equal what the AST
+# says. A sentence that makes no such claim passes, which is what the repair does.
+#
+# The second is a comment in `_open_held_copy` saying the slot is preset "so the finally can name
+# it either way". That function's owning construct is a `try` with an `except BaseException` and
+# no `finally` at all; the phrase is leftover from the two sites repaired beside it, which do have
+# one. Nothing is wrong with the code -- the try is entered before the `os.open`, so the interval
+# is covered -- but the comment names a construct that is not there, in a module whose whole
+# discipline is that a comment may not claim what the code does not do.
+#
+# The arm keys on the phrase, because copying is how the claim travelled: wherever that sentence
+# appears, the innermost enclosing try must actually have a finally.
+# =============================================================================================
+
+_COUNT_WORDS = {"zero": 0, "no": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+                "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+
+
+def test_a_count_in_the_coverage_sentence_matches_what_the_module_has() -> None:
+    """REPAIRED: the disclosure said three sites carry the shape the lint declines to examine and
+    the module has two. A coverage instrument is the last place a false coverage claim belongs,
+    and a number nobody recomputes is the most reliable way to get one."""
+    disclosure = fd_checker().COVERAGE_DISCLOSURE
+    claim = re.search(r"([A-Za-z]+|\d+) sites? in the scanned module", disclosure)
+    if claim is None:
+        return                      # no numeric claim to bind; the repair takes this branch
+    word = claim.group(1).lower()
+    claimed = _COUNT_WORDS.get(word, None)
+    if claimed is None:
+        try:
+            claimed = int(word)
+        except ValueError:
+            pytest.fail("REPAIRED: the coverage sentence quantifies sites with %r, which this arm "
+                        "cannot check against the module. A claim a reader cannot check is the "
+                        "shape this arm exists to stop." % claim.group(1))
+    actual = [n.lineno for n in ast.walk(ast.parse(SCANNER.read_text(encoding="utf8")))
+              if isinstance(n, (ast.With, ast.AsyncWith))
+              for item in n.items if isinstance(item.context_expr, ast.Name)]
+    assert claimed == len(actual), (
+        "REPAIRED: the coverage sentence claims %d site(s) of the `with <name>` shape in the "
+        "scanned module; the AST finds %d, at line(s) %s. The qualification around the number may "
+        "be true and the number still false, and both are printed with every verdict."
+        % (claimed, len(actual), actual))
+
+
+def test_no_comment_names_a_finally_its_own_block_does_not_have() -> None:
+    """REPAIRED: `_open_held_copy` said the slot was preset "so the finally can name it either
+    way". Its owning construct is a try/except with no finally; the phrase was copied from the two
+    sites repaired beside it. The code is right and the sentence is not, which in this module is a
+    defect on its own terms."""
+    source = SCANNER.read_text(encoding="utf8")
+    lines = source.splitlines()
+    phrase = "so the finally can name it"
+    claimed_at = [i + 1 for i, line in enumerate(lines)
+                  if phrase in line and line.lstrip().startswith("#")]
+    tree = ast.parse(source)
+    owners_with_finally = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Try) and node.finalbody:
+            owners_with_finally.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    unsupported = [n for n in claimed_at if n not in owners_with_finally]
+    assert not unsupported, (
+        "REPAIRED: line(s) %s say %r, and no enclosing try at those lines has a finally. Either "
+        "the block gained one and the comment is now true, or the comment was copied to a site "
+        "that never had one. The second is what happened at `_open_held_copy`."
+        % (unsupported, phrase))
+
+
+def test_the_two_comment_arms_above_can_still_fail() -> None:
+    """CONTROL: both arms above pass by finding nothing. An arm that can only find nothing reports
+    the same green on a module that drifted. These feed each instrument the defect it was written
+    for and require it to fire."""
+    bad_disclosure = ("COVERAGE: ... Nine sites in the scanned module are exactly that shape "
+                      "today. ...")
+    claim = re.search(r"([A-Za-z]+|\d+) sites? in the scanned module", bad_disclosure)
+    assert claim is not None and _COUNT_WORDS.get(claim.group(1).lower()) == 9, (
+        "CONTROL: the count reader did not find a planted claim of nine, so the arm above cannot "
+        "see a wrong number at all.")
+
+    planted = ("def f():\n"
+               "    # the slot is set first so the finally can name it either way\n"
+               "    fd = None\n"
+               "    try:\n"
+               "        fd = os.open('x', 0)\n"
+               "    except BaseException:\n"
+               "        pass\n")
+    lines = planted.splitlines()
+    claimed_at = [i + 1 for i, line in enumerate(lines)
+                  if "so the finally can name it" in line and line.lstrip().startswith("#")]
+    owners = set()
+    for node in ast.walk(ast.parse(planted)):
+        if isinstance(node, ast.Try) and node.finalbody:
+            owners.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    assert claimed_at and not [n for n in claimed_at if n in owners], (
+        "CONTROL: the finally-claim reader accepted a comment claiming a finally inside a block "
+        "that has none, so the arm above would accept the defect it was written for.")
