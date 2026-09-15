@@ -10468,3 +10468,669 @@ def test_the_fifth_field_of_every_hit_names_an_arm_and_never_the_material(tmp_pa
     assert len(surfaces) == 2, (
         "CONTROL: both arms must have fired, or this measured only one branch of the domain "
         "(saw %r)" % sorted(surfaces))
+# GROUP 80 — the sixty-third round. `scan()` builds `hits` as a LOCAL LIST and the caller's name
+# is bound only when the function returns normally. Every refusal raised partway through the walk
+# — a malformed wide encoding, an unreadable input, a git failure on the file after the one that
+# already matched — unwinds out of `scan()` and takes the findings collected so far with it.
+# `main()` then hands the exception to `_write_refusal_report`, which receives no hits and cannot
+# reconstruct them, so an operator whose tree holds a real secret AND one broken file is told
+# "REFUSED invalid-wide-encoding" and nothing else. The findings existed; the scanner had them in
+# memory; nothing published them. This is the same user-visible failure the module already
+# repaired one frame lower (the post-stage emission, GROUP 76) and never repaired at the scan.
+# =============================================================================================
+
+
+def test_findings_collected_before_a_refusal_reach_the_operator(tmp_path: Path) -> None:
+    """REPAIRED: a scan that matched and then refused must not report the refusal alone.
+
+    CONTROL: the identical tree WITHOUT the refusing file exits 1 and reports the plant at the
+    exact line, so the arm below is measuring a lost finding and not an undetectable one; a tree
+    holding ONLY the refusing file exits 2 with no path line on the error stream, so the assertion
+    cannot be satisfied by the refusal message happening to contain a path.
+    REPAIRED: with both files present the run still exits 2, and the finding already collected
+    reaches the operator — labelled as a partial scan, on the error stream, with the value itself
+    still withheld.
+    """
+    driver = make_tool(tmp_path)
+    plant = openai_plant()
+    # git mode: `git ls-files` is sorted, so the matching file is READ BEFORE the refusing one.
+    # An os.walk ordering would leave this arm measuring directory-entry order.
+    control = make_staging(tmp_path, "control", git_repo=True)
+    write(control / "docs" / "a_found.md", "probe " + plant + "\n")
+    commit_all(tmp_path, control)
+    proc = scan(tmp_path, driver, control)
+    assert proc.returncode == 1, "CONTROL: the plant alone must block"
+    assert hit("SECRET", "openai-style-key", "content", "docs/a_found.md", 1) in hits_for(
+        control, "docs/a_found.md"), "CONTROL: the plant is detectable at that exact line"
+
+    bare = make_staging(tmp_path, "bare", git_repo=True)
+    write(bare / "docs" / "z_raises.md", b"\xff\xfe" + b"\x41")   # declared UTF-16 LE, odd length
+    commit_all(tmp_path, bare)
+    refused = scan(tmp_path, driver, bare)
+    assert refused.returncode == 2, "CONTROL: a malformed declared-wide file must refuse"
+    assert "docs/a_found.md:1" not in refused.stderr, (
+        "CONTROL: with nothing found, no finding line may appear — otherwise the arm below could "
+        "be satisfied by the refusal message rather than by the findings")
+
+    armed = make_staging(tmp_path, "armed", git_repo=True)
+    write(armed / "docs" / "a_found.md", "probe " + plant + "\n")
+    write(armed / "docs" / "z_raises.md", b"\xff\xfe" + b"\x41")
+    commit_all(tmp_path, armed)
+    proc = scan(tmp_path, driver, armed)
+    assert_values_absent([plant], armed, proc)
+    assert proc.returncode == 2, "CONTROL: the refusal still governs the exit status"
+    assert "docs/a_found.md:1" in proc.stderr, (
+        "REPAIRED: the scan matched docs/a_found.md and then refused on a later file, and the "
+        "finding vanished with the exception — `hits` is a local list, the caller's name is never "
+        "bound, and `_write_refusal_report` is handed an exception carrying no findings. The "
+        "operator got an exit status and a refusal class for a tree that really does hold a "
+        "secret. stderr was %r" % proc.stderr[-600:])
+
+
+# =============================================================================================
+# GROUP 81 — the sixty-third round. TWO LOADER OPENS ON A PATH THIS TOOL DOES NOT CONTROL.
+# `_load_identity_terms` and `_allowlist` each ask `os.path.isfile` and then hand the SAME PATH to
+# a plain builtin `open`. Between the two calls the entry can become a named pipe, and the open of
+# a FIFO's read end waits for a writer — forever, against an invariant that says this module never
+# blocks, and before a single finding exists. GROUP 78 closed exactly this hole on the scan's
+# content open and the two loaders were left as they were; `_allowlist`'s path is inside the
+# UNTRUSTED tree, which is the surface that hole was closed for.
+# The window is driven directly rather than raced: the module's own `os.path.isfile` answers True
+# and creates the pipe on its way out, which is the same ordering an attacker gets for free.
+# =============================================================================================
+
+
+@pytest.mark.parametrize("loader", ["allowlist", "identity_terms"])
+def test_a_loader_open_does_not_wait_for_a_writer_on_a_named_pipe(tmp_path: Path, loader: str) -> None:
+    """REPAIRED: both loaders must answer with a non-regular entry in that position.
+
+    CONTROL FIRST: the identical driver, with an ORDINARY FILE created in the same window, must
+    return quickly — a hang arm with no control cannot tell a fixed loader from a broken harness.
+    """
+    driver = make_tool(tmp_path, name="tool_" + loader)
+    staging = make_staging(tmp_path, "staging_" + loader)
+    (staging / "_tools").mkdir(parents=True, exist_ok=True)
+    target = ((staging / "_tools" / "scan_allow.tsv") if loader == "allowlist"
+              else (driver.parent / "identity_terms.txt"))
+    call = ("m._allowlist(%r)" % str(staging)) if loader == "allowlist" else "m._load_identity_terms()"
+
+    runner = tmp_path / ("run_%s.py" % loader)
+    runner.write_text(
+        "import importlib.util, os, sys\n"
+        "spec = importlib.util.spec_from_file_location('sg', %r)\n"
+        "m = importlib.util.module_from_spec(spec); sys.modules['sg'] = m\n"
+        "spec.loader.exec_module(m)\n"
+        "TARGET = %r\n"
+        "MODE = sys.argv[1]\n"
+        "real_isfile = m.os.path.isfile\n"
+        "def isfile(path):\n"
+        "    answer = real_isfile(path)\n"
+        "    if os.path.abspath(path) == TARGET:\n"
+        "        if os.path.lexists(TARGET):\n"
+        "            os.unlink(TARGET)\n"
+        "        if MODE == 'fifo':\n"
+        "            os.mkfifo(TARGET)\n"          # the window, taken between the two calls
+        "        else:\n"
+        "            fh = os.open(TARGET, os.O_CREAT | os.O_WRONLY, 0o600)\n"
+        "            os.write(fh, b'# control\\n'); os.close(fh)\n"
+        "        return True\n"
+        "    return answer\n"
+        "m.os.path.isfile = isfile\n"
+        "try:\n"
+        "    value = %s\n"
+        "    print('RETURNED', type(value).__name__)\n"
+        "except m.ScanRefused as exc:\n"
+        "    print('REFUSED', exc.reason_class)\n"
+        % (str(driver), str(target.resolve() if target.exists() else target), call),
+        encoding="utf8")
+
+    def run_once(mode: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, str(runner), mode], capture_output=True, text=True,
+                              encoding="utf8", errors="replace", env=clean_env(tmp_path),
+                              timeout=30)
+
+    control = run_once("file")
+    assert control.returncode == 0 and ("RETURNED" in control.stdout or "REFUSED" in control.stdout), (
+        "CONTROL: with an ordinary file created in that window the loader must answer, else a "
+        "timeout below proves nothing — rc=%r stdout=%r stderr=%r"
+        % (control.returncode, control.stdout, control.stderr[-400:]))
+
+    try:
+        armed = run_once("fifo")
+    except subprocess.TimeoutExpired:
+        raise AssertionError(
+            "REPAIRED: a named pipe created between `os.path.isfile` and the builtin `open` in "
+            "%s made the call wait for a writer and it never returned. The scan's own content "
+            "open was given O_NONBLOCK and a type check read from the DESCRIPTOR; these two were "
+            "not, and one of them reads a path inside the scanned tree." % loader)
+    assert armed.returncode == 0 and ("RETURNED" in armed.stdout or "REFUSED" in armed.stdout), (
+        "the loader must answer with a non-regular entry in that position, treating it as absent "
+        "— rc=%r stdout=%r stderr=%r" % (armed.returncode, armed.stdout, armed.stderr[-400:]))
+
+
+# =============================================================================================
+# GROUP 82 WAS NOT PORTED, AND THE REASON IS A MUTANT THIS SUITE ALREADY KILLS. It was written,
+# proven red, and proven satisfiable by adding O_NOFOLLOW to the scan's content open and skipping
+# a symlink on ELOOP. Its `dangling` case asserts that a dangling symlink must NOT refuse the scan.
+# `test_report_and_read_failure[read-failure]` asserts the opposite, and its docstring names why:
+# the broken behaviour it was built to kill is "an unreadable file was silently skipped (continue)
+# and the scan reported CLEAN", and it lists the mutant by name — M-READ-ERROR-CONTINUE. Skipping a
+# symlink on ELOOP IS that mutant, applied to a different entry type. A scan that quietly reads
+# less than it was pointed at is how a dirty tree gets called clean, and that rule outranks the
+# other half of this finding.
+#
+# The other half is real and is NOT closed: the walk still reads symlink TARGETS, so content from
+# outside the tree can be reported under an in-tree path. Fixing THAT without reintroducing the
+# mutant means telling an escaping link from a dangling one, which means resolving the target and
+# binding the comparison to a descriptor rather than a path — more machinery than a round should
+# improvise, and the two halves of the finding pull in opposite directions. It goes to the gate as
+# a design question with that framing, which is what produced a usable answer for the ownership
+# rule rather than a patch someone had to take back.
+# GROUP 83 — the sixty-third round. `_git` CALLS `subprocess.run` WITH `capture_output` AND
+# `check` AND NO TIMEOUT. Every selected-Git path in this module goes through it — the root
+# probe, the index read, every blob read — so a git that does not exit (a filesystem that will
+# not answer, an index lock held by another process, a `git` on PATH that hangs) parks the scan
+# forever. The module's blocking invariant is stated absolutely and every open in the refusal
+# path was given a flag to honour it; the one place this tool waits on ANOTHER PROCESS was never
+# given the equivalent. `check=True` already converts a failure into this module's refusal, so
+# the whole repair is a bound on the wait and the same conversion for the expiry.
+# =============================================================================================
+
+
+def test_a_git_that_does_not_exit_is_given_up_on(tmp_path: Path) -> None:
+    """REPAIRED: `_git` must bound its wait.
+
+    CONTROL FIRST: the same runner against the REAL git answers inside the same budget, so a
+    timeout below is the module waiting and not the harness failing to observe a return.
+    """
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path, git_repo=True)
+    write(staging / "docs" / "x.md", "nothing here\n")
+    commit_all(tmp_path, staging)
+
+    runner = tmp_path / "run_git.py"
+    runner.write_text(
+        "import importlib.util, sys\n"
+        "spec = importlib.util.spec_from_file_location('sg', %r)\n"
+        "m = importlib.util.module_from_spec(spec); sys.modules['sg'] = m\n"
+        "spec.loader.exec_module(m)\n"
+        "try:\n"
+        "    out = m._git(%r, ['rev-parse', '--show-toplevel'], 'git-root-error')\n"
+        "    print('RETURNED', len(out))\n"
+        "except m.ScanRefused as exc:\n"
+        "    print('REFUSED', exc.reason_class)\n"
+        "except BaseException as exc:\n"
+        "    print('RAISED', type(exc).__name__)\n" % (str(driver), str(staging)),
+        encoding="utf8")
+
+    # A real hung child, not a patched `subprocess.run`: the module must be given up on by the
+    # mechanism it would really use. `exec` so the hang IS the process git waits on.
+    hang_dir = tmp_path / "hangshim"
+    hang_dir.mkdir(exist_ok=True)
+    hang = hang_dir / "git"
+    hang.write_text("#!/bin/sh\nexec sleep 900\n", encoding="utf8")
+    hang.chmod(hang.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    BUDGET = 20   # a git call that cannot be given up on inside this is indistinguishable from never
+
+    def run_once(path_prefix: Path | None, tag: str):
+        sink = tmp_path / ("git_%s.out" % tag)
+        with open(sink, "wb") as handle:
+            proc = subprocess.Popen([sys.executable, str(runner)], stdout=handle,
+                                    stderr=subprocess.STDOUT, env=clean_env(tmp_path, path_prefix),
+                                    start_new_session=True)
+            try:
+                code = proc.wait(timeout=BUDGET)
+            except subprocess.TimeoutExpired:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                proc.wait(timeout=20)
+                return None, sink.read_text(encoding="utf8", errors="replace")
+        return code, sink.read_text(encoding="utf8", errors="replace")
+
+    code, text = run_once(None, "control")
+    assert code == 0 and ("RETURNED" in text or "REFUSED" in text), (
+        "CONTROL: `_git` against the real git must answer inside %ds, else the arm below cannot "
+        "tell a waiting module from a broken harness — rc=%r output=%r" % (BUDGET, code, text[-400:]))
+
+    code, text = run_once(hang_dir, "armed")
+    assert code is not None, (
+        "REPAIRED: a git subprocess that never exits parked `_git` for the whole %d-second budget "
+        "and had to be killed. `subprocess.run` is called with capture_output and check and no "
+        "timeout, so every selected-Git path in this module — the root probe, the index read, "
+        "every blob read — waits on another process without a bound, against an invariant this "
+        "module states absolutely." % BUDGET)
+    assert "REFUSED" in text, (
+        "the expiry must arrive as this module's own refusal type, not as a raw TimeoutExpired: "
+        "output was %r" % text[-400:])
+
+
+# =============================================================================================
+# GROUP 84 — the sixty-third round. `_emit_unwritten_findings` OPENS WITH "Never raises." and then
+# re-raises KeyboardInterrupt and SystemExit — deliberately, and correctly: a cancellation is not
+# a failure to print, and the function's own comment says so at length three lines below the
+# handler. The sentence at the top was simply never updated, and it is the sentence a caller
+# reads before deciding whether to wrap the call. Both callers sit on an already-unwinding path,
+# where "never raises" is exactly the property being relied on.
+# This arm is not a string search. It reads which exception types the CODE propagates out of the
+# AST, proves on a live call that the propagation is real and that ordinary failures really are
+# swallowed, and only then asks whether the docstring's claim names them. A rewording that drops
+# the claim satisfies it; a rewording that keeps the claim and still hides the carve-out does not.
+# =============================================================================================
+
+
+def _claim_sentences(text: str) -> list[tuple[str, str]]:
+    """Each sentence making a never-raises claim, paired with the sentence that follows it."""
+    import re as _re
+    flat = " ".join(text.split())
+    parts = [p.strip() for p in _re.split(r"(?<=[.!?])\s+", flat) if p.strip()]
+    claim = _re.compile(r"(?i)\bnever\s+rais")
+    return [(parts[i], parts[i + 1] if i + 1 < len(parts) else "")
+            for i in range(len(parts)) if claim.search(parts[i])]
+
+
+def _propagating_types(func: ast.FunctionDef) -> set[str]:
+    """Exception types an ``except`` in FUNC catches and then re-raises — the types that leave."""
+    out = set()
+    for node in ast.walk(func):
+        if not isinstance(node, ast.ExceptHandler):
+            continue
+        reraises = any(isinstance(sub, ast.Raise) and (sub.exc is None or isinstance(sub.exc, ast.Name))
+                       for sub in ast.walk(node))
+        if not reraises:
+            continue
+        caught = node.type
+        for piece in (caught.elts if isinstance(caught, ast.Tuple) else [caught]):
+            if isinstance(piece, ast.Name):
+                out.add(piece.id)
+            elif isinstance(piece, ast.Attribute):
+                out.add(piece.attr)
+    return out
+
+
+def test_the_never_raises_docstring_names_what_the_code_lets_through(tmp_path: Path) -> None:
+    """REPAIRED: the sentence and the code must agree about what leaves this function.
+
+    CONTROL: the AST reading is checked against a live call — an OSError raised by the write is
+    swallowed (so the swallow branch is real and the probe can tell the difference), and a
+    KeyboardInterrupt raised by the same write comes back out (so the propagation the AST reports
+    is not a misreading of the tree).
+    """
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "never_raises_claim")
+    tree = ast.parse(SCANNER.read_text(encoding="utf8"))
+    func = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "_emit_unwritten_findings")
+    propagating = _propagating_types(func)
+
+    hits = [("docs/A.md", 1, "SECRET", "generic-key-assign", "content")]
+
+    class _Exploding:
+        def __init__(self, exc):
+            self.exc = exc
+
+        def write(self, _data):
+            raise self.exc
+
+    def call_with(exc):
+        real = sys.stderr
+        sys.stderr = _Exploding(exc)
+        try:
+            module._emit_unwritten_findings(hits)
+            return None
+        except BaseException as out:
+            return type(out).__name__
+        finally:
+            sys.stderr = real
+
+    assert call_with(OSError(errno.EPIPE, "injected")) is None, (
+        "CONTROL: an ordinary failure to print must be swallowed, else this arm cannot tell a "
+        "function that lets everything through from one with a carve-out")
+    escaped = call_with(KeyboardInterrupt())
+    assert escaped == "KeyboardInterrupt", (
+        "CONTROL: the cancellation carve-out must be real on a live call, not only in the tree "
+        "(got %r)" % escaped)
+    assert escaped in propagating, (
+        "CONTROL: the AST reading must agree with the live call — it says %r leaves this function "
+        "and the call showed %r" % (sorted(propagating), escaped))
+
+    doc = func.body[0].value.value if (func.body and isinstance(func.body[0], ast.Expr)
+                                       and isinstance(func.body[0].value, ast.Constant)) else ""
+    claims = _claim_sentences(doc)
+    unqualified = [(sentence, nxt) for sentence, nxt in claims
+                   if not propagating <= {w.strip(".,;:()") for w in (sentence + " " + nxt).split()}]
+    assert not unqualified, (
+        "REPAIRED: `_emit_unwritten_findings` promises %r while its own code re-raises %s. The "
+        "claim is the sentence a caller reads before deciding whether to wrap the call, and both "
+        "callers are already unwinding when they make it. Either drop the claim or let it name "
+        "what leaves: the handler and the sentence have to say the same thing."
+        % (unqualified[0][0], ", ".join(sorted(propagating))))
+
+
+# =============================================================================================
+# GROUP 85 — the sixty-third round. THE STRUCTURAL LINT, and the arm that runs it over the module.
+#
+# `guard/fd_ownership_check.py` answers ONE question over the whole of `_tools/scan_gate.py`: does
+# any STATEMENT stand between a descriptor acquisition and the `try` whose `finally` releases it?
+# Nothing more. An earlier design for it tried to certify that a particular shape — slot preset to
+# None, acquisition inside the owning try, release behind an `is not None` guard — CLOSES the leak
+# class. An adversarial review refuted that before the file was finished, and the refutation is
+# correct: `os.open` returns a raw integer, and a cancellation delivered between the syscall
+# returning and the bytecode that binds the name leaves the slot still None, so the finally
+# releases nothing. That is the original defect, inside the shape meant to prevent it, and no
+# source check can see it — the reference and PEP 343 both say an interrupt can arrive between any
+# two opcodes. So the checker prints that limit with every verdict rather than burying it in a
+# comment, and this group pins the printing as hard as it pins the finding: a gate that reports
+# success while a class it appears to cover is still open is the failure this suite exists for.
+#
+# The checker is a LINT, not a proof. A rejection means "rewrite this site into a known-good
+# shape", never "this is proven buggy", and every site it cannot classify is reported as an
+# explicit unsupported-shape entry rather than passed. The tests below are the half that makes it
+# an instrument at all: each accepted shape is paired with the mutation that must be rejected,
+# because a checker that cannot be SHOWN to reject is not a checker.
+# =============================================================================================
+
+FD_CHECKER = REPO / "guard" / "fd_ownership_check.py"
+
+
+def fd_checker():
+    """Import the lint the way an operator would run it: by path, from guard/."""
+    spec = importlib.util.spec_from_file_location("fd_ownership_check_under_test", str(FD_CHECKER))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _lint(source: str, name: str = "fixture.py"):
+    """Verdicts for a synthetic source, as {line: verdict}, plus the site list."""
+    import textwrap
+    module = fd_checker()
+    sites = module.analyse(Path(name), source=textwrap.dedent(source).lstrip("\n"))
+    return module, sites
+
+
+# --- the accepted language: each shape, and the mutation of it that must be rejected ----------
+
+ACCEPTED_SHAPES = {
+    "acquire-then-own": """
+        import os
+        def f(path):
+            fd = os.open(path, os.O_RDONLY)
+            try:
+                return os.read(fd, 10)
+            finally:
+                os.close(fd)
+    """,
+    "acquired-inside-owner": """
+        import os
+        def f(path):
+            fd = None
+            try:
+                fd = os.open(path, os.O_RDONLY)
+                return os.read(fd, 10)
+            finally:
+                if fd is not None:
+                    os.close(fd)
+    """,
+    "with-item": """
+        def f(path):
+            with open(path) as handle:
+                return handle.read()
+    """,
+    "transfer-by-return": """
+        import os
+        def f(path):
+            return os.open(path, os.O_RDONLY)
+    """,
+    "immediate-release": """
+        import os
+        def f(path):
+            os.close(os.open(path, os.O_RDONLY))
+    """,
+    # two descriptors, one per level: the isolated spelling, where a release that raises cannot
+    # skip the other one
+    "nested-owners": """
+        import os
+        def f(a, b):
+            first = os.open(a, os.O_RDONLY)
+            try:
+                second = os.open(b, os.O_RDONLY)
+                try:
+                    return os.read(first, 1) + os.read(second, 1)
+                finally:
+                    os.close(second)
+            finally:
+                os.close(first)
+    """,
+}
+
+
+@pytest.mark.parametrize("shape", sorted(ACCEPTED_SHAPES))
+def test_the_fd_lint_accepts_its_own_accepted_language(shape: str) -> None:
+    """CONTROL for every rejection below: the shapes the lint says it accepts must actually pass,
+    or a rejection elsewhere says nothing about the shape and only that the lint rejects widely."""
+    module, sites = _lint(ACCEPTED_SHAPES[shape])
+    assert sites, "CONTROL: the %s fixture must contain an acquisition at all" % shape
+    bad = [s for s in sites if not s.ok]
+    assert not bad, "CONTROL: %s must be accepted, got %r" % (shape, bad)
+
+
+REJECTED_SHAPES = {
+    # ONE statement between the acquisition and its owner: the shape both real instances in
+    # scan_gate.py take (an `if <slot> is None: return` standing in the gap).
+    "gap-one": ("""
+        import os
+        def f(path):
+            fd = os.open(path, os.O_RDONLY)
+            if fd < 0:
+                return None
+            try:
+                return os.read(fd, 10)
+            finally:
+                os.close(fd)
+    """, "gap"),
+    # SEVERAL. The gap is reported with its width so the diagnostic names the work at risk.
+    "gap-three": ("""
+        import os
+        def f(path, log):
+            fd = os.open(path, os.O_RDONLY)
+            log.append(fd)
+            size = os.fstat(fd).st_size
+            if size == 0:
+                return None
+            try:
+                return os.read(fd, 10)
+            finally:
+                os.close(fd)
+    """, "gap"),
+    # A finally that releases SOMETHING ELSE reads exactly like ownership at a glance.
+    "different-slot": ("""
+        import os
+        def f(path, other):
+            fd = os.open(path, os.O_RDONLY)
+            try:
+                return os.read(fd, 1)
+            finally:
+                os.close(other)
+    """, "unowned"),
+    # Guarded on whether the WORK succeeded rather than on whether the descriptor exists.
+    "success-guard": ("""
+        import os
+        def f(path):
+            ok = False
+            fd = None
+            try:
+                fd = os.open(path, os.O_RDONLY)
+                ok = True
+            finally:
+                if ok:
+                    os.close(fd)
+    """, "unsupported-shape"),
+    # THE FALSY-ZERO TRAP. Descriptor 0 is a legal, successfully acquired descriptor and it is
+    # falsy, so `if fd:` skips precisely the case the guard exists for.
+    "truthiness-guard": ("""
+        import os
+        def f(path):
+            fd = None
+            try:
+                fd = os.open(path, os.O_RDONLY)
+            finally:
+                if fd:
+                    os.close(fd)
+    """, "falsy-guard"),
+    # TWO ACQUISITIONS SHARING ONE FINALLY. If the first release raises, the second never runs.
+    "shared-finally": ("""
+        import os
+        def f(a, b):
+            first = None
+            second = None
+            try:
+                first = os.open(a, os.O_RDONLY)
+                second = os.open(b, os.O_RDONLY)
+            finally:
+                if first is not None:
+                    os.close(first)
+                if second is not None:
+                    os.close(second)
+    """, "shared-finally"),
+    # A CONTEXT-MANAGER FACTORY CALLED BEFORE THE CONTEXT IS ENTERED. The descriptor exists on the
+    # assignment line; the guarantee starts on the next one.
+    "factory-before-with": ("""
+        def f(path):
+            handle = open(path)
+            with handle:
+                return handle.read()
+    """, "unowned"),
+    # AN EXIT-STACK CALLBACK WHOSE ARGUMENT IS AN OPEN CALL: evaluated before the registration.
+    "exit-stack-callback": ("""
+        import contextlib, os
+        def f(path):
+            with contextlib.ExitStack() as stack:
+                stack.callback(os.close, os.open(path, os.O_RDONLY))
+    """, "unsupported-shape"),
+    # A DECORATOR THAT PROMISES OWNERSHIP. The body is what runs, and the body is what is read.
+    "decorator-promise": ("""
+        import os
+        def owns_descriptors(fn):
+            return fn
+
+        @owns_descriptors
+        def f(path):
+            fd = os.open(path, os.O_RDONLY)
+            return os.read(fd, 1)
+    """, "unowned"),
+    # A RELEASE IN AN except HANDLER: the success path, which is the path that runs, leaks.
+    "release-in-except": ("""
+        import os
+        def f(path):
+            fd = os.open(path, os.O_RDONLY)
+            try:
+                return os.read(fd, 1)
+            except OSError:
+                os.close(fd)
+                raise
+    """, "unowned"),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(REJECTED_SHAPES))
+def test_the_fd_lint_rejects_the_shapes_it_says_it_rejects(shape: str) -> None:
+    """A checker that cannot be shown to reject is not a checker. Each fixture is one shape the
+    lint's own documentation calls out, and the verdict it must carry."""
+    source, expected = REJECTED_SHAPES[shape]
+    module, sites = _lint(source)
+    assert sites, "CONTROL: the %s fixture must contain an acquisition at all" % shape
+    verdicts = {s.verdict for s in sites}
+    assert expected in verdicts, (
+        "%s must be rejected as %r; the lint said %r (%r)" % (shape, expected, sorted(verdicts), sites))
+    assert not any(s.ok and s.verdict == expected for s in sites), \
+        "CONTROL: a rejected verdict must not also read as accepted"
+
+
+def test_zero_statements_between_is_accepted_and_the_lint_says_what_that_leaves_open() -> None:
+    """THE SCOPE LIMIT, PINNED. A gap of zero statements passes — the lint asks about statements
+    and there are none. It does NOT follow that the descriptor is owned: the acquiring syscall
+    returns before the name is bound, and a cancellation in between leaves the slot unset with the
+    descriptor already allocated. No source check can see that window, so the checker prints the
+    limit with every verdict. This arm fails if that sentence is ever dropped, which is the only
+    thing standing between an honest lint and a gate that reports success over an open class."""
+    module, sites = _lint(ACCEPTED_SHAPES["acquire-then-own"])
+    assert [s.verdict for s in sites] == ["ok"], "zero statements between is inside the language"
+    assert [s.gap for s in sites] == [0], "and the reported gap is zero"
+    text = module.report(sites)
+    assert module.COVERAGE_DISCLOSURE in text, (
+        "the clean report must carry the coverage disclosure; without it a reader takes a pass "
+        "for a proof that the descriptor is owned, and the syscall-to-binding window is exactly "
+        "the class that stays open")
+    assert "syscall" in module.COVERAGE_DISCLOSURE and "no source check" in module.COVERAGE_DISCLOSURE, (
+        "the disclosure must name what it does not cover, not merely exist")
+
+
+def test_a_borrowed_descriptor_is_not_counted_as_an_acquisition() -> None:
+    """CONTROL on the site set itself: `os.fdopen(fd, closefd=False)` borrows a descriptor the
+    caller still owns. Counting it would double-count the site that is already guarded, and the
+    lint would then be satisfiable by guarding the borrow instead of the open."""
+    module, sites = _lint("""
+        import os
+        def f(fd):
+            with os.fdopen(fd, "rb", closefd=False) as handle:
+                return handle.read()
+    """)
+    assert sites == [], "a borrow is not an acquisition (got %r)" % (sites,)
+
+
+def test_no_statement_stands_between_an_acquisition_and_its_owner() -> None:
+    """THE ARM. Every descriptor acquisition in `_tools/scan_gate.py` must be in the lint's
+    accepted language: nothing standing between it and the try whose finally releases it, and no
+    site the lint cannot classify left reading as a pass.
+
+    CONTROL: the lint must find sites at all, must have accepted some of them, and — measured on
+    THIS file, not on a fixture — must report a gap when one accepted site is pushed apart by a
+    single statement. A clean verdict from an instrument that cannot go red over this very module
+    is not a measurement.
+    """
+    module = fd_checker()
+    source = SCANNER.read_text(encoding="utf8")
+    sites = module.analyse(SCANNER, source=source)
+    assert len(sites) > 10, "CONTROL: the lint must find the module's acquisition sites at all"
+    accepted = [s for s in sites if s.ok]
+    assert accepted, "CONTROL: at least one site must be inside the accepted language"
+
+    # POSITIVE CONTROL ON THE REAL FILE: push one accepted acquisition one statement away from its
+    # owner and the lint must say so, at that line, with the width.
+    subject = next((s for s in accepted if s.shape == "acquire-then-own" and s.owner_lineno), None)
+    assert subject is not None, "CONTROL: no acquire-then-own site to push apart"
+    lines = source.splitlines(keepends=True)
+    owner_line = lines[subject.owner_lineno - 1]
+    indent = owner_line[:len(owner_line) - len(owner_line.lstrip())]
+    pushed = lines[:subject.owner_lineno - 1] + [indent + "_wedge = 0\n"] + lines[subject.owner_lineno - 1:]
+    moved = module.analyse(SCANNER, source="".join(pushed))
+    wedged = [s for s in moved if s.lineno == subject.lineno]
+    assert wedged and wedged[0].verdict == "gap" and wedged[0].gap == 1, (
+        "CONTROL: one statement wedged above the owner at line %d must be reported as a gap of 1, "
+        "else the clean verdict below comes from an instrument that cannot fail here (got %r)"
+        % (subject.owner_lineno, wedged))
+
+    # THE CLAIM THIS LINT CAN ACTUALLY MAKE: no GAP. A statement standing between an acquisition
+    # and its owner is the defect four rounds repaired one site at a time, and it must be zero.
+    gaps = [s for s in sites if s.verdict == "gap"]
+    assert not gaps, (
+        "a descriptor is acquired away from the block that owns it:\n%s" % module.report(sites))
+
+    # AND THE SHAPES IT DECLINES TO READ ARE PINNED, NOT PASSED OVER. These are not defects; they
+    # are shapes this lint conservatively refuses to call ownership — a `with` on a helper's return,
+    # a helper that hands a descriptor to its caller on success and closes it on failure, a
+    # directory open, and the self-test's bare opens. Left as a bare count they would drift, and a
+    # count that only ever grows is how a baseline becomes a place to hide. Pinned as an exact set
+    # instead: a NEW unclassifiable site fails this arm, and removing one is a deliberate edit here.
+    unowned = sorted((s.function, s.callee) for s in sites if not s.ok)
+    assert unowned == sorted([
+        ("_allowlist", "_open_untrusted_text"),
+        ("_load_identity_terms", "_open_untrusted_text"),
+        ("_makedirs_owner_only", "_open_dir_nofollow"),
+        ("_open_untrusted_text", "os.open"),
+        ("self_test", "open"), ("self_test", "open"), ("self_test", "open"),
+        ("self_test", "open"), ("self_test", "open"), ("self_test", "open"),
+    ]), (
+        "the set of acquisition shapes this lint cannot classify has CHANGED. If a new site "
+        "appeared, put it in the accepted language rather than in this list. If one was repaired, "
+        "take it out of this list in the same commit.\n%s" % module.report(sites))

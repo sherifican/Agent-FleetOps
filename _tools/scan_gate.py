@@ -58,7 +58,11 @@ def _load_identity_terms():
             "   including any box alias used in benchmark or log annotations; LAN domain suffixes;\n"
             "   personal email local-parts.\n")
         raise ScanRefused("missing-identity-terms")
-    terms = [t.strip() for t in open(p, encoding="utf8") if t.strip() and not t.startswith("#")]
+    handle = _open_untrusted_text(p)
+    if handle is None:
+        raise ScanRefused("missing-identity-terms")   # not a regular file is not a terms file
+    with handle:
+        terms = [t.strip() for t in handle if t.strip() and not t.startswith("#")]
     return terms
 
 
@@ -101,8 +105,12 @@ def _allowlist(staging: str):
     p = os.path.join(staging, "_tools", "scan_allow.tsv")
     if not os.path.isfile(p):
         return []
+    handle = _open_untrusted_text(p)
+    if handle is None:
+        return []                                     # not a regular file: no exemptions, fail closed
     out = []
-    for ln in open(p, encoding="utf8"):
+    with handle:
+      for ln in handle:
         ln = ln.rstrip("\n")
         if not ln or ln.startswith("#"):
             continue
@@ -130,10 +138,48 @@ class ScanRefused(Exception):
         self.reason_class = token if re.fullmatch(r"[a-z][a-z0-9\-]*", token or "") else "unclassified"
 
 
+# SECONDS, AND DELIBERATELY SMALL. The three commands this module runs — the root probe, the index
+# read and the blob read — answer in milliseconds on any tree a pre-commit gate is pointed at. The
+# bound is not a performance budget, it is the difference between "never blocks" being true and
+# being a sentence in a docstring, so it is set where a wait is already pathological rather than
+# where it would be merely slow.
+_GIT_TIMEOUT = 10
+
+
+def _open_untrusted_text(path):
+    """Open PATH for reading without waiting for a writer. None when it is not a regular file.
+
+    NEVER BLOCKS, and `os.path.isfile` is not enough to promise that. That call answers about a
+    NAME, and the open after it is a second syscall: a named pipe created in the window between
+    them made a plain `open()` wait for a writer forever — in the identity-terms loader and the
+    allow-list loader, both of which run BEFORE this scan has collected anything, so the wait was
+    invisible and nothing was left behind to show for it (cold leg, c0917eb). A pipe already in
+    place was never the hard case; `isfile` answers False for one and the loader just skipped it.
+    The type is read from the DESCRIPTOR, which closes the window rather than narrowing it.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            _close_quietly(fd)
+            return None
+        return os.fdopen(fd, "r", encoding="utf8")
+    except BaseException:
+        _close_quietly(fd)
+        raise
+
+
 def _git(staging, args, reason, rel="."):
     try:
+        # A TIMEOUT, BECAUSE "NEVER BLOCKS" INCLUDES THE SUBPROCESS. This ran git with capture and
+        # check and no bound at all, so a git that hangs — a lock held by another process, a
+        # filesystem that stops answering — hung the scan with it (cold leg, c0917eb).
+        # `TimeoutExpired` is a `SubprocessError`, so the handler below already turns it into this
+        # module's own refusal and no new exit is introduced.
         return subprocess.run(["git", "-C", staging] + args,
-                              capture_output=True, check=True).stdout
+                              capture_output=True, check=True, timeout=_GIT_TIMEOUT).stdout
     except (OSError, subprocess.SubprocessError):
         raise ScanRefused(f"{reason} {rel!r}") from None
 
@@ -213,11 +259,35 @@ def _allowed(allow, rel, name, surface):
 
 
 def scan(staging: str):
+    """Collect the findings. THE PARTIAL LIST TRAVELS WITH A FAILURE.
+
+    This function used to hold its findings in a local list and raise straight out of the loop, so
+    a refusal on a later file — an unreadable input, a blob git would not hand over — unwound past
+    the caller with the name never bound, and everything already found was gone. No race was
+    needed; one unreadable file after one real hit was enough. The refusal writer receives the
+    exception and has never received hits (cold leg, c0917eb).
+
+    The list is owned here and attached to whatever comes out. What the caller then does with it is
+    a decision made there and deliberately NOT a promise to publish: a scan that did not finish has
+    not established that its findings are complete, and this module does not put an incomplete
+    report at a name that claims to be one.
+    """
+    hits = []
+    try:
+        return _scan_into(staging, hits)
+    except BaseException as exc:
+        try:
+            exc._scan_partial_hits = list(hits)
+        except BaseException:
+            pass                       # an exception that will not carry it loses nothing it had
+        raise
+
+
+def _scan_into(staging: str, hits):
     if not os.path.isdir(staging):
         raise ScanRefused("invalid-staging-directory")
     allow = _allowlist(staging)
     personal = personal_patterns()
-    hits = []
     skip_dirs = {".git", "_reports", "__pycache__", ".pytest_cache", ".venv", "node_modules"}
     for rel, oid in _publishable_files(staging, skip_dirs):
             # THE NAME ARM. A path is published bytes too: a file called after a private host or
@@ -242,13 +312,30 @@ def scan(staging: str):
                     # staging directory made the scan itself wait for a writer, forever — measured
                     # here as a run that never returns while the same tree with a regular file in
                     # that place answers in well under a second (guarantee inventory, 3adf105).
-                    # Every OTHER open in this module had already been given the flag; the one on
-                    # the most attacker-reachable surface in the tool had not, and the README's
+                    # The publication and refusal paths had all been given the flag; this one, on
+                    # the most attacker-reachable surface in the tool, had not, and the README's
                     # blocking statement was scoped to the refusal path, so nothing said the scan
-                    # could hang. A non-regular entry carries no publishable content — git stores
+                    # could hang. The sentence here used to claim EVERY other open already had it,
+                    # and that was false when it was written: the identity-terms and allow-list
+                    # loaders were still plain blocking opens, and a later cold leg found them
+                    # (c0917eb). They go through `_open_untrusted_text` now. A non-regular entry carries no publishable content — git stores
                     # none — and is skipped rather than refused, which is the same direction the
                     # walk already takes for a directory. The type is read from the DESCRIPTOR, so
                     # a swap between the lookup and the open cannot change the answer.
+                    # THIS OPEN STILL FOLLOWS A SYMLINK, AND THAT IS AN OPEN QUESTION, NOT AN
+                    # OVERSIGHT. A cold leg is right that the export walk therefore reads symlink
+                    # TARGETS: a link planted in the tree makes this scanner read a file outside
+                    # it and report the finding under an in-tree path, and the coverage disclosure
+                    # already says symlink target contents are not guaranteed (c0917eb). Adding
+                    # O_NOFOLLOW and skipping was implemented and REVERTED: it turns three arms
+                    # red, and the one that matters —
+                    # `test_report_and_read_failure[read-failure]` — pins that a dangling symlink
+                    # in an export REFUSES with exit 2. That arm holds the more important rule,
+                    # that an input this scanner cannot read must not be silently skipped, because
+                    # a silently reduced scan is how a dirty tree gets reported clean. Refusing on
+                    # every symlink instead would destroy any ordinary tree that has one. Both
+                    # directions cost something real, so this one goes to the gate as a design
+                    # question rather than being decided inside a patch.
                     _in_fd = os.open(os.path.join(staging, rel),
                                      os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
                     try:
@@ -1440,8 +1527,19 @@ def _stage_report(dirfd, body, evidence=False):
     raise OSError(errno.EEXIST, "report-staging-name-unavailable") from last
 
 
-def _emit_unwritten_findings(hits):
-    """Put findings the scanner could not write anywhere in front of the operator. Never raises.
+def _emit_unwritten_findings(hits, header=None):
+    """Put findings the scanner could not write anywhere in front of the operator.
+
+    NEVER RAISES AN ERROR, but KeyboardInterrupt and SystemExit DO leave this function. Naming
+    them in the same breath as the promise is the point: a caller reads this before deciding whether
+    to wrap the call, and both callers are already unwinding when they read it.
+    That first line used to promise it never raises, flat and with no carve-out, while the code
+    below already re-raised KeyboardInterrupt and SystemExit — a contradiction introduced by the
+    round that added the boundary and caught by a cold leg one round later (c0917eb). It is the same defect this module keeps finding in its own older
+    comments, written this time by the round that was fixing them. The boundary is deliberate and
+    matches `_write_refusal_report`: an ordinary failure to print is swallowed so it cannot displace
+    the failure already on its way out; a cancellation is passed on, because a cancellation is not a
+    refusal to report.
 
     The exit status is the authorization and the report is the diagnostic — but when the report
     cannot be written at all, silence is the one outcome this module refuses everywhere else. The
@@ -1452,7 +1550,8 @@ def _emit_unwritten_findings(hits):
     try:
         if not hits:
             return
-        sys.stderr.write("scan_gate: the report could not be written; %d hit(s) follow\n" % len(hits))
+        sys.stderr.write(header if header is not None else
+                         "scan_gate: the report could not be written; %d hit(s) follow\n" % len(hits))
         for rel, i, cls, name, _surface in hits[:40]:
             # WHAT AND WHERE, NOT THE MATERIAL. On this tree `scan()` fills the fifth field with
             # which arm fired — "content" or "name" — not with the matched bytes, so dropping it
@@ -2639,10 +2738,17 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             # has stopped reaching that inode answers None, and with nothing preserved and nothing
             # classifiable the replacement is declined. A FIFO cannot block this: identity is
             # compared before any read, and a FIFO is not the regular inode that was recorded.
-            _cfd, _cvia = _open_held_copy(dirfd, report_name, previous)
-            if _cfd is None:
-                return False
+            # ACQUIRED INSIDE THE BLOCK THAT RELEASES IT. The open and its own None-guard used to
+            # stand above this try, so a cancellation between them left a descriptor on the canonical
+            # report with nothing to close it. Sibling of the gap fixed one round earlier in the
+            # other branch of this same function, found by a lint over the whole module rather than
+            # by reading (c0917eb). The slot is set first so the finally can name it either way; the
+            # early return still runs the finally, which finds nothing recorded and does nothing.
+            _cfd, _cvia = None, False
             try:
+                _cfd, _cvia = _open_held_copy(dirfd, report_name, previous)
+                if _cfd is None:
+                    return False
                 # `_read_prefix_held` answers None when it cannot read, and None is not the status
                 # prefix: an unreadable copy is classified as findings, the costly case. (An
                 # `except OSError` that used to sit here was unreachable — cold leg, d7e4a3c.)
@@ -2655,7 +2761,8 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
                 # line skipped the CLOSE with the question and leaked the descriptor to process
                 # exit (executed review, 212e683). The question needs no flag — it reads the prefix
                 # itself and lets a status line go, which is the same decision in one place.
-                _rescue_then_close(dirfd, _cfd, _cvia)
+                if _cfd is not None:
+                    _rescue_then_close(dirfd, _cfd, _cvia)
 
         if is_status_line:
             # A CLEAN or REFUSED report is not worth a slot, and parking one there was measured
@@ -2751,16 +2858,22 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
                 # two different files. A leg reproduced it: True returned after stripping and
                 # chmodding one inode having checked another. The same defect in a second place, two
                 # rounds later; the sibling of a fixed branch is where it goes to live.
-                _kept_fd, _kept_via_proc = _open_held_copy(dirfd, candidate, previous)
-                if _kept_fd is None:
-                    return False              # the slot stopped being the inode we just checked
+                # ACQUIRED INSIDE THE BLOCK THAT RELEASES IT, for the same reason as above and in
+                # the same function: the open and its None-guard stood outside the try whose finally
+                # rescues and closes, and a cancellation in that gap stranded a descriptor on a
+                # preserved findings inode (cold leg and module lint, c0917eb).
+                _kept_fd, _kept_via_proc = None, False
                 try:
+                    _kept_fd, _kept_via_proc = _open_held_copy(dirfd, candidate, previous)
+                    if _kept_fd is None:
+                        return False          # the slot stopped being the inode we just checked
                     if _narrow_held_copy(_kept_fd, _kept_via_proc):
                         if guard_out is not None:
                             guard_out.append(("slot", candidate, previous.st_dev, previous.st_ino))
                         return True           # already preserved by an earlier call; oldest wins
                 finally:
-                    _rescue_then_close(dirfd, _kept_fd, _kept_via_proc)   # both names may be gone (invariant leg, 8dd9edd)
+                    if _kept_fd is not None:
+                        _rescue_then_close(dirfd, _kept_fd, _kept_via_proc)   # both names may be gone (invariant leg, 8dd9edd)
                 # AND THE NAME STAYS. This copy is a second name for the SAME inode the report is
                 # standing on — the identity check above is what establishes that — so an ACL on it
                 # is an ACL already on the report itself, not a channel this call opened. Unlinking a
@@ -3161,6 +3274,19 @@ def main():
     try:
         hits = scan(staging)
     except (ScanRefused, OSError, UnicodeError) as refusal:
+        # WHAT THE SCAN HAD ALREADY FOUND GOES TO THE OPERATOR, AND NOWHERE ELSE. The refusal
+        # writer takes the exception and has never taken hits, so these used to end here in
+        # silence. They are NOT written to a report: a scan that did not finish has not earned a
+        # name that claims to be one, and this module has spent nineteen rounds keeping incomplete
+        # things out of names that promise completeness. The error stream is where a finding with
+        # no owner goes, and the header says plainly that the list is partial, so nobody can read
+        # an early refusal as a clean scan (cold leg, c0917eb).
+        _partial = getattr(refusal, "_scan_partial_hits", None)
+        if _partial:
+            _emit_unwritten_findings(
+                _partial,
+                header=("scan_gate: the scan was refused before it finished; %d hit(s) found so "
+                        "far follow, and the list is INCOMPLETE\n" % len(_partial)))
         _write_refusal_report(staging, refusal)
         raise
     try:
