@@ -8111,3 +8111,99 @@ def test_an_unconfirmed_custody_in_the_copy_out_still_rescues_a_diverged_stage(t
     assert _findings_anywhere(reports, "docs/C.md:1"), (
         "REPAIRED: custody was unconfirmed and both of the copy's names were taken; the copy-out returned "
         "on retention alone and the closes freed the last references to the findings")
+
+
+# =============================================================================================
+# GROUP 56 — the forty-eighth round. Gate 43's invariant leg (Gemini) on 407a89c: the round-47
+# copy-out rescue re-entered through `_false_or_rescue`, which carried no depth, so a racer who
+# keeps taking names could drive the rescue chain until descriptors ran out.
+# =============================================================================================
+
+
+def test_the_copy_out_rescue_chain_is_depth_bounded(tmp_path: Path) -> None:
+    """REPAIRED (invariant leg, gate 43): a rescue that re-enters the copy-out must carry its depth;
+    an unbounded chain leaks a stage and a descriptor per level until the process runs out."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "rescue_chain_depth")
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_RDWR, 0o600)
+    os.write(src, b"aws\tkey\tassignment\tdocs/D.md:1\n")
+    os.unlink(str(reports / ".scan_report_src"))
+    real_lstat, real_open = module.os.lstat, module.os.open
+    stages_made: list[str] = []
+    fired: list[str] = []
+
+    def count_stage_opens(path, *a, **k):
+        fd = real_open(path, *a, **k)
+        if sys._getframe(1).f_code.co_name == "_copy_out_unpublished" and str(path).startswith(".scan_report_"):
+            stages_made.append(str(path))
+        return fd
+
+    def take_every_name_and_fail_every_confirmation(path, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_link_held_inode":
+            fired.append("lstat")
+            decoy = reports / "decoy.txt"
+            for victim in [p for p in reports.iterdir() if p.name.startswith(".scan_report_")] + [reports / str(path)]:
+                decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+                try: os.replace(decoy, victim)
+                except OSError: pass
+            raise OSError(errno.EIO, "injected confirmation failure")
+        return real_lstat(path, *a, **k)
+
+    module.os.lstat, module.os.open = take_every_name_and_fail_every_confirmation, count_stage_opens
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        try:
+            module._copy_out_unpublished(dirfd, src)
+        except (RecursionError, OSError) as exc:            # the unbounded chain ends in one of these
+            stages_made.append("EXHAUSTED:%s" % type(exc).__name__)
+    finally:
+        module.os.lstat, module.os.open = real_lstat, real_open
+        os.close(src); os.close(dirfd)
+    if not fired:
+        pytest.skip("the post-link confirmation never ran; this arm measured nothing")
+    assert len(stages_made) <= 3, (
+        f"REPAIRED: the rescue chain made {len(stages_made)} stages before stopping "
+        f"({stages_made[-1] if stages_made else '-'}); the re-entry carried no depth and the chain was unbounded")
+
+
+def test_the_copy_outs_finally_re_asks_the_stage_name_before_the_close(tmp_path: Path) -> None:
+    """REPAIRED (cold #1, gate 43): every retention exit of the copy-out closed its stage without asking
+    whether the stage name still reached it; a strip denied plus a swapped stage name freed the copy."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "copyout_finally_reask")
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    reports = tmp_path / "_reports"
+    reports.mkdir()
+    src = os.open(str(reports / ".scan_report_src"), os.O_CREAT | os.O_RDWR, 0o600)
+    os.write(src, b"aws\tkey\tassignment\tdocs/S.md:1\n")
+    os.unlink(str(reports / ".scan_report_src"))      # the source has no name: the copy is its last chance
+    real_strip = module._strip_acl_by_fd
+    fired: list[str] = []
+
+    def deny_the_strip_and_take_the_stage_name(fd):
+        if sys._getframe(1).f_code.co_name == "_copy_out_unpublished" and not fired:
+            fired.append("strip")
+            decoy = reports / "decoy.txt"
+            for victim in [p for p in reports.iterdir() if p.name.startswith(".scan_report_")]:
+                decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+                os.replace(decoy, victim)             # the stage name is taken while the copy is being made
+            raise PermissionError(errno.EPERM, "injected: strip denied")
+        return real_strip(fd)
+
+    module._strip_acl_by_fd = deny_the_strip_and_take_the_stage_name
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._copy_out_unpublished(dirfd, src)
+    finally:
+        module._strip_acl_by_fd = real_strip
+        os.close(src); os.close(dirfd)
+    if not fired:
+        pytest.skip("the stage strip never ran; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/S.md:1"), (
+        "REPAIRED: the strip was denied (a retention exit) and the stage name had been taken; the finally "
+        "closed the stage without re-asking whether its name still reached it, and the copy was freed")

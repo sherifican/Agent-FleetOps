@@ -541,7 +541,9 @@ def _link_held_inode(fd, candidate, dirfd):
     linking anything else. So this either attaches OUR bytes to CANDIDATE, or it fails — it
     cannot attach a decoy. ENOENT out of this helper therefore means "no custody was taken": the
     kernel refused, or the post-link identity check below did. It does not prove the link count
-    is zero, and no caller relies on that.
+    is zero, and no caller relies on that. Callers answer it two ways: the stage paths take
+    their rescue (copy out through the descriptor); preservation, whose link was a retry away,
+    moves to the next reserved name.
 
     Returns True on success. Raises FileNotFoundError when no custody was taken — the kernel refused, or the check below did (the
     caller's rescue path); `_CustodyUnconfirmed` when the link was made and the check after it
@@ -555,7 +557,7 @@ def _link_held_inode(fd, candidate, dirfd):
     # check covers a broken or substituted link implementation AND the interval between the
     # link and this lstat, in which the candidate name can be replaced. It is the post-link
     # match the cold review leg named as its SHIP bar. A mismatch is
-    # reported as ENOENT so every caller takes its rescue path rather than claiming custody.
+    # reported as ENOENT so that no caller claims custody (each answers it as the docstring says).
     try:
         held = os.fstat(fd)               # the held side first —
         linked = os.lstat(candidate, dir_fd=dirfd)   # the name LAST: it is what custody is claimed over
@@ -732,8 +734,12 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                     # descriptor as its last reference, and is copied out once more (depth bounds
                     # it) rather than freed (inventory trace, 4e0be0a).
                     keep_stage = True
-                    if depth < 1:
-                        _false_or_rescue(dirfd, stage_name, stage_fd)
+                    # The re-ask of the stage name happens in the finally below, for this exit
+                    # and every other retention exit alike, one level deep. Round forty-seven
+                    # asked it here through a helper that dropped the depth, so every level
+                    # restarted at zero and a racer who kept taking names drove the chain until
+                    # the reserved names, or the descriptors, ran out (invariant leg, cold leg
+                    # and an inventory trace, all on 407a89c).
                     return False
                 except OSError:
                     continue              # occupied or unusable — the next name
@@ -772,6 +778,17 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                     elif not keep_stage:
                         # only while the reserved name (or any other) still reaches the copy
                         _remove_stage_if_another_name_remains(dirfd, stage_name, stage_fd)
+                    elif depth < 1:
+                        # KEPT — AND THE NAME IS RE-ASKED BEFORE THE CLOSE. Retention means "do
+                        # not unlink the stage name"; it was being read as "the stage name still
+                        # reaches this inode", which is a different fact (cold leg, 407a89c). A
+                        # stage name taken while the copy was being made leaves this descriptor
+                        # as the copy's last reference, on every retention exit — a denied strip,
+                        # a mode that did not land, every slot occupied, custody unconfirmed, a
+                        # cancellation. The same question write_report and _stage_report ask
+                        # before their closes, asked here for the copy, one level deep: at depth
+                        # one the close is the limit (§5 needs a racer acting twice).
+                        _false_or_rescue(dirfd, stage_name, stage_fd, depth + 1)
             finally:
                 _close_quietly(stage_fd)
     finally:
@@ -1730,7 +1747,10 @@ def _narrow_leftover(fd):
         # mode-000 findings report whose name was taken was freed at the close (cold leg and an
         # executed review, both on 4e0be0a). The same detour `_narrow_held_copy` uses reaches
         # the held inode: chmod through the descriptor directory, which follows the magic link
-        # to the inode this descriptor pins and to nothing else.
+        # to the inode this descriptor pins and to nothing else. Not verified here, on purpose:
+        # for the copy-out the reopen that follows IS the verification — owner-read that did not
+        # land makes the reopen fail and the rescue decline, which is the path-only limit the
+        # README states; a verified answer would change no caller's next act (cold leg, 407a89c).
         if _PROC_FD_DIR is not None:
             try:
                 os.chmod("%s/%d" % (_PROC_FD_DIR, fd), _REPORT_MODE)
@@ -1738,7 +1758,7 @@ def _narrow_leftover(fd):
                 pass
 
 
-def _false_or_rescue(dirfd, tmp_name, fd):
+def _false_or_rescue(dirfd, tmp_name, fd, depth=0):
     """The answer to a failure AFTER quarantine's identity check: False if the staged name is still
     the held inode (the caller keeps the name, as before), else the descriptor-based rescue.
 
@@ -1754,7 +1774,7 @@ def _false_or_rescue(dirfd, tmp_name, fd):
             return False                  # still ours by name: the caller keeps it
     except OSError:
         pass                              # cannot tell: treat as diverged
-    return _copy_out_unpublished(dirfd, fd)
+    return _copy_out_unpublished(dirfd, fd, depth)   # the depth travels with the rescue (gate 43)
 
 
 def _remove_stage_if_another_name_remains(dirfd, name, fd):
