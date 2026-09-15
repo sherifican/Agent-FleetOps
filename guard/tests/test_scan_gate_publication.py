@@ -9515,3 +9515,123 @@ def test_the_copy_outs_source_reopen_does_not_wait_on_a_peer(tmp_path: Path) -> 
     assert all(f & nonblock for f in flags), (
         f"REPAIRED: the copy-out reopened its source without O_NONBLOCK (flags {[oct(f) for f in flags]}); "
         f"the read end of a FIFO waits for a writer, inside the path documented as never blocking")
+
+
+# =============================================================================================
+# GROUP 67 — the fifty-ninth round. Gate 54's invariant leg on 2dac6c6: the name-clearing that
+# stops the whole-life handler closing a descriptor twice is a plain statement AFTER the rescue,
+# so a rescue that raises skips it and the handler closes again.
+# =============================================================================================
+
+
+def test_no_descriptor_is_closed_twice_when_a_rescue_raises(tmp_path: Path) -> None:
+    """REPAIRED (invariant leg, gate 54): the whole-life handler added last round is disarmed by clearing
+    the local name after each early close — but as a plain statement, so a rescue that RAISES skips it
+    and the handler closes the same descriptor again. The clearing belongs under a finally, the shape
+    the held-copy opener was already given. A closed descriptor number is reused, so this counts closes
+    of numbers not currently open rather than repeats of a number."""
+    module, reports = _preserve_arm_setup(tmp_path, "double_close_on_raise", "generic\tkey\tassignment\tdocs/W.md:1\n")
+    real_close, real_open, real_strip, real_fstat = module.os.close, module.os.open, module._strip_acl_by_fd, module.os.fstat
+    live: set = set()
+    stale: list[int] = []
+    fired: list[str] = []
+    narrowings: list[int] = []
+
+    def open_hook(*a, **k):
+        fd = real_open(*a, **k)
+        live.add(fd)
+        return fd
+
+    def close_hook(fd):
+        if fd not in live:
+            stale.append(fd)              # closing a number nothing currently holds
+        live.discard(fd)
+        return real_close(fd)
+
+    def strip_interrupted(fd):
+        f1, f2 = sys._getframe(1), sys._getframe(2)
+        if f1.f_code.co_name == "_narrow_held_copy" and f2.f_code.co_name == "_preserve_superseded":
+            narrowings.append(fd)
+            if len(narrowings) == 2 and not fired:
+                fired.append("kbi")
+                raise KeyboardInterrupt()
+        return real_strip(fd)
+
+    def fstat_raises_in_the_question(f_, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_rescue_before_close" and fired and "raised" not in fired:
+            fired.append("raised")
+            raise RuntimeError("injected: the question itself raises")
+        return real_fstat(f_, *a, **k)
+
+    for fd0 in list(os.listdir("/proc/self/fd")):
+        try:
+            live.add(int(fd0))
+        except ValueError:
+            pass
+    module.os.close = close_hook
+    module.os.open = open_hook
+    module._strip_acl_by_fd = strip_interrupted
+    module.os.fstat = fstat_raises_in_the_question
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    live.add(dirfd)
+    try:
+        with pytest.raises(BaseException):
+            module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        module.os.close = real_close
+        module.os.open = real_open
+        module._strip_acl_by_fd = real_strip
+        module.os.fstat = real_fstat
+        os.close(dirfd)
+    if "raised" not in fired:
+        pytest.skip("the question never raised during the unwinding (fired=%s, narrowings=%d); this arm "
+                    "measured nothing" % (fired, len(narrowings)))
+    assert not stale, (
+        "REPAIRED: descriptor number(s) %s were closed while nothing held them — the rescue raised, the "
+        "name was never cleared, and the whole-life handler closed again" % (stale,))
+
+
+@pytest.mark.parametrize("shape", ["reports_is_a_symlink", "reports_is_a_regular_file", "reports_is_a_fifo"])
+def test_findings_reach_the_operator_when_no_report_can_be_written(tmp_path: Path, capsys, shape: str) -> None:
+    """REPAIRED (cold #1, gate 54): every raise above the stage happens while this run's findings exist
+    only in the argument list. The refusal writer is handed the exception and never the hits, so a
+    planted CLEAN behind an unusable `_reports` was all a reader saw beside an exit status of two.
+    Staging first repaired this one name down; the directory name has nowhere to stage, so the
+    findings go to the operator instead, which needs no filesystem at all."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "unwritten_" + shape)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    target = staging / "_reports"
+    if shape == "reports_is_a_symlink":
+        (tmp_path / "payload").mkdir()
+        os.symlink(tmp_path / "payload", target)
+    elif shape == "reports_is_a_regular_file":
+        target.write_text("not a directory\n", encoding="utf-8")
+    else:
+        os.mkfifo(target)
+    hits = [("docs/H.md", 1, "SECRET", "generic_key_assignment", "k = '" + "AKIA" + "IOSFODNN7EXAMPLE" + "'"),
+            ("docs/J.md", 7, "PERSONAL", "email_address", "someone@example.test")]
+    capsys.readouterr()
+    with pytest.raises((module.ScanRefused, OSError)):
+        module.write_report(str(staging), hits)
+    err = capsys.readouterr().err
+    assert "docs/H.md:1" in err and "docs/J.md:7" in err, (
+        f"REPAIRED ({shape}): the scanner refused before it could stage anything and the findings went "
+        f"nowhere — not to a file, not to the operator (stderr was {err!r})")
+
+
+def test_a_clean_run_that_cannot_write_says_nothing_extra(tmp_path: Path, capsys) -> None:
+    """CONTROL for the arm above: the emission is for FINDINGS. A refusal with no hits must stay quiet,
+    or the guarantee degrades into noise on every unusable report directory."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "unwritten_clean")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (tmp_path / "payload").mkdir()
+    os.symlink(tmp_path / "payload", staging / "_reports")
+    capsys.readouterr()
+    with pytest.raises((module.ScanRefused, OSError)):
+        module.write_report(str(staging), [])
+    err = capsys.readouterr().err
+    assert "hit(s) follow" not in err, f"a CLEAN refusal printed a findings banner: {err!r}"

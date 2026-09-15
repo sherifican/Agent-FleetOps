@@ -1372,50 +1372,85 @@ def _stage_report(dirfd, body, evidence=False):
     raise OSError(errno.EEXIST, "report-staging-name-unavailable") from last
 
 
+def _emit_unwritten_findings(hits):
+    """Put findings the scanner could not write anywhere in front of the operator. Never raises.
+
+    The exit status is the authorization and the report is the diagnostic — but when the report
+    cannot be written at all, silence is the one outcome this module refuses everywhere else. The
+    same lines the successful run prints, on the error stream, bounded like that one, and every
+    failure to print swallowed: this runs while an exception is already on its way out and must
+    not displace it.
+    """
+    try:
+        if not hits:
+            return
+        sys.stderr.write("scan_gate: the report could not be written; %d hit(s) follow\n" % len(hits))
+        for rel, i, cls, name, surface in hits[:40]:
+            sys.stderr.write("%s\t%s\t%s\t%s:%d\n" % (cls, name, surface, rel, i))
+        if len(hits) > 40:
+            sys.stderr.write("scan_gate: %d more hit(s) not shown\n" % (len(hits) - 40))
+    except BaseException:
+        pass
+
+
 def write_report(staging, hits):
     reports_dir = os.path.join(staging, "_reports")
 
-    if os.path.islink(reports_dir):
-        raise ScanRefused("report-path-unsafe '_reports'")
+    # NOTHING DURABLE EXISTS YET, AND THE REFUSAL WRITER WILL NOT BE GIVEN THE HITS. Every
+    # raise between here and the stage below happens while this run's findings exist only in
+    # the argument list: the caller hands the exception to `_write_refusal_report`, which
+    # receives no hits and cannot reconstruct them, and a planted CLEAN behind an unusable
+    # `_reports` is then all a reader sees beside an exit status of 2. That is the same
+    # user-visible failure as the FIFO at the canonical name, which this module treated as
+    # blocking and repaired by staging BEFORE the check — one name down. The directory name
+    # cannot be repaired that way, because there is nowhere under an unusable `_reports` to
+    # stage anything. So the findings go to the operator instead, which needs no filesystem
+    # at all (cold leg, 2dac6c6).
+    try:
+        if os.path.islink(reports_dir):
+            raise ScanRefused("report-path-unsafe '_reports'")
 
-    # THE REPORT DIRECTORY IS CREATED AND OPENED RELATIVE TO A HELD PARENT DESCRIPTOR. Round
-    # eighteen anchored everything INSIDE the report directory and left its creation resolving by
-    # pathname, which the gate then reproduced: a hook that renamed the just-created directory
-    # aside and left a symlink at the name made the following pathname chmod land on a directory
-    # outside the supplied tree, and publication followed it there. Holding the parent and
-    # opening O_NOFOLLOW removes the symlink substitution; the mode repair is an fchmod on the
-    # descriptor rather than a chmod on a name that can be re-resolved.
-    if not os.path.isdir(staging):
-        _makedirs_owner_only(staging)
-    # The staging path itself is the root the caller gave us and is opened by name: it is the
-    # trust boundary, not something inside it. Everything BELOW it is descriptor-relative from
-    # here on. Hardening an ancestor the caller named would be a different decision and is not
-    # this function's to make.
-    try:
-        # Through the same helper the report directory uses, which carries the O_PATH fallback.
-        # A 0300 directory — create and traverse, no read — fails an O_RDONLY open, and round
-        # fourteen built that fallback for exactly this case. It was wired to `_reports` and not
-        # to the root above it, so a 0300 `_reports` published while a 0300 scan root could not
-        # publish at all and the refusal writer left no artifact either.
-        parent_fd, _ = _open_dir_nofollow(staging, None)
-    except OSError as exc:
-        raise ScanRefused("report-path-unsafe '_reports'") from exc
-    try:
-        created = False
+        # THE REPORT DIRECTORY IS CREATED AND OPENED RELATIVE TO A HELD PARENT DESCRIPTOR. Round
+        # eighteen anchored everything INSIDE the report directory and left its creation resolving by
+        # pathname, which the gate then reproduced: a hook that renamed the just-created directory
+        # aside and left a symlink at the name made the following pathname chmod land on a directory
+        # outside the supplied tree, and publication followed it there. Holding the parent and
+        # opening O_NOFOLLOW removes the symlink substitution; the mode repair is an fchmod on the
+        # descriptor rather than a chmod on a name that can be re-resolved.
+        if not os.path.isdir(staging):
+            _makedirs_owner_only(staging)
+        # The staging path itself is the root the caller gave us and is opened by name: it is the
+        # trust boundary, not something inside it. Everything BELOW it is descriptor-relative from
+        # here on. Hardening an ancestor the caller named would be a different decision and is not
+        # this function's to make.
         try:
-            os.mkdir("_reports", _REPORT_DIR_MODE, dir_fd=parent_fd)
-            created = True
-        except FileExistsError:
-            # Anything OTHER than a directory at this name is an ordinary report-write failure and
-            # must keep classifying as one. Catching the create's own exception to learn whether
-            # this call made the directory must not quietly re-badge a failure mode that predates
-            # it: a regular file at _reports was reported as report-write-error before this line
-            # existed, and two arms pin that name.
-            if not os.path.isdir(reports_dir):
-                raise
-        dirfd = _harden_report_dir(reports_dir, restore_owner=created, parent_fd=parent_fd)
-    finally:
-        _close_quietly(parent_fd)
+            # Through the same helper the report directory uses, which carries the O_PATH fallback.
+            # A 0300 directory — create and traverse, no read — fails an O_RDONLY open, and round
+            # fourteen built that fallback for exactly this case. It was wired to `_reports` and not
+            # to the root above it, so a 0300 `_reports` published while a 0300 scan root could not
+            # publish at all and the refusal writer left no artifact either.
+            parent_fd, _ = _open_dir_nofollow(staging, None)
+        except OSError as exc:
+            raise ScanRefused("report-path-unsafe '_reports'") from exc
+        try:
+            created = False
+            try:
+                os.mkdir("_reports", _REPORT_DIR_MODE, dir_fd=parent_fd)
+                created = True
+            except FileExistsError:
+                # Anything OTHER than a directory at this name is an ordinary report-write failure and
+                # must keep classifying as one. Catching the create's own exception to learn whether
+                # this call made the directory must not quietly re-badge a failure mode that predates
+                # it: a regular file at _reports was reported as report-write-error before this line
+                # existed, and two arms pin that name.
+                if not os.path.isdir(reports_dir):
+                    raise
+            dirfd = _harden_report_dir(reports_dir, restore_owner=created, parent_fd=parent_fd)
+        finally:
+            _close_quietly(parent_fd)
+    except BaseException:
+        _emit_unwritten_findings(hits)
+        raise
     try:
         # EVERY NAME FROM HERE IS RELATIVE TO dirfd, and that is the whole of round eighteen. The
         # directory this descriptor refers to is the one that was validated; the pathname
@@ -2340,9 +2375,11 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             try:
                 narrowed = _narrow_held_copy(held_fd, held_via_proc)
             except BaseException:
-                _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
-                held_fd = None
-                raise
+                try:
+                    _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
+                finally:
+                    held_fd = None        # UNDER A FINALLY: a rescue that RAISES used to skip this
+                raise                     # plain assignment, and the handler below closed it again
 
         # Classify only AFTER the link, so a failed read cannot prevent preservation — and classify
         # THROUGH THE LINK where one was made, not through report_path (with no link, the else
@@ -2367,9 +2404,11 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
                 _prefix = _read_prefix_held(held_fd, held_via_proc, len(_STATUS_LINE_PREFIX))
                 is_status_line = _prefix == _STATUS_LINE_PREFIX
             except BaseException:
-                _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
-                held_fd = None
-                raise
+                try:
+                    _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
+                finally:
+                    held_fd = None        # UNDER A FINALLY: a rescue that RAISES used to skip this
+                raise                     # plain assignment, and the handler below closed it again
             # The descriptor stays open past this point: the release decision below needs it to
             # confirm the slot NAME still refers to this inode before anything is unlinked.
         else:
@@ -2431,8 +2470,10 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             # were being read (cold leg, 884e6c2): asked before the close, as every findings close
             # here is, the post-publish sweep's excepted for the reason its own helper states
             # (inventory, 212e683, on the wording).
-            _rescue_then_close(dirfd, held_fd, held_via_proc)
-            held_fd = None
+            try:
+                _rescue_then_close(dirfd, held_fd, held_via_proc)
+            finally:
+                held_fd = None            # the same shape: cleared even if the rescue raises
 
         if linked is not None:
             if narrowed:
