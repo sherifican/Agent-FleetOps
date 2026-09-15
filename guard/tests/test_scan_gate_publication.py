@@ -9924,13 +9924,16 @@ def test_the_emission_does_not_carry_the_matched_text(tmp_path: Path) -> None:
             mutant_buf.write("%s\t%s\t%s:%d\t%s\n" % (cls, name, rel, line, surface))
 
     module._emit_unwritten_findings = emit_with_the_field
-    real_stderr = sys.stderr
+    # ITS OWN NAME. The block above already restored the real stream through `real_stderr`; reusing
+    # that name here would be one reordering away from capturing a StringIO as "the original" and
+    # leaving it installed (team review, gate 63).
+    outer_stderr = sys.stderr
     sys.stderr = io.StringIO()
     try:
         with pytest.raises((module.ScanRefused, OSError)):
             module.write_report(str(staging), [("docs/H.md", 1, "SECRET", "generic_key_assignment", secret)])
     finally:
-        sys.stderr = real_stderr
+        sys.stderr = outer_stderr
         module._emit_unwritten_findings = real_emit
     mutant = mutant_buf.getvalue()
     assert mutant, (
@@ -12509,26 +12512,90 @@ _COUNT_WORDS = {"zero": 0, "no": 0, "one": 1, "two": 2, "three": 3, "four": 4, "
                 "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
 
 
+# THE PREDICATES, NAMED ONCE. The first version of this group wrote each check inline in its arm
+# and then wrote the check AGAIN inside the control, so the control exercised a copy. A reviewer
+# neutered both arms to `return` and the control still passed (team review, gate 63): it had been
+# proving that its own transcription could fire, which is a statement about the transcription and
+# not about the arm. The arms and the controls now call these, so neutering an arm cannot leave
+# its control green.
+
+def coverage_count_claim(disclosure: str):
+    """The number a coverage sentence claims about sites in the scanned module, or None.
+
+    Returns the parsed int; returns the raw word when the sentence quantifies in a way this cannot
+    check, because a claim a reader cannot check is itself what the arm exists to stop and must be
+    surfaced rather than dropped."""
+    claim = re.search(r"([A-Za-z]+|\d+) sites? in the scanned module", disclosure)
+    if claim is None:
+        return None
+    word = claim.group(1)
+    if word.lower() in _COUNT_WORDS:
+        return _COUNT_WORDS[word.lower()]
+    try:
+        return int(word)
+    except ValueError:
+        return word
+
+
+def with_name_sites(source: str):
+    """Line numbers of `with <name>:` — an acquisition handed to a context manager under a name
+    bound earlier. This is the exact shape the disclosure declines to examine, and the arm's claim
+    is scoped to it: it is not a general census of unowned ownership shapes."""
+    return sorted(n.lineno for n in ast.walk(ast.parse(source))
+                  if isinstance(n, (ast.With, ast.AsyncWith))
+                  for item in n.items if isinstance(item.context_expr, ast.Name))
+
+
+FINALLY_CLAIM = "so the finally can name it"
+
+
+def unsupported_finally_claims(source: str):
+    """Comment lines claiming a `finally` that the construct they introduce does not have.
+
+    THE RELATION, stated exactly, because the first version got it wrong in both directions (team
+    review, gate 63). The sentence introduces the block that follows it: the slot is preset, a try
+    is entered, and that try's finally is the claim. So the referent is the FIRST `try` beginning
+    at or after the comment, inside the function that contains the comment — not "some enclosing
+    try", which accepted an unrelated OUTER finally, and not the comment's own enclosing range,
+    which rejected the correct placement, since a comment sitting BEFORE a try is outside that
+    try's line range.
+
+    Comments come from `tokenize`, not from lines beginning with `#`: a `#` opening a line inside a
+    triple-quoted string is not a comment, and the first version counted it as one."""
+    import io as _io
+    import tokenize as _tokenize
+    claims = [tok.start[0] for tok in
+              _tokenize.generate_tokens(_io.StringIO(source).readline)
+              if tok.type == _tokenize.COMMENT and FINALLY_CLAIM in tok.string]
+    if not claims:
+        return []
+    tree = ast.parse(source)
+    functions = [n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    unsupported = []
+    for line in claims:
+        holders = [f for f in functions if f.lineno <= line <= (f.end_lineno or f.lineno)]
+        scope = min(holders, key=lambda f: (f.end_lineno or f.lineno) - f.lineno) if holders else tree
+        following = sorted((n for n in ast.walk(scope)
+                            if isinstance(n, ast.Try) and n.lineno >= line),
+                           key=lambda n: n.lineno)
+        if not following or not following[0].finalbody:
+            unsupported.append(line)
+    return unsupported
+
+
 def test_a_count_in_the_coverage_sentence_matches_what_the_module_has() -> None:
     """REPAIRED: the disclosure said three sites carry the shape the lint declines to examine and
     the module has two. A coverage instrument is the last place a false coverage claim belongs,
     and a number nobody recomputes is the most reliable way to get one."""
-    disclosure = fd_checker().COVERAGE_DISCLOSURE
-    claim = re.search(r"([A-Za-z]+|\d+) sites? in the scanned module", disclosure)
-    if claim is None:
-        return                      # no numeric claim to bind; the repair takes this branch
-    word = claim.group(1).lower()
-    claimed = _COUNT_WORDS.get(word, None)
+    claimed = coverage_count_claim(fd_checker().COVERAGE_DISCLOSURE)
     if claimed is None:
-        try:
-            claimed = int(word)
-        except ValueError:
-            pytest.fail("REPAIRED: the coverage sentence quantifies sites with %r, which this arm "
-                        "cannot check against the module. A claim a reader cannot check is the "
-                        "shape this arm exists to stop." % claim.group(1))
-    actual = [n.lineno for n in ast.walk(ast.parse(SCANNER.read_text(encoding="utf8")))
-              if isinstance(n, (ast.With, ast.AsyncWith))
-              for item in n.items if isinstance(item.context_expr, ast.Name)]
+        return                      # no numeric claim to bind; the repair takes this branch
+    assert not isinstance(claimed, str), (
+        "REPAIRED: the coverage sentence quantifies sites with %r, which this arm cannot check "
+        "against the module. A claim a reader cannot check is the shape this arm exists to stop."
+        % claimed)
+    actual = with_name_sites(SCANNER.read_text(encoding="utf8"))
     assert claimed == len(actual), (
         "REPAIRED: the coverage sentence claims %d site(s) of the `with <name>` shape in the "
         "scanned module; the AST finds %d, at line(s) %s. The qualification around the number may "
@@ -12538,52 +12605,184 @@ def test_a_count_in_the_coverage_sentence_matches_what_the_module_has() -> None:
 
 def test_no_comment_names_a_finally_its_own_block_does_not_have() -> None:
     """REPAIRED: `_open_held_copy` said the slot was preset "so the finally can name it either
-    way". Its owning construct is a try/except with no finally; the phrase was copied from the two
-    sites repaired beside it. The code is right and the sentence is not, which in this module is a
-    defect on its own terms."""
-    source = SCANNER.read_text(encoding="utf8")
-    lines = source.splitlines()
-    phrase = "so the finally can name it"
-    claimed_at = [i + 1 for i, line in enumerate(lines)
-                  if phrase in line and line.lstrip().startswith("#")]
-    tree = ast.parse(source)
-    owners_with_finally = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Try) and node.finalbody:
-            owners_with_finally.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
-    unsupported = [n for n in claimed_at if n not in owners_with_finally]
+    way". The try it introduces has an `except BaseException` and no finally; the phrase was copied
+    from the two sites repaired beside it. The code is right and the sentence is not, which in this
+    module is a defect on its own terms."""
+    unsupported = unsupported_finally_claims(SCANNER.read_text(encoding="utf8"))
     assert not unsupported, (
-        "REPAIRED: line(s) %s say %r, and no enclosing try at those lines has a finally. Either "
+        "REPAIRED: line(s) %s say %r, and the try each of them introduces has no finally. Either "
         "the block gained one and the comment is now true, or the comment was copied to a site "
         "that never had one. The second is what happened at `_open_held_copy`."
-        % (unsupported, phrase))
+        % (unsupported, FINALLY_CLAIM))
 
 
-def test_the_two_comment_arms_above_can_still_fail() -> None:
-    """CONTROL: both arms above pass by finding nothing. An arm that can only find nothing reports
-    the same green on a module that drifted. These feed each instrument the defect it was written
-    for and require it to fire."""
-    bad_disclosure = ("COVERAGE: ... Nine sites in the scanned module are exactly that shape "
-                      "today. ...")
-    claim = re.search(r"([A-Za-z]+|\d+) sites? in the scanned module", bad_disclosure)
-    assert claim is not None and _COUNT_WORDS.get(claim.group(1).lower()) == 9, (
-        "CONTROL: the count reader did not find a planted claim of nine, so the arm above cannot "
-        "see a wrong number at all.")
+# --- the controls: the SAME predicates the arms call, fed what each of them must reject ---------
 
-    planted = ("def f():\n"
-               "    # the slot is set first so the finally can name it either way\n"
-               "    fd = None\n"
-               "    try:\n"
-               "        fd = os.open('x', 0)\n"
-               "    except BaseException:\n"
-               "        pass\n")
-    lines = planted.splitlines()
-    claimed_at = [i + 1 for i, line in enumerate(lines)
-                  if "so the finally can name it" in line and line.lstrip().startswith("#")]
-    owners = set()
-    for node in ast.walk(ast.parse(planted)):
-        if isinstance(node, ast.Try) and node.finalbody:
-            owners.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
-    assert claimed_at and not [n for n in claimed_at if n in owners], (
-        "CONTROL: the finally-claim reader accepted a comment claiming a finally inside a block "
-        "that has none, so the arm above would accept the defect it was written for.")
+@pytest.mark.parametrize("sentence,expected", [
+    ("... Nine sites in the scanned module are exactly that shape today. ...", 9),
+    ("... 2 sites in the scanned module ...", 2),
+    ("... several sites in the scanned module ...", "several"),
+    ("... every site of that shape is in the list below ...", None),
+])
+def test_the_count_predicate_reads_what_it_claims_to_read(sentence: str, expected) -> None:
+    """CONTROL: the arm passes when the sentence makes no claim, which is what the repaired
+    sentence does. A reader of a green run cannot tell that branch from a working comparison, so
+    the predicate is fed a claim it must parse, one it must refuse as uncheckable, and one it must
+    correctly find absent."""
+    assert coverage_count_claim(sentence) == expected, (
+        "CONTROL: the count predicate read %r out of %r, and the arm is only as good as this."
+        % (coverage_count_claim(sentence), sentence))
+
+
+def test_the_count_predicate_rejects_a_wrong_number() -> None:
+    """CONTROL: parsing a number is not comparing it. This is the comparison the arm makes, on a
+    module whose shape count is known, against a claim that does not match it."""
+    module = "with handle:\n    pass\n"
+    assert with_name_sites(module) == [1], (
+        "CONTROL: the site counter did not find the one `with <name>` in a module that has "
+        "exactly one, so the arm's other half cannot be trusted either.")
+    assert coverage_count_claim("... Nine sites in the scanned module ...") != len(with_name_sites(module)), (
+        "CONTROL: a claim of nine and a module with one compared EQUAL, so the arm would pass a "
+        "wrong number.")
+
+
+@pytest.mark.parametrize("label,source,must_flag", [
+    ("the block the comment introduces really does have a finally",
+     "def f():\n"
+     "    # set first so the finally can name it either way\n"
+     "    fd = None\n"
+     "    try:\n"
+     "        fd = os.open('x', 0)\n"
+     "    finally:\n"
+     "        close(fd)\n",
+     False),
+    ("the block it introduces has only an except",
+     "def f():\n"
+     "    # set first so the finally can name it either way\n"
+     "    fd = None\n"
+     "    try:\n"
+     "        fd = os.open('x', 0)\n"
+     "    except BaseException:\n"
+     "        pass\n",
+     True),
+    ("an unrelated OUTER finally must not excuse the inner block",
+     "def f():\n"
+     "    try:\n"
+     "        # set first so the finally can name it either way\n"
+     "        fd = None\n"
+     "        try:\n"
+     "            fd = os.open('x', 0)\n"
+     "        except BaseException:\n"
+     "            pass\n"
+     "    finally:\n"
+     "        done()\n",
+     True),
+    ("a `#` line inside a string is not a comment",
+     "def f():\n"
+     "    doc = '''\n"
+     "# set first so the finally can name it either way\n"
+     "'''\n"
+     "    return doc\n",
+     False),
+])
+def test_the_finally_predicate_binds_the_block_the_comment_introduces(
+        label: str, source: str, must_flag: bool) -> None:
+    """CONTROL: the arm passes by finding nothing, and the first version of this predicate found
+    nothing for the wrong reason in BOTH directions — it accepted an unrelated outer finally and
+    rejected the correct pre-try placement (team review, gate 63). Each case here is one of those
+    directions, run through the predicate the arm itself calls."""
+    flagged = bool(unsupported_finally_claims(source))
+    assert flagged == must_flag, (
+        "CONTROL (%s): the predicate %s this source, and the arm is exactly this predicate."
+        % (label, "flagged" if flagged else "accepted"))
+
+
+# GROUP 95 — the sixty-eighth round. A COMMIT HASH CITED IN PROSE IS A CLAIM THAT A READER CAN
+# CHECK, and one of them had been false for some time before anyone did. This module and its
+# documents cite the commit that settled a thing — `(team review, df87c71)` — dozens of times. One
+# of those, in `guard/README.md`, named a commit that is on no branch: an earlier instance of a
+# repair that was later rebased away, so `git show` on it fails for every reader who clones. It
+# would have shipped that way. Nothing checked, which is this round's theme exactly.
+#
+# Nine more hashes stopped resolving on purpose when the publication gate forced the outgoing range
+# to be rewritten. Those are recorded in STAGING_README.md's mapping table, and THIS ARM IS WHAT
+# MAKES THAT TABLE LOAD-BEARING: a cited hash must either resolve in this repository's history or
+# appear in the table. A row removed from the table turns its citations red. A note nothing depends
+# on is a note that rots.
+
+_CITING_FILES = ("README.md", "guard/README.md", "STAGING_README.md",
+                 "_tools/scan_gate.py", "guard/fd_ownership_check.py")
+_HASH = re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7}\b")
+
+
+def cited_hashes(text: str):
+    """Short hashes cited in prose. Mixed letters and digits are required, so an ordinary
+    seven-letter word is not read as a hash; a longer hex run (a digest in a fixture) has no word
+    boundary inside it and is not matched either."""
+    return sorted(set(_HASH.findall(text)))
+
+
+def rewritten_hashes(staging_readme: str):
+    """The 'cited as' column of the mapping table, which records hashes deliberately made
+    unresolvable by the pre-publication rewrite."""
+    rows = re.findall(r"^\|\s*`([0-9a-f]{7})`\s*\|\s*`([0-9a-f]{7})`\s*\|\s*$",
+                      staging_readme, re.MULTILINE)
+    return {old for old, _new in rows}
+
+
+def test_every_commit_hash_cited_in_prose_resolves_or_is_recorded() -> None:
+    """REPAIRED: `guard/README.md` cited a commit on no branch, and the citation would have been
+    published as a reference a reader cannot follow. Each cited hash must resolve in this
+    repository, or be named in the mapping table as one the rewrite retired."""
+    import subprocess
+    if not (REPO / ".git").exists():
+        pytest.skip("no git history here (an export, not a clone): a hash cannot be resolved, and "
+                    "an arm that cannot resolve one must not report that they all resolved")
+    recorded = rewritten_hashes((REPO / "STAGING_README.md").read_text(encoding="utf8"))
+    dangling = []
+    for rel in _CITING_FILES:
+        path = REPO / rel
+        if not path.is_file():
+            continue
+        for h in cited_hashes(path.read_text(encoding="utf8")):
+            if h in recorded:
+                continue
+            found = subprocess.run(["git", "-C", str(REPO), "merge-base", "--is-ancestor", h, "HEAD"],
+                                   capture_output=True)
+            if found.returncode != 0:
+                dangling.append("%s cited in %s" % (h, rel))
+    assert not dangling, (
+        "REPAIRED: %d cited commit hash(es) resolve to nothing in this repository's history and "
+        "are not recorded in STAGING_README.md's mapping table, so a reader who follows them gets "
+        "an error:\n  %s\n"
+        "Either the citation names the wrong commit — an earlier instance of a repair that was "
+        "rebased away reads exactly like this — or the commit was retired by the pre-publication "
+        "rewrite and belongs in that table."
+        % (len(dangling), "\n  ".join(dangling)))
+
+
+def test_the_citation_predicate_can_tell_a_hash_from_a_word() -> None:
+    """CONTROL: the arm above passes by finding nothing, and it would find nothing just as quietly
+    if its reader matched nothing. These are what it must pick up and what it must leave alone."""
+    assert cited_hashes("settled in (team review, df87c71) and again in a0dbe05.") == \
+        ["a0dbe05", "df87c71"], "CONTROL: the reader did not find two plain citations."
+    assert cited_hashes("the decade1 of faceted deadbee options") == ["decade1"], (
+        "CONTROL: the reader must take a mixed-case-hex word and leave pure-letter words alone; "
+        "it returned %r." % cited_hashes("the decade1 of faceted deadbee options"))
+    digest = "8ef682915feb0ad7acae802f2e8e3ca71ba94eae87a5da4ca1266b01dbc1b4d4"
+    assert cited_hashes("sha256=" + digest) == [], (
+        "CONTROL: a 64-character digest was read as citations; every fixture digest in this suite "
+        "would then be checked against git history.")
+
+
+def test_the_mapping_table_reader_finds_the_rows() -> None:
+    """CONTROL: if the table reader returned nothing, every retired hash would be reported dangling
+    and the arm above would be red for the wrong reason; if it matched too loosely, a hash could be
+    excused by prose that is not a row. It is read from the shipped file, not from a fixture."""
+    recorded = rewritten_hashes((REPO / "STAGING_README.md").read_text(encoding="utf8"))
+    assert len(recorded) == 9, (
+        "CONTROL: the mapping table reader found %d row(s); the rewrite retired nine hashes and "
+        "the table is what excuses them." % len(recorded))
+    assert not rewritten_hashes("a sentence mentioning `df87c71` and `a0dbe05` in prose"), (
+        "CONTROL: the table reader accepted prose as a row, so any hash named anywhere in that "
+        "file would be excused from resolving.")

@@ -404,8 +404,11 @@ An exemption added at the tip would not have reached them: the allowlist is read
 being scanned. The literal was split across a concatenation in each of the eight — the convention
 the publication suite's own header already states, and which a later arm in it already used — so
 the value handed to the code under test is unchanged and only the source spelling moved. That
-changed those eight hashes and the one commit that followed them. The other sixty-six commits in
-the range are untouched, and every tree in it passes the gate.
+changed those eight hashes and the one commit that followed them: nine in all, out of the
+seventy-five commits the outgoing range held at that moment, with the other sixty-six untouched.
+This note is a later commit and is not among either number. Every tree in the range passes the
+gate. The counts are given with the moment they belong to because a reviewer read the earlier
+wording against a range that had since grown and found two of its numbers irreconcilable.
 
 | cited as | now |
 | --- | --- |
