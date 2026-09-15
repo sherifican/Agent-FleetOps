@@ -6,7 +6,11 @@ Two classes:
   PERSONAL — owner identity, emails, real-looking IPs (doc-range IPs are allowed)
 
 Writes _reports/scan_report.txt. Exit 0 only on zero hits of both classes.
-Values are never printed — only file, line number, class, and pattern name.
+Matched CONTENT values are never printed — only file, line number, class, and pattern name — but a
+  PATH is printed in full and can itself BE the matched value, because the name arm matches secrets
+  and identities in filenames. The flat version of this sentence made the CONTENT promise
+  without the PATH exception, and was false in exactly that case (team review, df87c71). Dropping
+  the matched-surface field buys nothing for a finding whose surface IS the filename.
 
 Coverage disclosure — the five surfaces:
   contents: checkout roots read staged blobs; standalone/nested exports read filesystem bytes.
@@ -92,7 +96,10 @@ def personal_patterns():
 # RFC5737 documentation ranges are the sanctioned replacements — never flagged
 DOC_IP = re.compile(r"\b(192\.0\.2|198\.51\.100|203\.0\.113)\.\d{1,3}\b")
 
-def _allowlist(staging: str):
+_ALLOW_REL = "_tools/scan_allow.tsv"
+
+
+def _allowlist(staging: str, entries=None):
     """Explicit, reviewable exceptions: _tools/scan_allow.tsv lines of
     'exact-relative-path<TAB>pattern-name[<TAB>surface]' — a hit matching all three is deliberate
     (e.g. the owner's public GitHub handle in the root README). Every entry is a human decision on
@@ -101,16 +108,55 @@ def _allowlist(staging: str):
     THE SURFACE COLUMN IS NOT OPTIONAL IN MEANING, only in syntax. Without it a content exemption
     would silently excuse the same pattern in a FILENAME, which is a different decision nobody made.
     A two-column row therefore means "content", stated in the file's own header, and a row must say
-    `name` out loud to excuse the name arm."""
-    p = os.path.join(staging, "_tools", "scan_allow.tsv")
-    if not os.path.isfile(p):
-        return []
-    handle = _open_untrusted_text(p)
+    `name` out loud to excuse the name arm.
+
+    THE POLICY COMES FROM THE SAME SNAPSHOT AS THE PAYLOAD. In a checkout this scanner reads the
+    bytes it judges from the INDEX, and it used to read this exemption file from the WORKING TREE —
+    two different snapshots. So a row that was never staged could excuse personal data that WAS
+    staged, and the gate answered CLEAN with exit 0 over a commit containing it. Measured end to
+    end on a real repository, three cases: no exemption anywhere refuses; the row staged exempts;
+    the row present only in the working tree ALSO exempted, which is the defect (team review,
+    df87c71). The middle case is what makes the third mean anything — without it, an exemption that
+    never applies looks identical to one correctly ignored, and that is exactly how a first attempt
+    at this measurement fooled its author.
+
+    NO STAGED POLICY MEANS NO EXEMPTIONS. An absent file is not an empty policy by accident; it is
+    the fail-closed direction, and it is the same answer this function already gave for a path that
+    is not a regular file. An index entry that cannot be read, or a row that is present and does not
+    parse, REFUSES rather than being skipped: a silently dropped row is an exemption the operator
+    believes exists and the scanner does not, which is the more dangerous of the two mistakes.
+
+    ENTRIES IS OPTIONAL IN SYNTAX AND NOT IN MEANING. A caller in a checkout that does not pass the
+    index entries gets NO exemptions — the fail-closed direction, but a silently different answer
+    from the one it probably wanted. The single production caller reads the index first and passes
+    them; a test that exercises the export branch does not need them. Anything new in a checkout
+    must pass them or it is asking a question it will not get the answer to.
+
+    EXPORT MODE STILL READS THE FILESYSTEM, deliberately. There is no index there, so the tree is
+    the only snapshot there is, and that is a statement about what export mode can promise rather
+    than an oversight.
+    """
+    if os.path.lexists(os.path.join(staging, ".git")):
+        oid = None
+        for _rel, _oid in (entries or ()):
+            if _rel == _ALLOW_REL and _oid is not None:
+                oid = _oid
+                break
+        if oid is None:
+            return []                                 # no staged policy: no exemptions
+        raw = _git(staging, ["cat-file", "blob", oid], "allowlist-unreadable", _ALLOW_REL)
+        return _parse_allow(raw.decode("utf8", "surrogateescape").splitlines())
+    handle = _open_untrusted_text(os.path.join(staging, *_ALLOW_REL.split("/")))
     if handle is None:
-        return []                                     # not a regular file: no exemptions, fail closed
-    out = []
+        return []                                     # absent, or not a regular file: fail closed
     with handle:
-      for ln in handle:
+        return _parse_allow(handle)
+
+
+def _parse_allow(lines):
+    """Rows to exemptions. A row that is neither blank nor a comment and does not parse REFUSES."""
+    out = []
+    for ln in lines:
         ln = ln.rstrip("\n")
         if not ln or ln.startswith("#"):
             continue
@@ -119,6 +165,8 @@ def _allowlist(staging: str):
             out.append((parts[0], parts[1], "content"))
         elif len(parts) == 3 and parts[2].strip() in ("content", "name"):
             out.append((parts[0], parts[1], parts[2].strip()))
+        else:
+            raise ScanRefused("allowlist-malformed-row '_tools/scan_allow.tsv'")
     return out
 
 class ScanRefused(Exception):
@@ -286,10 +334,14 @@ def scan(staging: str):
 def _scan_into(staging: str, hits):
     if not os.path.isdir(staging):
         raise ScanRefused("invalid-staging-directory")
-    allow = _allowlist(staging)
-    personal = personal_patterns()
+    # THE INDEX IS READ FIRST, BECAUSE THE POLICY COMES OUT OF IT. The exemption file used to be
+    # loaded before this scanner had decided which snapshot it was judging, which is how the policy
+    # and the payload came from different ones (team review, df87c71).
     skip_dirs = {".git", "_reports", "__pycache__", ".pytest_cache", ".venv", "node_modules"}
-    for rel, oid in _publishable_files(staging, skip_dirs):
+    entries = _publishable_files(staging, skip_dirs)
+    allow = _allowlist(staging, entries)
+    personal = personal_patterns()
+    for rel, oid in entries:
             # THE NAME ARM. A path is published bytes too: a file called after a private host or
             # carrying a key in its name leaks whatever its contents are. Line 0 means "the path,
             # not a line in it", and the surface field says which arm fired so a report cannot be
@@ -375,6 +427,10 @@ def _current_umask():
     return mask
 
 ACL_XATTR = "system.posix_acl_access"
+# THE DEFAULT ACL IS THE ONE THAT SPREADS. A directory carrying `system.posix_acl_default` gives
+# every child it later receives an access ACL, so removing only the access entry from a directory
+# this tool created leaves the mechanism that re-creates the problem (team review, df87c71).
+ACL_DEFAULT_XATTR = "system.posix_acl_default"
 
 # THE published mode of a report, and the only one. Not a cap, not a candidate, not a term in an
 # intersection — the number the file lands with on every branch. See _install_posix_acl_policy for
@@ -413,8 +469,8 @@ _ACL_ABSENT = frozenset(
     if code is not None)
 
 
-def _strip_acl_by_fd(fd):
-    """Remove the POSIX access ACL from the inode behind ``fd``.
+def _strip_acl_by_fd(fd, xattr=ACL_XATTR):
+    """Remove a POSIX ACL — by default the ACCESS one — from the inode behind ``fd``.
 
     os.removexattr takes no dir_fd. Two review legs measured that it DOES accept an ordinary
     integer descriptor on this runtime, so the sentence this replaced — "neither a descriptor nor
@@ -433,7 +489,25 @@ def _strip_acl_by_fd(fd):
     """
     if _PROC_FD_DIR is None:
         raise OSError(errno.ENOSYS, "report-acl-strip-unreachable")
-    os.removexattr("%s/%d" % (_PROC_FD_DIR, fd), ACL_XATTR)
+    os.removexattr("%s/%d" % (_PROC_FD_DIR, fd), xattr)
+
+
+def _strip_dir_acls_by_fd(fd):
+    """Remove BOTH POSIX ACLs from a directory this tool created. Best effort, and the limit is
+    stated in the README beside the leftover's: where the removal is denied the entries stay, and a
+    directory at 0700 masks them to nothing until someone changes its mode.
+
+    Access AND default. The access entry governs this directory; the default entry is inherited by
+    everything created inside it, which is how a report file acquired entries nobody chose in the
+    first place. Stripping one and not the other leaves the source.
+    """
+    if not _XATTR_SUPPORTED:
+        return
+    for _name in (ACL_XATTR, ACL_DEFAULT_XATTR):
+        try:
+            _strip_acl_by_fd(fd, _name)
+        except OSError:
+            pass
 
 
 def _install_posix_acl_policy(dirfd, src_name, dst_fd, dst_name):
@@ -1241,6 +1315,15 @@ def _harden_report_dir(reports_dir, restore_owner=False, parent_fd=None):
         # gets owner bits on a directory of their own. A creation flag cannot identify an inode,
         # and nothing short of a trusted parent closes it.
         _restore = restore_owner
+        if _restore:
+            # THIS CALL MADE THE DIRECTORY, SO ITS INHERITED ACLS ARE THIS CALL'S TO REMOVE. The
+            # mode work below closes group and other write and restores owner bits; it does not
+            # touch an access or default ACL, so a parent carrying a default gave the new reports
+            # directory both, and the default then reached every file created inside it (team
+            # review, df87c71). Gated on the same condition as the owner restoration: a directory
+            # this call did not create is not ours to change. Best effort, with the limit stated
+            # in the README beside the leftover's.
+            _strip_dir_acls_by_fd(fd)
         want = ((mode | _REPORT_DIR_MODE) if _restore else mode) & ~0o022
         if mode != want:
             os.chmod(target, want)
@@ -1312,6 +1395,7 @@ def _makedirs_owner_only(path):
     Best effort throughout: this runs before the publication path proper, and a failure here
     surfaces as the ordinary report-write error the caller already handles.
     """
+    child = None          # named by the finally from before the first open
     missing = []
     cursor = os.path.abspath(path)
     while cursor and not os.path.isdir(cursor):
@@ -1351,6 +1435,13 @@ def _makedirs_owner_only(path):
                 # POPULATED 0500 directory here, and the remaining code took it to 0700. A comment
                 # is not a control-flow statement, which is the whole lesson of this round.
                 if made:
+                    # A DIRECTORY THIS CALL CREATED INHERITS ITS PARENT'S DEFAULT ACL, and the
+                    # mode change below does not remove it. That default is then handed to every
+                    # child, which is where a report file's unchosen entries came from in the
+                    # first place (team review, df87c71). Only on `made`, the same rule the mode
+                    # change follows: a directory this call did not create is not ours to re-mode
+                    # and not ours to re-ACL either.
+                    _strip_dir_acls_by_fd(child)
                     try:
                         if via_proc:
                             if _PROC_FD_DIR is not None:
@@ -1364,10 +1455,31 @@ def _makedirs_owner_only(path):
                 # between the open and the handover leaked it; the gate counted the descriptor.
                 _close_quietly(child)
                 raise
-            _close_quietly(fd)
-            fd = child
+            # HANDED OVER BEFORE THE OLD ONE IS RELEASED. This closed the old descriptor FIRST and
+            # assigned the child SECOND, so a cancellation at that close reached the outer finally
+            # with `fd` still naming the descriptor just closed and the child — already open —
+            # named by nothing (team review, df87c71, measured with a line-trace interrupt at that
+            # exact call). Swapping the order makes the finally name the child from the moment it
+            # exists, and the handler above no longer owns it.
+            #
+            # WHAT REMAINS, stated rather than implied: a cancellation between the handover and the
+            # release below leaves the OLD descriptor open. That one is a parent directory
+            # descriptor on its way out, never the last reference to findings, where the child is a
+            # descriptor this call just created and nothing else names. Closing the window entirely
+            # would need the release inside the same store as the handover, which Python does not
+            # offer — the irreducible interval a design review pinned to the language reference.
+            _old, fd, child = fd, child, None
+            _close_quietly(_old)
     finally:
-        _close_quietly(fd)
+        # EACH RELEASE UNDER ITS OWN GUARD. Written first as two statements in one finally, which
+        # the module's own ownership lint flagged: if the first release raised, the second would
+        # never run. `_close_quietly` is written not to raise, but a cleanup that depends on that
+        # being true forever is the kind of assumption this file keeps finding broken in itself.
+        try:
+            _close_quietly(fd)
+        finally:
+            if child is not None and child != fd:
+                _close_quietly(child)   # never handed over: nothing else named it
 
 
 def _close_quietly(fd):
@@ -1512,8 +1624,30 @@ def _stage_report(dirfd, body, evidence=False):
                             # so the caller's emission would be a second publication of hits that
                             # are already on disk. The flag travels with the failure because this
                             # descriptor never reaches the caller (cold leg, 3adf105).
-                            _diverged = _false_or_rescue(dirfd, name, fd)
-                            if not _diverged:
+                            # FALSE IS TWO DIFFERENT ANSWERS, AND THIS TOOK BOTH AS RETENTION.
+                            # `_false_or_rescue` answers False when the staged name still reaches
+                            # these bytes — retained — and ALSO when the stage had diverged and the
+                            # copy could not be made, which is no custody at all. Marking the
+                            # failure as retained then suppressed the caller's emission, so the run
+                            # that had lost the findings was the one that said nothing about them
+                            # (team review, df87c71, with a controlled reproduction). The commit
+                            # that introduced this flag said in its own message that the answer is
+                            # overloaded, and used it anyway.
+                            #
+                            # The descriptor is asked instead, the same instrument write_report
+                            # uses before its own close: a link count of one or more means a name
+                            # still reaches the bytes. Unreadable counts as NOT retained, because
+                            # the cost of that mistake is a duplicate on an already-failing run and
+                            # the cost of the other is silence over destroyed findings.
+                            _rescued = _false_or_rescue(dirfd, name, fd)
+                            if _rescued:
+                                _retained = True
+                            else:
+                                try:
+                                    _retained = os.fstat(fd).st_nlink >= 1
+                                except OSError:
+                                    _retained = False
+                            if _retained:
                                 try:
                                     _inflight = sys.exc_info()[1]
                                     if _inflight is not None:

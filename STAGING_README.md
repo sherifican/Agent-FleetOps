@@ -226,7 +226,11 @@ refusal writer that runs next receives the exception and never the hits, and und
 else, beside an exit status of 2 and whatever was planted at the report name. Those runs now name
 the findings on the error stream — the class, the pattern and the path and line, capped at forty as
 the success path is. A run with no findings prints nothing. What that stream does NOT carry is the field naming which
-ARM fired. No matched text is carried anywhere by either stream, because none is captured: every hit
+ARM fired. **A PATH, though, is printed in full — on that stream, on the standard one, and in the
+report body — and the name arm matches secrets and identities in paths.** So a finding whose surface
+IS the filename prints the matched value as part of its own location, and withholding a separate
+value field buys nothing there. This document and the module header both used to say values are
+never printed, flat, and that sentence was false in exactly that case. No matched text is carried anywhere by either stream, because none is captured: every hit
 this module builds fills that field with the literal "content" or "name", and values are never
 printed. This document used to describe the successful run as printing the matched material and the
 error stream as withholding it, and neither half was true; this one is reached by failing, an adversary decides when it is
@@ -243,6 +247,15 @@ held inode has no name left, the close about to happen is the last reference, an
 named on the error stream instead of dying silently. That question is asked of the descriptor
 itself, immediately before the close, and a link count that cannot be read counts as none — a
 duplicate on an already-failing run is cheaper than a loss.
+
+**A directory this tool CREATES gets both of its inherited POSIX ACLs removed, best effort.** A
+parent carrying a default ACL hands the new `_reports` directory an access entry and a default one,
+and the mode work — closing group and other write, restoring owner bits — removes neither. The
+default is the one that matters, because it is handed on to every file created inside, which is how
+a report acquired entries nobody chose. Both are now stripped, and only on a directory this call
+actually made: one it merely found is not its to change. Where the removal is DENIED the entries
+stay, exactly as they may on a kept leftover, and a directory at 0700 masks them to nothing until
+someone changes its mode.
 
 **"Never raises" means never raises an error. It does not mean uninterruptible, and "never
 blocks" is a bounded claim.** The refusal writer will not let its own failure displace the failure

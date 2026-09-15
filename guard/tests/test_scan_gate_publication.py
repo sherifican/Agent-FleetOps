@@ -11126,7 +11126,10 @@ def test_no_statement_stands_between_an_acquisition_and_its_owner() -> None:
     assert unowned == sorted([
         ("_allowlist", "_open_untrusted_text"),
         ("_load_identity_terms", "_open_untrusted_text"),
-        ("_makedirs_owner_only", "_open_dir_nofollow"),
+        # `_makedirs_owner_only` came OFF this list in the sixty-fourth round: its child directory
+        # descriptor is now handed over before the parent is released, so the finally names it from
+        # the moment it exists. Removed deliberately, in the same commit as the repair, which is
+        # what this list is for.
         ("_open_untrusted_text", "os.open"),
         ("self_test", "open"), ("self_test", "open"), ("self_test", "open"),
         ("self_test", "open"), ("self_test", "open"), ("self_test", "open"),
@@ -11134,3 +11137,474 @@ def test_no_statement_stands_between_an_acquisition_and_its_owner() -> None:
         "the set of acquisition shapes this lint cannot classify has CHANGED. If a new site "
         "appeared, put it in the accepted language rather than in this list. If one was repaired, "
         "take it out of this list in the same commit.\n%s" % module.report(sites))
+# GROUP 86 — the sixty-fourth round. THE PAYLOAD COMES FROM THE INDEX AND THE EXEMPTION POLICY
+# COMES FROM THE WORKING TREE. `_publishable_files` selects Git when `.git` is present and hands
+# back staged blob OIDs, and `_scan_into` reads every byte it judges out of those blobs. One line
+# above that loop, `allow = _allowlist(staging)` opens `<staging>/_tools/scan_allow.tsv` through
+# the FILESYSTEM. So the two halves of the decision are read from two different trees: a row that
+# exists only in the working copy — never added, never committed, invisible to a reviewer reading
+# the commit — authorizes content that IS in the commit, and the gate exits 0 on a batch carrying
+# a personal-data match. The allow file's own docstring calls every entry "a human decision on
+# record"; an unstaged row is on nobody's record.
+#
+# THE MIDDLE CASE IS WHAT MAKES THE THIRD MEAN ANYTHING. `_allowlist` accepts a two-column or a
+# three-column row and SILENTLY DROPS everything else, so a probe written with the wrong column
+# count exempts nothing and both halves of the comparison collapse into the same case — a
+# reproduction attempt hit exactly that and nearly reported the defect refuted. The staged-policy
+# case below is the positive control: it proves the row this arm writes really does exempt when
+# the commit carries it, so the armed case is measuring WHERE the policy was read from and not a
+# parser that ignored the row twice.
+#
+# `_allowed` is consulted only for PERSONAL findings — the SECRET arms never call it — so the arm
+# is built on a personal-data match.
+# =============================================================================================
+
+ALLOW_REL = "_tools/scan_allow.tsv"
+NO_EXEMPTIONS = "# no exemptions\n"
+
+
+def allow_row(rel: str, pattern: str, surface: str = "content") -> str:
+    """One exemption row in the file's own three-column form: path, pattern name, surface."""
+    return "%s\t%s\t%s\n" % (rel, pattern, surface)
+
+
+@pytest.mark.parametrize("case", ["no-policy", "staged-policy", "worktree-only-policy"])
+def test_the_exemption_policy_is_read_from_the_same_tree_as_the_payload(tmp_path: Path,
+                                                                       case: str) -> None:
+    """REPAIRED: in git-checkout mode an exemption must come from the COMMIT, not from the disk.
+
+    CONTROL (no-policy): the staged email matches and is reported at the exact line with exit 1,
+    so the armed case is measuring a suppressed finding and not an undetectable one.
+    POSITIVE CONTROL (staged-policy): the IDENTICAL row, staged and committed, exempts the same
+    finding and the run exits 0. Without this the armed case would pass just as well against a
+    parser that dropped the row, and the two cases would be one case.
+    REPAIRED (worktree-only-policy): the same row present ONLY in the working tree must not
+    authorize staged content — currently it does, and the gate passes a batch that carries a
+    personal-data match with nothing in the commit to say so.
+    """
+    driver = make_tool(tmp_path, name="tool_" + case)
+    staging = make_staging(tmp_path, "staging_" + case, git_repo=True)
+    write(staging / "README.md", "contact " + EMAIL_VALUE + " for access\n")
+    row = allow_row("README.md", "email", "content")
+
+    # What the COMMIT carries. Only the staged-policy case commits the row.
+    write(staging / ALLOW_REL, row if case == "staged-policy" else NO_EXEMPTIONS)
+    commit_all(tmp_path, staging)
+    if case == "worktree-only-policy":
+        # Written AFTER the commit and never added: the index still holds "# no exemptions".
+        write(staging / ALLOW_REL, row)
+        staged_policy = git(tmp_path, staging, "show", "HEAD:" + ALLOW_REL).stdout
+        assert staged_policy == NO_EXEMPTIONS, (
+            "CONTROL: the arm depends on the row being absent from the index; the index says %r"
+            % staged_policy)
+
+    proc = scan(tmp_path, driver, staging)
+    assert_values_absent([EMAIL_VALUE], staging, proc)
+    found = hit("PERSONAL", "email", "content", "README.md", 1)
+
+    if case == "no-policy":
+        assert proc.returncode == 1, (
+            "CONTROL: with no exemption anywhere the staged email must block (rc=%r stderr=%r)"
+            % (proc.returncode, proc.stderr[-400:]))
+        assert found in hits_for(staging, "README.md"), \
+            "CONTROL: and be reported at the exact path, pattern, surface and line"
+        return
+
+    if case == "staged-policy":
+        assert proc.returncode == 0, (
+            "POSITIVE CONTROL: the staged three-column row must actually exempt, or the armed "
+            "case below measures a dropped row rather than a misread policy (rc=%r stderr=%r)"
+            % (proc.returncode, proc.stderr[-400:]))
+        assert found not in hits_for(staging, "README.md"), \
+            "POSITIVE CONTROL: and the finding must be gone from the report"
+        return
+
+    assert proc.returncode == 1, (
+        "REPAIRED: an exemption row that exists ONLY in the working tree authorized content that "
+        "is in the COMMIT. `_scan_into` reads the payload from staged blobs and then reads "
+        "`_tools/scan_allow.tsv` off the filesystem, so a row nobody added, nobody committed and "
+        "no reviewer can see in the diff switched this finding off and the gate exited 0. In git "
+        "mode the policy must come from the same captured index entries the payload comes from; "
+        "no staged policy means NO exemptions. (rc=%r stdout=%r)"
+        % (proc.returncode, proc.stdout[-400:]))
+    assert found in hits_for(staging, "README.md"), \
+        "REPAIRED: and the finding must be reported at the exact path, pattern, surface and line"
+
+
+# =============================================================================================
+# GROUP 87 — the sixty-fourth round. A FAILED RESCUE IS RECORDED AS RETAINED EVIDENCE.
+# `_false_or_rescue` answers False in three different situations: the staged name still reaches
+# the held inode (bytes retained under that name), the held inode is a status line (nothing worth
+# keeping), and `_copy_out_unpublished` could not make a copy at all (NOTHING retained). Only the
+# first is custody. `_stage_report`'s cleanup reads any False as grounds to set
+# `_scan_findings_retained` on the in-flight exception, and `write_report` reads that mark as
+# "the hits are already on disk, do not publish them twice" and SKIPS `_emit_unwritten_findings`.
+# So the one state where the findings exist nowhere — no report, no stage, no reserved name — is
+# the state that suppresses the only channel left for them. The operator gets an exit status.
+#
+# Driven, not raced: the body write raises after part of it has reached the disk, the stage name
+# is taken away in the same call, and the report directory is made non-creatable so the copy-out
+# hits the limit its own docstring states ("no creatable temporary name"). Each is something an
+# ordinary filesystem does by itself — a full disk, a concurrent sweep, a read-only mount.
+# =============================================================================================
+
+STAGE_HITS = [("docs/a_secret.md", 1, "SECRET", "generic-key-assign", "content")]
+STAGE_HIT_LINE = "docs/a_secret.md:1"
+
+
+def _stage_failure_runner(tmp_path: Path, driver: Path, staging: Path) -> Path:
+    """A runner that drives `write_report` with the body write failing, three ways.
+
+    Runs out of process, so the error stream the assertions read IS the operator's error stream
+    and the monkeypatching cannot reach the parent session.
+    """
+    runner = tmp_path / "stage_failure.py"
+    runner.write_text(
+        "import importlib.util, os, sys\n"
+        "spec = importlib.util.spec_from_file_location('sg', %r)\n"
+        "m = importlib.util.module_from_spec(spec); sys.modules['sg'] = m\n"
+        "spec.loader.exec_module(m)\n"
+        "STAGING = %r\n"
+        "REPORTS = os.path.join(STAGING, '_reports')\n"
+        "MODE = sys.argv[1]\n"
+        "HITS = [('docs/a_secret.md', 1, 'SECRET', 'generic-key-assign', 'content')]\n"
+        "real_fdopen = m.os.fdopen\n"
+        "\n"
+        "def _take_the_stage_name():\n"
+        "    for entry in os.listdir(REPORTS):\n"
+        "        if entry.startswith('.scan_report_'):\n"
+        "            os.unlink(os.path.join(REPORTS, entry))\n"
+        "\n"
+        "class _Exploding:\n"
+        "    def __init__(self, fd):\n"
+        "        self.fd = fd\n"
+        "    def __enter__(self):\n"
+        "        return self\n"
+        "    def __exit__(self, *a):\n"
+        "        return False\n"
+        "    def flush(self):\n"
+        "        pass\n"
+        "    def write(self, data):\n"
+        "        if MODE == 'nothing-written':\n"
+        "            raise OSError(27, 'injected before the first byte')\n"
+        "        os.write(self.fd, data)\n"          # the findings reach the disk, then the failure
+        "        if MODE == 'no-custody':\n"
+        "            _take_the_stage_name()\n"
+        "        if MODE == 'no-custody':\n"
+        "            os.chmod(REPORTS, 0o500)\n"     # no temporary name is creatable any more
+        "        raise OSError(27, 'injected after the body reached the disk')\n"
+        "\n"
+        "def fdopen(fd, *a, **kw):\n"
+        "    if a[:1] == ('wb',) and kw.get('closefd') is False:\n"
+        "        return _Exploding(fd)\n"
+        "    return real_fdopen(fd, *a, **kw)\n"
+        "m.os.fdopen = fdopen\n"
+        "try:\n"
+        "    m.write_report(STAGING, HITS)\n"
+        "    print('RETURNED')\n"
+        "except BaseException as exc:\n"
+        "    print('RAISED', type(exc).__name__)\n"
+        "finally:\n"
+        "    try:\n"
+        "        os.chmod(REPORTS, 0o700)\n"        # so the assertions can read the directory
+        "    except OSError:\n"
+        "        pass\n"
+        % (str(driver), str(staging)), encoding="utf8")
+    return runner
+
+
+@pytest.mark.parametrize("mode", ["stage-kept", "nothing-written", "no-custody"])
+def test_findings_with_no_custody_are_not_recorded_as_retained(tmp_path: Path, mode: str) -> None:
+    """REPAIRED: the emission may be suppressed only by CONFIRMED retention.
+
+    CONTROL (stage-kept): the stage keeps its name, the bytes are on disk under it, and the
+    emission is correctly suppressed — the rule this arm must not break.
+    CONTROL (nothing-written): the write fails before a byte lands, the empty stage is removed,
+    nothing is on disk, and the findings DO reach the error stream — so the emission path is
+    reachable and the assertion below can tell a suppressed emission from a broken harness.
+    REPAIRED (no-custody): the stage name is taken away and no temporary name can be created, so
+    the rescue copies nothing and NOTHING anywhere holds the findings — and that is precisely the
+    state in which `_false_or_rescue`'s False is read as retention and the emission is skipped.
+    """
+    driver = make_tool(tmp_path, name="tool_" + mode)
+    staging = make_staging(tmp_path, "staging_" + mode)
+    runner = _stage_failure_runner(tmp_path, driver, staging)
+    proc = subprocess.run([sys.executable, str(runner), mode], capture_output=True, text=True,
+                          encoding="utf8", errors="replace", env=clean_env(tmp_path), timeout=60)
+    assert "RAISED" in proc.stdout, (
+        "CONTROL: the injected write failure must reach the caller as a raise (stdout=%r "
+        "stderr=%r)" % (proc.stdout, proc.stderr[-600:]))
+
+    reports = staging / "_reports"
+    on_disk = _findings_anywhere(reports, STAGE_HIT_LINE)
+    emitted = STAGE_HIT_LINE in proc.stderr
+
+    if mode == "stage-kept":
+        assert on_disk, (
+            "CONTROL: the stage must still hold the findings under its own name, or this case is "
+            "not the retained state at all (directory held %r)"
+            % sorted(p.name for p in reports.iterdir()))
+        assert not emitted, (
+            "CONTROL: findings already on disk must not be published a second time to a "
+            "descriptor this process did not choose — stderr was %r" % proc.stderr[-400:])
+        return
+
+    assert not on_disk, (
+        "CONTROL[%s]: nothing under the report directory may hold the findings, or the emission "
+        "below would be a duplicate rather than the only copy (directory held %r)"
+        % (mode, sorted(p.name for p in reports.iterdir())))
+
+    if mode == "nothing-written":
+        assert emitted, (
+            "CONTROL: with no stage and no bytes the emission must fire, else this arm cannot "
+            "tell a suppressed emission from a harness that never reaches the operator — "
+            "stderr was %r" % proc.stderr[-600:])
+        return
+
+    assert emitted, (
+        "REPAIRED: the rescue could not make a copy — the stage name was gone and no temporary "
+        "name could be created — so the findings exist NOWHERE, and `_false_or_rescue` returned "
+        "False for that failure exactly as it does for 'the name is still ours'. `_stage_report` "
+        "marked the exception `_scan_findings_retained` and `write_report` skipped "
+        "`_emit_unwritten_findings` on the strength of the mark. The operator got an exit status "
+        "and no findings. The three states — original still named, copy retained, no custody "
+        "established — have to be distinguished, and only the first two may suppress. stderr was %r"
+        % proc.stderr[-600:])
+
+
+# =============================================================================================
+# GROUP 88 — the sixty-fourth round. AN OWNED DIRECTORY DESCRIPTOR ESCAPES DURING THE HANDOVER IN
+# `_makedirs_owner_only`. The loop opens `child`, runs the chmod under an `except BaseException`
+# that closes `child` and re-raises — and that handler's scope ENDS there. The next two statements
+# are `_close_quietly(fd)` and then `fd = child`. A cancellation delivered at that close leaves
+# the loop variable still naming the OLD descriptor, so the outer `finally` closes the old one and
+# `child` — already open, already owned by nothing — is leaked to process exit. It is the same
+# acquisition-away-from-its-owner defect the function's own comment says was repaired one line
+# above, left in the two statements below it.
+#
+# Measured by descriptor TARGET, not by number: the kernel reuses numbers immediately, so a leak
+# and a clean run can show the same integer. The detector is positive-controlled both ways — it
+# must see a deliberately leaked descriptor and must see it disappear — before any verdict about
+# the function is read off it.
+# =============================================================================================
+
+
+def live_fd_targets() -> set[tuple[int, str]]:
+    """Every descriptor this process holds, as (number, readlink target), seeded from /proc."""
+    out = set()
+    for entry in os.listdir("/proc/self/fd"):
+        try:
+            out.add((int(entry), os.readlink("/proc/self/fd/" + entry)))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def test_a_cancellation_at_the_handover_close_leaks_no_directory_descriptor(tmp_path: Path) -> None:
+    """REPAIRED: no descriptor survives a cancellation delivered at the handover close.
+
+    CONTROL: the detector is shown a descriptor it must report and then shown it closed, so a
+    clean verdict below cannot come from an instrument that never fires; and an UNINJECTED run of
+    the same call over the same chain must leave nothing open, so the armed verdict is about the
+    cancellation and not about the function's ordinary behaviour.
+    """
+    if not os.path.isdir("/proc/self/fd"):
+        pytest.skip("no descriptor directory here; live descriptors cannot be enumerated")
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "makedirs_handover")
+    root = tmp_path / "chain"
+    root.mkdir()
+
+    # CONTROL ON THE DETECTOR ITSELF, both directions.
+    base = live_fd_targets()
+    probe = os.open(str(root), os.O_RDONLY | os.O_DIRECTORY)
+    assert [t for _f, t in live_fd_targets() - base if t == str(root)], \
+        "CONTROL: the detector must see a descriptor that really is open"
+    os.close(probe)
+    assert not [t for _f, t in live_fd_targets() - base if t == str(root)], \
+        "CONTROL: and must see it go, or every verdict below is a false positive"
+
+    # CONTROL: the uninjected call over the same shape of chain leaves nothing behind.
+    base = live_fd_targets()
+    module._makedirs_owner_only(str(root / "clean" / "b" / "c"))
+    assert (root / "clean" / "b" / "c").is_dir(), "CONTROL: the chain is actually created"
+    assert not [t for _f, t in live_fd_targets() - base if t.startswith(str(root))], \
+        "CONTROL: an ordinary run must leak nothing"
+
+    # ARMED: the cancellation lands on the FIRST handover close — the one standing between the
+    # child-closing handler and the assignment that takes ownership of the child.
+    real_close = module._close_quietly
+    closes = []
+
+    def cancelling_close(fd):
+        closes.append(fd)
+        real_close(fd)                      # the close itself happens; the cancellation follows it
+        if len(closes) == 1:
+            raise KeyboardInterrupt("cancellation delivered at the handover close")
+
+    base = live_fd_targets()
+    module._close_quietly = cancelling_close
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._makedirs_owner_only(str(root / "armed" / "b" / "c"))
+    finally:
+        module._close_quietly = real_close
+
+    left = sorted((f, t) for f, t in live_fd_targets() - base if t.startswith(str(root)))
+    for f, _t in left:                      # never leave a leak behind for the rest of the session
+        real_close(f)
+    assert closes, "CONTROL: the injected close must have been reached at all"
+    assert not left, (
+        "REPAIRED: a cancellation at `_close_quietly(fd)` left %r open. The child-closing handler "
+        "ends one line above that close and `fd = child` comes one line below it, so between the "
+        "two the child belongs to nobody: the outer finally releases the OLD descriptor and the "
+        "child escapes to process exit. Ownership has to move to the loop variable before — or in "
+        "the same unwinding path as — the release of the one it replaces." % [t for _f, t in left])
+
+
+# =============================================================================================
+# GROUP 89 — the sixty-fourth round. A DIRECTORY THIS SCANNER CREATES KEEPS ITS INHERITED ACCESS
+# CONTROL LISTS. A parent carrying a default ACL hands every new child BOTH an access ACL and a
+# default ACL of its own. `_harden_report_dir` then removes group and other WRITE from the mode
+# and restores the owner bits — and strips neither list. The mode bits are what every permission
+# arm in this suite reads, and they are exactly the channel an ACL does not travel on: the report
+# directory can read 0700 while a named user still holds entries on it, and the default list it
+# now carries hands the same entries to everything created inside it afterwards. The file-side
+# twin of this was closed in round twenty-odd ("the report now carries NO ACL: removing one is
+# always narrowing"); the directory the scanner creates was left out of that rule.
+# =============================================================================================
+
+ACL_DEFAULT_XATTR = "system.posix_acl_default"
+
+
+def _acl_default(path: Path):
+    try:
+        return os.getxattr(str(path), ACL_DEFAULT_XATTR)
+    except OSError:
+        return None
+
+
+def test_a_report_directory_this_scanner_creates_carries_no_access_control_list(
+        tmp_path: Path) -> None:
+    """REPAIRED: neither list may survive on the directory this run created.
+
+    SKIPPED WITH A REASON, NEVER PASSED QUIETLY, where the filesystem cannot carry a default ACL
+    or does not hand one to a new directory — a silent pass would read as the contract holding.
+    CONTROL: a probe directory created beside it by an ordinary mkdir must come back carrying both
+    lists, so the assertions below are measuring a strip that did not happen rather than an
+    inheritance that never happened.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores these checks; this needs an unprivileged writer")
+    if shutil.which("setfacl") is None:
+        pytest.skip("setfacl is not installed; the ACL contract cannot be measured here")
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    write(staging / "docs" / "readme.md", "nothing private here\n")
+
+    applied = subprocess.run(
+        ["setfacl", "-d", "-m", f"u:{os.geteuid()}:rwx,g::rx,o::-", str(staging)],
+        capture_output=True, text=True)
+    if applied.returncode != 0:
+        pytest.skip(f"the filesystem refused a default ACL: {applied.stderr.strip()[:80]}")
+
+    probe = staging / "acl_inherit_probe"
+    probe.mkdir()
+    inherited_access, inherited_default = _acl(probe) is not None, _acl_default(probe) is not None
+    probe.rmdir()
+    if not (inherited_access and inherited_default):
+        pytest.skip("this filesystem does not hand a new DIRECTORY the parent's lists "
+                    f"(access={inherited_access}, default={inherited_default}); there is nothing "
+                    "for this arm to measure")
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 0, (
+        "CONTROL: a clean tree must still publish, so the directory under test is one this run "
+        "created and used (rc=%r stderr=%r)" % (proc.returncode, proc.stderr[-400:]))
+    assert report(staging) == "scan_gate: CLEAN\n", "CONTROL: and the report is the clean one"
+
+    reports_dir = staging / "_reports"
+    mode = stat.S_IMODE(reports_dir.stat().st_mode)
+    assert _acl(reports_dir) is None, (
+        "REPAIRED: the report directory this run CREATED still carries an access control list. "
+        "Its mode reads %04o, which is what every permission arm in this suite checks, and the "
+        "named entries the parent's default list handed it are not in that number at all."
+        % mode)
+    assert _acl_default(reports_dir) is None, (
+        "REPAIRED: the report directory this run CREATED still carries a DEFAULT access control "
+        "list, so every file and directory made inside it from now on inherits those entries — "
+        "including report generations this run knows nothing about. Mode reads %04o." % mode)
+
+
+# =============================================================================================
+# GROUP 90 — the sixty-fourth round. THE HEADLINE DISCLOSURE AND THE NAME ARM DISAGREE. The module
+# docstring's fourth line says values are never printed, only file, line number, class and pattern
+# name. That is true of a CONTENT match and false of a NAME match: the name arm matches a secret
+# in a FILENAME, and the path column then carries the matched value verbatim into the report body,
+# onto standard output and onto the error stream. The sentence is the one an operator reads before
+# deciding where a report may be filed and who may see a gate's console output.
+#
+# This is not a string search. The behaviour is MEASURED first — a content value is shown to be
+# withheld and a name value is shown to travel — and the sentence is only then asked whether it
+# accounts for what was measured. A disclosure that drops the never-printed claim satisfies this
+# arm; so does a scanner that stops printing the value. What fails is the standing combination: an
+# unqualified claim beside a measured leak.
+# =============================================================================================
+
+
+def _module_disclosure() -> str:
+    return ast.get_docstring(ast.parse(SCANNER.read_text(encoding="utf8"))) or ""
+
+
+def _never_printed_claims(text: str) -> list[str]:
+    """Each sentence claiming that values are never printed."""
+    import re as _re
+    flat = " ".join(text.split())
+    parts = [p.strip() for p in _re.split(r"(?<=[.!?])\s+", flat) if p.strip()]
+    claim = _re.compile(r"(?i)\bvalues?\b[^.]{0,120}\bnever\b[^.]{0,120}\bprint")
+    return [p for p in parts if claim.search(p)]
+
+
+def test_the_never_printed_disclosure_accounts_for_the_name_arm(tmp_path: Path) -> None:
+    """REPAIRED: the headline sentence and the name arm must say the same thing.
+
+    CONTROL: the same run proves the claim IS true of a content match — the content plant is
+    absent from every surface while its path is printed literally — so a failure below is about
+    the carve-out and not about a disclosure that was false everywhere. The name plant's own
+    finding line is asserted too, so the arm cannot pass on a scanner that stopped matching names.
+    """
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    content_key = openai_plant()
+    name_key = OPENAI_PREFIX + _body(24, "M4nZ8qLp2V")
+    assert name_key != content_key, "CONTROL: the two plants must be distinguishable values"
+    write(staging / "docs" / "plain_probe.txt", "probe " + content_key + "\n")
+    named_rel = "docs/" + name_key + ".txt"
+    write(staging / named_rel, "this one carries nothing in its body\n")
+
+    proc = scan(tmp_path, driver, staging)
+    assert proc.returncode == 1, "CONTROL: both plants must block (rc=%r)" % proc.returncode
+    assert hit("SECRET", "openai-style-key", "name", named_rel, 0) in hits_for(staging, named_rel), \
+        "CONTROL: the name arm must actually fire, or there is no leak to disclose"
+    surfaces = {"report": report(staging) or "", "stdout": proc.stdout, "stderr": proc.stderr}
+    text = "".join(surfaces.values())
+
+    assert "docs/plain_probe.txt" in text, "CONTROL: paths are printed literally"
+    assert content_key not in text, \
+        "CONTROL: a CONTENT-match value is withheld from every surface, as the sentence says"
+
+    carried = sorted(label for label, body in surfaces.items() if name_key in body)
+    claims = _never_printed_claims(_module_disclosure())
+    if not carried:
+        return          # the other honest repair: the value stopped being printed. Nothing to say.
+
+    unqualified = [c for c in claims
+                   if not ("content" in c.lower() and "path" in c.lower())]
+    assert not unqualified, (
+        "REPAIRED: the module's headline disclosure says %r while a secret planted in a FILENAME "
+        "was printed verbatim on %s. The claim is what an operator reads before deciding where a "
+        "report may be filed and who may see the console output, and it is true only of content "
+        "matches: a raw path is printed as found and may itself be the matched value. The "
+        "sentence has to say that — naming the content scope it holds for and the path that "
+        "escapes it — or stop making the claim."
+        % (unqualified[0], ", ".join(carried)))
