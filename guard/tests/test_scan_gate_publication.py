@@ -12576,6 +12576,11 @@ def unsupported_finally_claims(source: str):
     if not claims:
         return []
     tree = ast.parse(source)
+    # STATED LIMIT (team review, gate 66): a class is a hard boundary in both directions, so a
+    # claim inside a class body whose cleanup is a try/finally WRAPPING the whole class is flagged
+    # even though it is true. That shape is legal and this predicate does not support it; the
+    # phrase it keys on has never appeared in one.
+    #
     # A CLASS IS A CANDIDATE OWNER, NOT ONLY A BOUNDARY. `_own_scope_nodes` refuses to descend into
     # a ClassDef, so if a class could not also be SELECTED as the holding scope, a comment in a
     # class body fell back to the module or the enclosing function — whose traversal then
@@ -12828,6 +12833,14 @@ _HASH = re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7}\b")
 # The repository's own rule is that UNMEASURED dominates a violation, so a file in this set that
 # cannot be read turns the arm RED and is named. Binaries are excluded by DECLARING them, below,
 # so that exclusion is a decision on the record rather than a swallowed exception.
+#
+# STATED LIMIT (team review, gate 66). An extensionless path is prose by declaration, which is
+# right for the two git hooks and the licence and would be wrong for an extensionless BINARY — a
+# compiled file, a submodule, a symlink to a directory. Such a file would arrive as UNREADABLE and
+# turn the arm red, and adding "" to the binary set is not the remedy, since it would excuse every
+# extensionless script instead. The remedy would be a path-level exception, written down. This
+# repository tracks five extensionless files today and all five are text; the limit is recorded
+# because it is a decision, not because it currently bites.
 _PROSE_SUFFIXES = {".md", ".py", ".sh", ".txt", ".tsv", ".csv", ".json", ".jsonl", ".yml",
                    ".yaml", ".toml", ".cfg", ".ini", ".svg", ".template", ".example", ""}
 _BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".ico", ".woff", ".woff2",
@@ -12860,28 +12873,55 @@ def _resolves(sha: str) -> bool:
                           capture_output=True).returncode == 0
 
 
-def citing_files():
-    """Every tracked file that could carry a citation, from git rather than a hand-kept list.
+def parse_tracked(stdout_bytes: bytes):
+    """Paths out of `git ls-files -z` output, with the filesystem's bytes intact.
 
-    The hand-kept list omitted the file carrying more citations than any other (team review,
-    gate 64). A list that must be remembered is a list that will be wrong."""
-    # NUL-DELIMITED. `git ls-files` quotes a path containing unusual bytes and splits nothing
-    # reliably on newlines; `-z` gives the raw bytes and a reader that cannot be fooled by a
-    # filename (team review, gate 65).
-    listed = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z"],
-                            capture_output=True, text=True)
+    THREE THINGS THIS GETS RIGHT AND THE VERSION BEFORE IT DID NOT (team review, gate 66, both
+    reproduced against real subprocess output before being believed):
+
+    BYTES, NOT TEXT. `text=True` applies universal-newline translation to the stream, so a path
+    containing a carriage return arrives as the newline path — two different files collapse to one
+    name, the scan reads the surviving one twice, and the citation in the other is never looked up.
+    `-z` fixed the record boundaries and did nothing about the bytes inside a record.
+
+    ONLY AN EMPTY RECORD IS DISCARDED. A filename that is one space is a legal filename, and
+    `if not rel.strip()` threw it away silently. The trailing NUL makes the last record empty, and
+    that is the only record with nothing in it.
+
+    `os.fsdecode`, so a path that is not valid UTF-8 survives as a usable string instead of
+    raising, and the file it names reaches the scan rather than vanishing from the list."""
+    return [os.fsdecode(record) for record in stdout_bytes.split(b"\0") if record != b""]
+
+
+def tracked_paths():
+    """Every tracked path, or None when git could not be asked. None is not an empty repository."""
+    listed = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z"], capture_output=True)
     if listed.returncode != 0:
-        return []
+        return None
+    return parse_tracked(listed.stdout)
+
+
+def prose_files(paths):
+    """The subset of PATHS whose declared suffix says it can carry prose."""
     out = []
-    for rel in listed.stdout.split("\0"):
-        if not rel.strip():
-            continue
+    for rel in paths:
         suffix = Path(rel).suffix.lower()
         if suffix in _BINARY_SUFFIXES:
             continue
         if suffix in _PROSE_SUFFIXES:
             out.append(rel)
     return out
+
+
+def citing_files():
+    """Every tracked file that could carry a citation, from git rather than a hand-kept list.
+
+    The hand-kept list omitted the file carrying more citations than any other (team review,
+    gate 64). A list that must be remembered is a list that will be wrong."""
+    paths = tracked_paths()
+    if paths is None:
+        return []
+    return prose_files(paths)
 
 
 def scan_citations(files, read_text, resolves, retired):
@@ -12954,9 +12994,11 @@ def test_every_tracked_suffix_is_classified() -> None:
     is required to be total over what git actually tracks."""
     if not (REPO / ".git").exists():
         pytest.skip("no git history here: the tracked file list comes from git")
-    listed = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z"],
-                            capture_output=True, text=True)
-    suffixes = {Path(rel).suffix.lower() for rel in listed.stdout.split("\0") if rel.strip()}
+    paths = tracked_paths()
+    assert paths is not None, (
+        "CONTROL: git could not be asked for the tracked file list, and an empty answer would "
+        "make every classification vacuous.")
+    suffixes = {Path(rel).suffix.lower() for rel in paths}
     unclassified = sorted(s for s in suffixes
                           if s not in _PROSE_SUFFIXES and s not in _BINARY_SUFFIXES)
     assert not unclassified, (
@@ -13083,3 +13125,52 @@ def test_the_finally_checker_treats_a_class_as_a_scope_it_can_select(
     assert raised == must_raise, (
         "CONTROL (%s): check_no_unsupported_finally_claim %s this source."
         % (label, "flagged" if raised else "accepted"))
+
+
+def test_the_tracked_path_reader_keeps_the_bytes_git_gave_it() -> None:
+    """CONTROL, from a reviewer's two reproductions (team review, gate 66). Both were silent: the
+    planted citation received ZERO lookups and every assertion passed, which is the exact failure
+    the read-failure repair had just closed one layer up.
+
+    A whitespace-only name is a legal filename and was discarded by a `.strip()` test. A carriage
+    return in a path became a newline under text-mode translation, so two distinct files collapsed
+    to one name and the citation in the other was never read."""
+    listing = b"normal.md\0 \0a\rb.md\0a\nb.md\0"
+    paths = parse_tracked(listing)
+    assert paths == ["normal.md", " ", "a\rb.md", "a\nb.md"], (
+        "CONTROL: the reader returned %r. A one-space filename must survive, a carriage return "
+        "must not become a newline, and only the empty trailing record may be dropped." % paths)
+    assert len(set(paths)) == 4, (
+        "CONTROL: two of the four paths collapsed to the same string, so one file would be read "
+        "twice and another never: %r" % paths)
+
+
+def test_a_whitespace_named_prose_file_is_scanned_not_skipped() -> None:
+    """CONTROL: intake and scan together. The defect was at the boundary between them — passing the
+    space-named file to the scanner directly always worked, and the enumeration never handed it
+    over (team review, gate 66). This drives the real path from git's bytes to the finding."""
+    # A SINGLE SPACE, and no suffix — which is what made the old filter drop it. A name that kept
+    # an extension survived `.strip()` and proved nothing; the fixture has to be the input the
+    # defect actually discarded. An extensionless path is prose by declaration, so this file is
+    # one the arm promises to read.
+    paths = parse_tracked(b"normal.md\0 \0")
+    files = prose_files(paths)
+    assert " " in files, (
+        "CONTROL: a prose file named with a single space did not survive enumeration: %r" % files)
+
+    def read(rel):
+        return "settled in df87c71" if rel == " " else "nothing here\n"
+
+    looked_up = []
+
+    def resolves(h):
+        looked_up.append(h)
+        return False
+
+    dangling, unreadable, unclassified = scan_citations(files, read, resolves, set())
+    assert looked_up == ["df87c71"], (
+        "CONTROL: the planted hash received %r lookups. A file dropped at intake is never read, "
+        "and a scan that reads nothing reports clean." % looked_up)
+    assert dangling and not unreadable and not unclassified, (
+        "CONTROL: the planted citation came back as %r dangling, %r unreadable, %r unclassified."
+        % (dangling, unreadable, unclassified))
