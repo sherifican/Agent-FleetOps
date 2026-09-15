@@ -821,9 +821,11 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                         # THEY HAVE BEEN, THE ANSWER SAYS SO. This branch closed with no reading at
                         # all and answered True over an inode with no name (invariant leg, c3f5bb3);
                         # the count is read on the held descriptor, and zero — or a read that
-                        # fails — is a hollow copy, answered False so the callers above retry from
-                        # the descriptor write_report still holds. A read, not a rescue: nothing
-                        # recurses here.
+                        # fails — is a hollow copy, answered False. write_report's handler retries
+                        # from the descriptor it still holds; the one-shot callers (`_stage_report`,
+                        # `_preserve_superseded`) close theirs, which is the README's stated bound —
+                        # a writer who has taken every name made so far, three acts by now (cold
+                        # leg, 2fb1625). A read, not a rescue: nothing recurses here.
                         elif not keep_stage:
                             try:
                                 _named_still = os.fstat(stage_fd).st_nlink >= 1
@@ -1880,8 +1882,15 @@ def _remove_stage_if_another_name_remains(dirfd, name, fd, depth=0):
         # CANNOT TELL BEFORE ANY ACT: the name is kept, nothing changed — and nothing is KNOWN.
         # This used to answer True, "custody holds", from a read that returned nothing, while the
         # depth-one branch below answers False on the same failure; a racer who had already taken
-        # both names was then trusted away by the close (invariant leg, c3f5bb3). False here is
-        # not a removal: the caller re-asks the descriptor it still holds, at worst a duplicate.
+        # both names was then trusted away by the close (invariant leg, c3f5bb3). Then it answered
+        # False and did nothing, and the copy-out's finally — which does not re-ask the stage it
+        # holds, it marks the copy hollow and closes it — freed a copy this helper exists to save
+        # (cold leg, 2fb1625). So the failed read is treated exactly like the failed read after
+        # the unlink: a copy is attempted through the descriptor, one level deep, and the answer
+        # is the copy-out's — at worst a duplicate, where silence was a loss. At depth one there
+        # is no deeper copy, and the answer is False.
+        if depth < 1:
+            return bool(_copy_out_unpublished(dirfd, fd, depth + 1))
         return False
     if nlink == 1:
         return True                       # the stage may be the last name: keep it
@@ -2067,12 +2076,25 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
     # name that no longer holds that inode preserves nothing, and the replacement is declined.
     _cfd = None
     _unconfirmed = False
+    _policy_on_held = True
     if linked is None:
         _cfd, _cvia = _open_held_copy(dirfd, report_name, previous)
         if _cfd is None:
             return False
+        # THE INODE IS NARROWED BEFORE IT IS LINKED. A hard link carries the inode's mode and
+        # ACL, so a reserved name made first and narrowed afterwards published a 0644 findings
+        # report under a well-known second name for the width of a few syscalls — and for good
+        # if the process died inside them (cold leg, 2fb1625). The narrowing is the one this
+        # call ran after the link anyway ("the direction that cannot hurt": the canonical name
+        # is about to be replaced, and if it is not, the report stands narrower than it was);
+        # it now runs on the held descriptor first, so every reserved name this call creates is
+        # born at 0600 with the strip done. Where the policy cannot be installed on the held
+        # inode, NO reserved name is taken — a reserved name asserts the policy, and the copy-out
+        # has declined one in that state since round twenty-three — and the replacement is
+        # declined below unless the report is a status line, which may always be replaced.
+        _policy_on_held = _narrow_held_copy(_cfd, _cvia)
     try:
-        for candidate in (_superseded_slot_names() if linked is None else ()):
+        for candidate in (_superseded_slot_names() if linked is None and _policy_on_held else ()):
             try:
                 _link_held_inode(_cfd, candidate, dirfd)
             except FileNotFoundError:
@@ -2422,12 +2444,12 @@ def _write_refusal_report(staging, refusal):
     # refuses by holding a descriptor, this writer would otherwise still reach by name.
     try:
         parent_fd, _ = _open_dir_nofollow(staging, None)
-    except OSError:
-        return
+    except Exception:
+        return                            # OSError in practice; the contract is whole-function (gate 48)
     try:
         dirfd = _harden_report_dir(reports_dir, parent_fd=parent_fd)
-    except (ScanRefused, OSError):
-        return
+    except Exception:
+        return                            # ScanRefused or OSError in practice; the same contract
     finally:
         _close_quietly(parent_fd)
     try:

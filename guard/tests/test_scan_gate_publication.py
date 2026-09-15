@@ -7487,9 +7487,12 @@ def test_the_same_findings_inode_never_takes_a_second_slot(tmp_path: Path) -> No
         module._strip_acl_by_fd = real_strip
     slots = sorted(p.name for p in reports.iterdir() if p.name.startswith("scan_report.superseded"))
     assert _findings_anywhere(reports, "docs/A.md:1"), "CONTROL: the findings must survive the refusals"
-    assert len(slots) == 1, (
+    assert len(slots) <= 1, (
         f"REPAIRED: three refusals over ONE findings inode took {len(slots)} slots ({slots}); a "
         f"report whose policy cannot be installed must not consume the finite capacity once per refusal")
+    # Since round fifty-three a report whose policy cannot be installed takes NO reserved name at
+    # all (the inode is narrowed before it is linked, and a denied strip declines the link), so
+    # the count here is zero; the arm pins "never a second slot", not "exactly one".
 
 
 # =============================================================================================
@@ -8703,3 +8706,131 @@ def test_a_release_pre_read_that_fails_does_not_answer_custody(tmp_path: Path) -
     assert _findings_anywhere(reports, "docs/H.md:1"), (
         "REPAIRED: the release helper's first link-count read failed and it answered True from nothing; "
         "quarantine and write_report trusted it and the close freed the findings")
+
+
+# =============================================================================================
+# GROUP 61 — the fifty-third round. Gate 48's cold leg on 2fb1625: preservation linked the
+# canonical inode into a reserved name at whatever mode it had and narrowed it afterwards (a
+# 0644 findings report was readable under a well-known second name for the window, and for
+# good if the process died in it), kept the reserved name when the strip was then denied; and
+# the release helper's failed first read answered False without the copy it exists to make.
+# =============================================================================================
+
+
+def _plant_wide_findings_report(module, reports: Path) -> None:
+    (reports / "scan_report.txt").write_text("generic\tkey\tassignment\tdocs/W.md:1\n", encoding="utf-8")
+    os.chmod(reports / "scan_report.txt", 0o644)
+
+
+def test_preservation_narrows_the_held_inode_before_it_takes_a_reserved_name(tmp_path: Path) -> None:
+    """REPAIRED (cold #3, gate 48): the reserved superseded name is created at 0600, never at the
+    canonical inode's old mode — the narrowing runs on the held descriptor BEFORE the link."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "preserve_narrow_first")
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    reports = tmp_path / "staging" / "_reports"
+    reports.mkdir(parents=True)
+    _plant_wide_findings_report(module, reports)
+    real_link = module.os.link
+    modes_at_link: list[int] = []
+
+    def link_hook(src, dst, *a, **k):
+        f = sys._getframe(1)
+        if f.f_code.co_name == "_link_held_inode":
+            modes_at_link.append(stat.S_IMODE(os.fstat(f.f_locals["fd"]).st_mode))
+        return real_link(src, dst, *a, **k)
+
+    module.os.link = link_hook
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        answer = module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        module.os.link = real_link
+        os.close(dirfd)
+    if not modes_at_link:
+        pytest.skip("preservation never linked; this arm measured nothing")
+    assert answer is True
+    assert all(m == 0o600 for m in modes_at_link), (
+        f"REPAIRED: the reserved name was linked while the inode was at {[oct(m) for m in modes_at_link]}; "
+        "a well-known second name carried the old mode for the window, and for good if the process died in it")
+    slots = [p for p in reports.iterdir() if p.name.startswith("scan_report.superseded")]
+    assert slots and all(stat.S_IMODE(p.stat().st_mode) == 0o600 for p in slots)
+
+
+def test_preservation_takes_no_reserved_name_when_the_strip_is_denied(tmp_path: Path) -> None:
+    """REPAIRED (cold #3 sibling, gate 48): a reserved name asserts the policy; with the strip
+    denied the held inode gets no reserved name at all (as the copy-out already does), and the
+    replacement is declined."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "preserve_strip_denied")
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    reports = tmp_path / "staging" / "_reports"
+    reports.mkdir(parents=True)
+    _plant_wide_findings_report(module, reports)
+    real_strip = module._strip_acl_by_fd
+    denied: list[str] = []
+
+    def strip_denied(fd):
+        if sys._getframe(1).f_code.co_name == "_narrow_held_copy":
+            denied.append("x"); raise OSError(errno.EACCES, "injected: strip denied")
+        return real_strip(fd)
+
+    module._strip_acl_by_fd = strip_denied
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        answer = module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        module._strip_acl_by_fd = real_strip
+        os.close(dirfd)
+    if not denied:
+        pytest.skip("the strip was never attempted; this arm measured nothing")
+    assert answer is False
+    slots = [p.name for p in reports.iterdir() if p.name.startswith("scan_report.superseded")]
+    assert not slots, (
+        f"REPAIRED: a reserved name {slots} was taken for an inode whose policy could not be installed; "
+        "the name asserts a policy the inode does not carry")
+    assert (reports / "scan_report.txt").exists()   # the findings stand where they were
+
+
+def test_a_release_pre_read_that_fails_still_copies_the_bytes_out(tmp_path: Path) -> None:
+    """REPAIRED (cold #2, gate 48): the release helper's failed first read is "cannot tell" like its
+    post-unlink read — a copy is attempted through the descriptor, one level deep, instead of
+    answering False and letting the copy-out's finally close a stage that may be nameless."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "release_preread_copies")
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    reports = tmp_path / "staging" / "_reports"
+    reports.mkdir(parents=True)
+    src = reports / "source.txt"
+    src.write_text("generic\tkey\tassignment\tdocs/H.md:1\n", encoding="utf-8")
+    fd = os.open(src, os.O_RDWR)
+    os.unlink(src)                                   # the descriptor is the last reference: the copy-out's case
+    real_fstat = module.os.fstat
+    acts: list[str] = []
+
+    def fstat_hook(f_, *a, **k):
+        f = sys._getframe(1)
+        if f.f_code.co_name == "_remove_stage_if_another_name_remains" and not acts:
+            acts.append("preread")
+            for p in list(reports.iterdir()):
+                if p.name.startswith("scan_report.unpublished") or p.name.startswith(".scan_report_"):
+                    os.unlink(p)                       # both of the copy's names taken before the first read
+            raise OSError(errno.EIO, "injected: the pre-read fails")
+        return real_fstat(f_, *a, **k)
+
+    module.os.fstat = fstat_hook
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        answer = module._copy_out_unpublished(dirfd, fd, 0)
+    finally:
+        module.os.fstat = real_fstat
+        os.close(dirfd); os.close(fd)
+    if not acts:
+        pytest.skip("the release helper's pre-read was never reached; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/H.md:1"), (
+        "REPAIRED: the helper's first read failed and it answered False without a copy; the copy-out's "
+        "finally recorded a hollow copy and its close freed the only complete copy")
+    assert answer is True

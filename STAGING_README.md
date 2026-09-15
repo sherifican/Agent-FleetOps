@@ -246,7 +246,12 @@ that "adding one more lstat or deleting an uncertain reserved name would repeat 
 class". What a check CAN do is remove the cases that need no adversary, and two of those were
 closed rather than documented: the refusal writer no longer unlinks the canonical name at all, and
 a successful scan's sweep no longer removes a reserved file created after this run staged its own
-report. What remains needs a writer who is actively substituting names.
+report. What remains needs a writer who is actively substituting names — and how many
+substitutions it takes is stated: the scanner copies a held inode out at most once and rescues
+that copy at most once more, so a writer who takes every name the scanner makes wins on the third
+one. Past that point every answer in the chain is False, the only descriptor left to retry from is
+the one `write_report` itself holds (its handler asks once more), and a preservation or stage
+cleanup that reached the bound closes what it holds (cold leg, 2fb1625).
 
 Two more things were measured after that paragraph was written, and both belong here. First, the
 scanner no longer links by name for an inode it HOLDS: every reserved name it creates from a held descriptor is made through the
