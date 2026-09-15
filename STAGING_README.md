@@ -389,3 +389,35 @@ entry as content.
 
 On git history neither scanner reaches: each scans one tree, so a value removed in a later commit
 is still published by the earlier one. ref_gate.py is the instrument for that surface.
+
+## Nine commit hashes in this history are not the ones its own comments cite
+
+Comments in `_tools/scan_gate.py`, in `guard/fd_ownership_check.py` and in this file name the
+commit that settled a thing — `(team review, df87c71)`, and others like it. Nine of those hashes
+name commits that no longer exist, and this section is how a reader resolves them.
+
+Before the first publication, the scanner was run against the repository that contains it — which
+had never been done — and it refused: five arms in the publication suite had written a key-shaped
+documentation example as one contiguous literal, and `guard/hooks/pre-push` scans the archived
+tree of every commit in a push range, so the refusal covered eight commits rather than one tree.
+An exemption added at the tip would not have reached them: the allowlist is read from the tree
+being scanned. The literal was split across a concatenation in each of the eight — the convention
+the publication suite's own header already states, and which a later arm in it already used — so
+the value handed to the code under test is unchanged and only the source spelling moved. That
+changed those eight hashes and the one commit that followed them. The other sixty-six commits in
+the range are untouched, and every tree in it passes the gate.
+
+| cited as | now |
+| --- | --- |
+| `8c2ca89` | `8f164cd` |
+| `3adf105` | `3b04cb4` |
+| `4e044e6` | `157dd41` |
+| `c0917eb` | `b2eb579` |
+| `df87c71` | `13cfa73` |
+| `169e8de` | `240b06b` |
+| `51a4686` | `b2fa02f` |
+| `a890af9` | `6f74d4d` |
+| `ff7b1d3` | `4ccf83e` |
+
+The rewrite happened once, before anything was published, and is recorded here rather than left
+for a reader to discover as a dangling reference. Nothing else in the range was rewritten.
