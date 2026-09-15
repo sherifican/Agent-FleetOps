@@ -866,30 +866,42 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
             stage_fd = None
             keep_stage = True                 # set before the open, with `written`, so the acquisition
             written = 0                       # try below hands straight to the try that owns the fd
-            try:
-                for _ in range(_STAGE_ATTEMPTS):
-                    name = ".scan_report_" + "".join(
-                        _STAGE_ALPHABET[b % len(_STAGE_ALPHABET)] for b in os.urandom(8))
-                    try:
-                        stage_fd = os.open(name, flags, _REPORT_MODE, dir_fd=dirfd)
-                    except FileExistsError:
-                        continue
-                    except OSError:
-                        raise _Answer(False)          # no creatable name: the stated limit
-                    stage_name = name
-                    break
-                if stage_fd is None:
-                    raise _Answer(False)              # every attempt collided: the stated limit
-            except BaseException:
-                if stage_fd is not None:
-                    _close_quietly(stage_fd)  # a cancellation between the open and the owning try
-                raise
             # RETENTION IS THE DEFAULT FROM THE MOMENT A STAGE EXISTS. Round thirty set keep_stage only on
             # the error paths it thought of, and a KeyboardInterrupt between two writes took none of
             # them: the finally saw False and deleted three bytes of evidence. The flag now starts True
             # and is cleared in exactly one place — after a confirmed publication — so cancellation,
             # or any exit this code did not anticipate, keeps whatever reached the stage.
             try:
+                # THE ACQUISITION IS NESTED INSIDE THE BLOCK THAT OWNS THE DESCRIPTOR. It used to be a
+                # SIBLING of that block — its own try, whose handler closes and re-raises, immediately
+                # followed by the try whose finally owns the stage. Nothing stands between them, which
+                # is why the statement counter never saw it; but the interpreter must leave the first
+                # block to reach the second, and a cancellation in that transition left the stage
+                # descriptor bound and owned by nobody, holding findings already copied out (team
+                # review and executed arm, 51a4686). Nested, the owner's finally names it from the
+                # moment the open returns, and the acquisition's own handler keeps its job.
+                try:
+                    for _ in range(_STAGE_ATTEMPTS):
+                        name = ".scan_report_" + "".join(
+                            _STAGE_ALPHABET[b % len(_STAGE_ALPHABET)] for b in os.urandom(8))
+                        try:
+                            stage_fd = os.open(name, flags, _REPORT_MODE, dir_fd=dirfd)
+                        except FileExistsError:
+                            continue
+                        except OSError:
+                            raise _Answer(False)          # no creatable name: the stated limit
+                        stage_name = name
+                        break
+                    if stage_fd is None:
+                        raise _Answer(False)              # every attempt collided: the stated limit
+                except BaseException:
+                    # THE CLOSE THAT WAS HERE IS GONE, AND THAT IS THE POINT. This handler existed
+                    # because nothing else named the descriptor yet. The enclosing block names it
+                    # now, from the moment the open returns, so closing here as well would be the
+                    # double close the lint has a rejection fixture for — and clearing the slot to
+                    # avoid that is the pattern round sixty measured as defeating a handler when a
+                    # cancellation lands AT the clearing. One owner, one close.
+                    raise
                 try:
                     # THE STAGE'S CHMOD AND STRIP ARE BEST EFFORT BEFORE THE STREAM. A chmod that
                     # RAISED here sat inside the except that returns before any byte was copied, so
@@ -996,6 +1008,10 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                 # right place for evidence that no reserved name will take.
                 raise _Answer(True)                   # retention on: the kept stage IS the copy, complete
             finally:
+                # AND IT TOLERATES A SLOT THAT WAS NEVER FILLED. With the acquisition nested inside
+                # this block, an exhausted name loop reaches this finally with nothing opened, and
+                # `_close_quietly` takes a descriptor rather than None — its own except is OSError,
+                # which a None would sail straight past as a TypeError.
                 # THE CLOSE IS UNDER ITS OWN FINALLY. Round thirty-two put the identity cleanup before the
                 # close (it needs the descriptor) and left the close after it unprotected; a cancellation
                 # inside the cleanup's lstat leaked the descriptor at three sites (invariant leg, 0829b97).
@@ -1066,7 +1082,8 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                                 if not _rescued:
                                     _hollow.append(True)
                 finally:
-                    _close_quietly(stage_fd)
+                    if stage_fd is not None:
+                        _close_quietly(stage_fd)
         except _Answer as _a:
             _answer = _a.value
     finally:
@@ -1830,18 +1847,37 @@ def write_report(staging, hits):
         except BaseException:
             _emit_unwritten_findings(hits)
             raise
-        try:
-            fd, tmp_name = _stage_report(dirfd, body, evidence=bool(hits))
-        except BaseException as _stage_exc:
-            # AND NOT WHEN THE STAGE KEPT THEM. `_stage_report`'s own cleanup retains a non-empty
-            # findings leftover and then re-raises; emitting here as well published the same hits
-            # twice, once to a file and once to a descriptor this process did not choose (cold leg,
-            # 3adf105). The emission is for findings that are NOWHERE, which is what its docstring
-            # has always said.
-            if not getattr(_stage_exc, "_scan_findings_retained", False):
-                _emit_unwritten_findings(hits)
-            raise
+        # ONE PLACE DECIDES WHETHER THE OPERATOR HEARS. Nesting the stage call inside the owning
+        # block put TWO deciders on the stage-failure path: the handler beside the call, which knows
+        # whether the stage kept the bytes, and the question in the finally, which sees an empty slot
+        # and concludes the findings are nowhere. Both fired, so a run whose partial stage had been
+        # retained printed the hits anyway — the exact double publication round sixty-two removed.
+        # The handler decides, and says so; the finally decides only when it was never reached.
+        _emitted = False
+        # SET BEFORE THE BLOCK, NOT INSIDE IT. A slot assigned as the first statement of the very
+        # block whose finally reads it is still unbound if a cancellation lands on the block's own
+        # entry, and the finally then fails on a name that does not exist.
+        fd = None
         try:                              # stage IS the report, and the handler must not copy it
+            # THE STAGE CALL IS NESTED INSIDE THE BLOCK THAT OWNS ITS DESCRIPTOR. It used to be a
+            # SIBLING of that block, with nothing between them — which is why the statement counter
+            # never saw it — but the interpreter must leave the first to reach the second, and a
+            # cancellation in that transition left a descriptor bound on findings ALREADY WRITTEN TO
+            # DISK, owned by nobody: no close, no quarantine, no emission, and a racer taking the
+            # staged name in the same interval finished the job (team review and executed arm,
+            # 51a4686). The slot is set before the owning try so its finally can name it either way.
+            try:
+                fd, tmp_name = _stage_report(dirfd, body, evidence=bool(hits))
+            except BaseException as _stage_exc:
+                # AND NOT WHEN THE STAGE KEPT THEM. `_stage_report`'s own cleanup retains a non-empty
+                # findings leftover and then re-raises; emitting here as well published the same hits
+                # twice, once to a file and once to a descriptor this process did not choose (cold leg,
+                # 3adf105). The emission is for findings that are NOWHERE, which is what its docstring
+                # has always said.
+                if not getattr(_stage_exc, "_scan_findings_retained", False):
+                    _emit_unwritten_findings(hits)
+                _emitted = True       # decided here, with the retention answer the finally lacks
+                raise
             # Inside the ownership try, so a cancellation during this read still reaches the close
             # in the finally (invariant leg, 3c075f0).
             try:
@@ -1995,6 +2031,16 @@ def write_report(staging, hits):
                     if _swept_fd is not None:
                         _close_quietly(_swept_fd)
         except BaseException:
+            if fd is None:
+                # NOTHING WAS EVER STAGED, SO THERE IS NOTHING HERE TO KEEP. With the stage call
+                # nested inside this block, a failure to stage now reaches this handler — where it
+                # previously could not, because the block was never entered. Everything below reads
+                # `tmp_name` and the descriptor, neither of which exists on that path, and the
+                # handler beside the stage call has already decided what the operator hears. This
+                # is the UnboundLocalError a reviewer predicted two gates ago and I refuted, because
+                # the structure then made it unreachable; nesting the acquisition made it reachable,
+                # and the arm for the stage-failure path caught it in the same round.
+                raise
             if _published:
                 # ALREADY PUBLISHED. A cancellation or error in the post-publish sweep reaches
                 # this handler with the stage already renamed onto the canonical name; the
@@ -2058,15 +2104,23 @@ def write_report(staging, hits):
             # emitting costs a duplicate on an already-failing run, staying silent costs the
             # findings, and A outranks that duplicate.
             try:
-                if hits and not _published:
-                    try:
-                        _nameless = os.fstat(fd).st_nlink == 0
-                    except OSError:
+                # AND THE SLOT MAY BE EMPTY NOW. With the stage call nested inside this block, a
+                # failure to stage reaches this finally with nothing opened — the findings are
+                # nowhere, which is exactly when the emission above must still fire, and the close
+                # below must not be handed a None.
+                if hits and not _published and not _emitted:
+                    if fd is None:
                         _nameless = True
+                    else:
+                        try:
+                            _nameless = os.fstat(fd).st_nlink == 0
+                        except OSError:
+                            _nameless = True
                     if _nameless:
                         _emit_unwritten_findings(hits)
             finally:
-                _close_quietly(fd)   # one question and one close, on every exit of this block
+                if fd is not None:
+                    _close_quietly(fd)   # one question and one close, on every exit of this block
     finally:
         _close_quietly(dirfd)
 
@@ -2099,15 +2153,27 @@ def _open_held_copy(dirfd, name, expect):
     opath = getattr(os, "O_PATH", 0)
     via_proc = bool(opath) and _PROC_FD_DIR is not None
     flags = (opath if via_proc else (os.O_RDONLY | nonblock)) | nofollow
+    # THE ACQUISITION IS INSIDE THE BLOCK THAT OWNS IT. It sat in a try of its own, whose only
+    # handler returns, with the owning try immediately after — nothing between them, which is why
+    # the statement counter never saw it and why the ownership lint passed the site. But the
+    # interpreter still has to leave the first block to reach the second, and a cancellation in
+    # that transition left this descriptor bound and owned by nobody. A census taken at that exact
+    # point showed the leaked handle pointing at `scan_report.unpublished.txt (deleted)` — the last
+    # reference to a preserved findings report (team review and executed arm, 51a4686).
+    #
+    # The comment that used to sit here claimed this interval WAS owned. It was not, and the claim
+    # survived several rounds because the lint agreed with it for a rule that could not disagree:
+    # the verdict on this function was identical before and after a repair that flips a real arm
+    # from red to green, which is a rule carrying no information at this site.
+    #
+    # The slot is set before the owning try so the finally can name it either way, the acquisition
+    # happens inside, and the acquisition's own handler stays nested where it was.
+    fd = None
     try:
-        fd = os.open(name, flags, dir_fd=dirfd)
-    except OSError:
-        return None, False
-    # THE ACQUISITION INTERVAL IS OWNED HERE. Between the open and the return the caller has
-    # not received the descriptor, so its cleanup cannot close it; an interrupt in this window
-    # leaked the handle (measured by the gate). Ordinary OSError still answers (None, False);
-    # anything else closes and re-raises.
-    try:
+        try:
+            fd = os.open(name, flags, dir_fd=dirfd)
+        except OSError:
+            return None, False
         try:
             got = os.fstat(fd)
         except OSError:

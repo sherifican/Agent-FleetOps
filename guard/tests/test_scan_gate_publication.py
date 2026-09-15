@@ -31,6 +31,7 @@ HARNESS CONVENTIONS:
   only at the subprocess argv boundary.
 """
 import ast
+import contextlib
 import errno
 import hashlib
 import importlib.util
@@ -11401,7 +11402,10 @@ def test_no_statement_stands_between_an_acquisition_and_its_owner() -> None:
     #     directly, so the shape is still reachable from this suite.
     cross_try = sorted((s.function, s.callee) for s in sites if s.verdict == "cross-try")
     assert cross_try == sorted([
-        ("_copy_out_unpublished", "os.open"),
+        # `_copy_out_unpublished` and `write_report`'s stage call came OFF this list in the
+        # sixty-sixth round: both acquisitions are nested inside the blocks that release them now,
+        # and each has an executed arm that was red before the reshape. Removed deliberately, in
+        # the same commit as the repair, which is what this list is for.
         ("_makedirs_owner_only", "_open_dir_nofollow"),
         ("_narrow_kept_copy", "os.open"),
         ("_read_prefix_held", "os.open"),
@@ -11409,7 +11413,7 @@ def test_no_statement_stands_between_an_acquisition_and_its_owner() -> None:
         ("_write_refusal_report", "_open_dir_nofollow"),
         ("write_report", "_harden_report_dir"),
         ("write_report", "_open_dir_nofollow"),
-        ("write_report", "_stage_report"),
+
     ]), (
         "the set of acquisitions whose enclosing try is not the try that releases them has "
         "CHANGED. A new entry is a new window and belongs in the accepted language, not in this "
@@ -11909,3 +11913,523 @@ def test_the_never_printed_disclosure_accounts_for_the_name_arm(tmp_path: Path) 
         "sentence has to say that — naming the content scope it holds for and the path that "
         "escapes it — or stop making the claim."
         % (unqualified[0], ", ".join(carried)))
+# GROUP 91 — the sixty-sixth round. A CANCELLATION IN THE CROSS-TRY TRANSITION TAKES THIS RUN'S
+# FINDINGS WITH IT, IN `write_report`.
+#
+# `_stage_report` returns a descriptor whose findings body is ALREADY ON DISK. The call sits in a
+# `try` of its own, whose `except BaseException` exists to emit the hits when nothing was staged.
+# The `try` whose `finally` closes that descriptor — and which asks, on every exit, whether the
+# inode still has a name and emits the hits when it does not — is the NEXT block. Zero statements
+# stand between them, so the ownership lint's statement counter reads zero; the block rule reports
+# it as `cross-try`, which is what this arm is the runnable half of.
+#
+# The interval is not empty at the instruction level. The compiler emits one `NOP` for the owning
+# `try:` line, and that offset is inside NO exception-table entry: the acquiring block's handlers
+# have been popped and the owner's `finally` is not installed. A cancellation delivered there
+# leaves `fd` bound with nothing to close it AND nothing to ask the last-reference question — and
+# a same-uid writer who takes the staged name in that same interval makes that descriptor the only
+# reference to the findings. They reach no file and no stream: the operator gets an exit status.
+#
+# WHAT THIS ARM MEASURES IS THE FINDINGS, NOT THE DESCRIPTOR. A closed descriptor is not the
+# invariant; a hit list that is reachable under a name, or named to the operator on the error
+# stream, is. The descriptor census runs beside it as corroboration only, by readlink TARGET and
+# never by number, because the kernel reuses numbers immediately.
+# =============================================================================================
+
+import dis as _dis
+
+
+def exception_table(code) -> list[tuple[int, int]]:
+    """The (start, end) instruction ranges this code object has a handler for."""
+    parse = getattr(_dis, "_parse_exception_table", None)
+    if parse is None:
+        return []
+    return [(e.start, e.end) for e in parse(code)]
+
+
+def unowned_offset(code, offset: int) -> bool:
+    """True when OFFSET is covered by no entry at all: nothing in this frame can catch there."""
+    return not any(start <= offset < end for start, end in exception_table(code))
+
+
+def releasing_try_bodies(source: str, function: str, slot: str) -> list[tuple[int, int]]:
+    """The BODY line range of every `try` in FUNCTION whose handlers or finally pass SLOT to a call.
+
+    The `try:` line itself is deliberately NOT in the range. That line's own `NOP` is the interval
+    this arm exists to measure: the interpreter is standing on it after leaving the acquiring block
+    and before the owner's handlers are installed, which is neither inside the owner nor protected
+    by anything else.
+    """
+    tree = ast.parse(source)
+    func = next((n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == function), None)
+    assert func is not None, "no function %r in the module under test" % function
+    out = []
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Try):
+            continue
+        cleanup = list(node.finalbody)
+        for handler in node.handlers:
+            cleanup.extend(handler.body)
+        passes_slot = False
+        for stmt in cleanup:
+            for sub in ast.walk(stmt):
+                if isinstance(sub, ast.Call) and any(
+                        isinstance(a, ast.Name) and a.id == slot for a in sub.args):
+                    passes_slot = True
+        if passes_slot and node.body:
+            out.append((node.body[0].lineno, node.end_lineno or node.body[-1].lineno))
+    return out
+
+
+class TransitionCancellation:
+    """Deliver ONE cancellation into the interval where SLOT holds a descriptor and no block in
+    the frame can release it — the transition the lint calls `cross-try`.
+
+    The firing rule is structural, not a line number, so the SAME instrument reads the repaired
+    shape: it fires only where the slot is bound, the instruction is covered by no handler, and
+    the interpreter is not yet inside the body of any block whose cleanup passes that slot. Move
+    the acquisition inside the owner and there is no such point left, which is the repair.
+
+    ``observed`` records whether the slot was ever seen holding a descriptor at all. An instrument
+    that stopped finding the slot — a rename, a path not taken — must not read as a quiet pass.
+    """
+
+    def __init__(self, module, function: str, slot: str, racer=None):
+        self.code = getattr(module, function).__code__
+        self.source = Path(module.__file__).read_text(encoding="utf8")
+        self.protected = releasing_try_bodies(self.source, function, slot)
+        self.slot = slot
+        self.racer = racer
+        self.fired_at = None
+        self.observed = False
+        self._previous = None
+
+    def _inside_owner(self, lineno: int) -> bool:
+        return any(first <= lineno <= last for first, last in self.protected)
+
+    def _local(self, frame, event, arg):
+        if event == "line" and self.fired_at is None:
+            if isinstance(frame.f_locals.get(self.slot), int):
+                self.observed = True
+                if unowned_offset(self.code, frame.f_lasti) and not self._inside_owner(frame.f_lineno):
+                    self.fired_at = frame.f_lineno
+                    if self.racer is not None:
+                        self.racer(frame)
+                    raise KeyboardInterrupt("cancellation in the cross-try transition")
+        return self._local
+
+    def _global(self, frame, event, arg):
+        return self._local if frame.f_code is self.code else None
+
+    def __enter__(self):
+        self._previous = sys.gettrace()
+        sys.settrace(self._global)
+        return self
+
+    def __exit__(self, *exc):
+        sys.settrace(self._previous)
+        return False
+
+
+CROSS_TRY_FIXTURE = """
+import os
+def acquire_then_leave(path, log):
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return None
+    try:
+        return os.read(fd, 10)
+    finally:
+        log.append(fd)
+        os.close(fd)
+"""
+
+
+def instrument_fires_on_the_cross_try_shape(tmp_path: Path) -> tuple[bool, list]:
+    """CONTROL RIG: the same injector, over a fixture that IS the defect. Returns (fired, released).
+
+    A verdict about the real module is only worth what this returns: if the injector cannot deliver
+    a cancellation into a transition it can see, every clean verdict below is a false negative.
+    """
+    fixture = tmp_path / "cross_try_fixture.py"
+    fixture.write_text(CROSS_TRY_FIXTURE, encoding="utf8")
+    mod = import_driver(fixture, "cross_try_fixture")
+    probe = tmp_path / "fixture_probe.txt"
+    probe.write_text("bytes\n", encoding="utf8")
+    released: list = []
+    rig = TransitionCancellation(mod, "acquire_then_leave", "fd")
+    try:
+        with rig:
+            mod.acquire_then_leave(str(probe), released)
+    except KeyboardInterrupt:
+        pass
+    return rig.fired_at is not None, released
+
+
+def test_a_cancellation_between_the_stage_and_its_owner_does_not_lose_the_findings(
+        tmp_path: Path) -> None:
+    """REPAIRED: findings already written to disk survive a cancellation in the transition.
+
+    CONTROL, four ways, because a clean verdict here is worthless without all of them:
+      * the descriptor census must see a deliberately leaked descriptor and must see it go;
+      * the injector must be shown firing on a fixture that IS the cross-try shape, and the
+        descriptor must be shown unreleased there — an injector that cannot deliver proves nothing;
+      * an UNINJECTED `write_report` over the same tree must publish the findings normally, so the
+        armed verdict is about the cancellation and not about ordinary behaviour;
+      * the slot must have been OBSERVED holding a descriptor during the armed run, so a rename or
+        an untaken path cannot read as a pass.
+    """
+    if not os.path.isdir("/proc/self/fd"):
+        pytest.skip("no descriptor directory here; live descriptors cannot be enumerated")
+    if not hasattr(_dis, "_parse_exception_table"):
+        pytest.skip("this interpreter exposes no exception table; the transition cannot be located")
+
+    hits = [("docs/probe.txt", 3, "SECRET", "openai-style-key", "content"),
+            ("docs/other.txt", 9, "SECRET", "github-token", "content")]
+    # THE TWO SURVIVAL SURFACES SPELL A HIT DIFFERENTLY, and the arm must accept either. The
+    # report body carries the surface column; `_emit_unwritten_findings` drops it deliberately.
+    on_disk_line = hit(hits[0][2], hits[0][3], hits[0][4], hits[0][0], hits[0][1])
+    on_stream_line = "%s\t%s\t%s:%d" % (hits[0][2], hits[0][3], hits[0][0], hits[0][1])
+
+    # CONTROL ON THE CENSUS ITSELF, both directions.
+    base = live_fd_targets()
+    probe_path = tmp_path / "census_probe.txt"
+    probe_path.write_text("x\n", encoding="utf8")
+    probe_fd = os.open(str(probe_path), os.O_RDONLY)
+    assert [t for _f, t in live_fd_targets() - base if t == str(probe_path)], \
+        "CONTROL: the census must see a descriptor that really is open"
+    os.close(probe_fd)
+    assert not [t for _f, t in live_fd_targets() - base if t == str(probe_path)], \
+        "CONTROL: and must see it go, or every verdict below is a false positive"
+
+    # CONTROL ON THE INJECTOR: it fires on the shape, and the descriptor is left unreleased there.
+    fired, released = instrument_fires_on_the_cross_try_shape(tmp_path)
+    assert fired, ("CONTROL: the injector must be able to deliver a cancellation into a cross-try "
+                   "transition it can see; it never fired on a fixture that IS that shape")
+    assert released == [], (
+        "CONTROL: and the fixture's own finally must NOT have run, or the interval the injector "
+        "aims at is not the unowned one and the arm below measures something else")
+
+    # CONTROL: an uninjected run over the same tree publishes the findings.
+    clean_driver = make_tool(tmp_path, name="tool_clean")
+    clean_staging = make_staging(tmp_path, name="staging_clean")
+    clean = import_driver(clean_driver, "g91_clean")
+    clean.write_report(str(clean_staging), hits)
+    assert on_disk_line in (report(clean_staging) or ""), \
+        "CONTROL: an uninjected write_report must publish the hits, or there is nothing to lose"
+
+    # ARMED. The cancellation lands in the transition, and a same-uid writer takes the staged name
+    # in the same interval — which is what makes the descriptor the findings' last reference.
+    driver = make_tool(tmp_path, name="tool_armed")
+    staging = make_staging(tmp_path, name="staging_armed")
+    module = import_driver(driver, "g91_armed")
+
+    taken: list = []
+
+    def racer(frame):
+        """The writer the module's threat model assumes: same uid, acting between two statements."""
+        dirfd, tmp_name = frame.f_locals.get("dirfd"), frame.f_locals.get("tmp_name")
+        try:
+            os.unlink(tmp_name, dir_fd=dirfd)
+            taken.append(tmp_name)
+        except OSError:
+            pass
+
+    rig = TransitionCancellation(module, "write_report", "fd", racer=racer)
+    stream = io.StringIO()
+    base = live_fd_targets()
+    try:
+        with rig, contextlib.redirect_stderr(stream):
+            module.write_report(str(staging), hits)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for f, t in live_fd_targets() - base:   # never leave a leak behind for the rest of the session
+            if str(staging) in t:
+                try:
+                    os.close(f)
+                except OSError:
+                    pass
+
+    assert rig.observed, (
+        "CONTROL: the slot never held a descriptor during this run, so nothing was measured. A "
+        "renamed slot or an untaken path must not read as a pass")
+
+    reports_dir = staging / "_reports"
+    on_disk = []
+    if reports_dir.is_dir():
+        for path in reports_dir.iterdir():
+            if path.is_file():
+                try:
+                    if on_disk_line in path.read_text(encoding="utf8", errors="replace"):
+                        on_disk.append(path.name)
+                except OSError:
+                    continue
+    on_stream = on_stream_line in stream.getvalue()
+
+    assert on_disk or on_stream, (
+        "REPAIRED: a cancellation delivered at line %r — the transition between the block that "
+        "stages the report and the block whose finally owns the staged descriptor — lost this "
+        "run's findings entirely. The body was already on disk when the cancellation arrived; the "
+        "staged name was taken in the same interval (%r), which leaves the descriptor as the only "
+        "reference to it; and because the owning block had not been entered, nothing closed it, "
+        "nothing asked whether the inode still had a name, and nothing emitted the hits. The "
+        "report directory holds %r and the error stream carries %r. Moving the acquisition INSIDE "
+        "the owning try — slot preset to None, released under an `is not None` guard — puts the "
+        "interval under the handler that already asks the last-reference question."
+        % (rig.fired_at, taken,
+           sorted(p.name for p in reports_dir.iterdir()) if reports_dir.is_dir() else None,
+           stream.getvalue()[:200]))
+
+
+# =============================================================================================
+# GROUP 92 — the sixty-sixth round. THE SAME TRANSITION IN THE RESCUE, `_copy_out_unpublished`.
+#
+# The rescue's `os.open` creates the stage inside a `try` of its own — the loop's retry guard,
+# with an `except BaseException` that closes the descriptor if the loop is cut short. That handler
+# ends at the loop. The `try` whose `finally` owns the stage from then on — narrowing it, measuring
+# it, re-asking whether its name still reaches it, and closing it — is the NEXT block. The
+# ownership lint reports the pair as `cross-try`; between the two blocks the interpreter stands on
+# the owning `try:` line's `NOP`, which is inside no exception-table entry at all.
+#
+# WHAT IS AT RISK IS THE FINDINGS, and this arm says so in the only terms that matter. This
+# function is called with a descriptor that is the LAST reference to a findings report — a stage
+# whose name a same-uid writer took, a preserved copy someone unlinked — and its whole job is to
+# put those bytes back under a name before the caller's close frees them. A cancellation in the
+# transition leaves the run with an EMPTY stage under the temporary prefix, a leaked descriptor,
+# and the findings still nowhere. The claim this arm pins is narrow and exact: at every point
+# where this function holds a descriptor and NO block in the frame can act on it, the findings
+# must already be reachable under a name. Today there is such a point and they are not.
+# =============================================================================================
+
+
+def test_a_cancellation_between_the_rescue_stage_and_its_owner_does_not_lose_the_findings(
+        tmp_path: Path) -> None:
+    """REPAIRED: the rescue must not have an interval where it holds a descriptor unowned.
+
+    CONTROL: the injector is shown firing on a fixture that IS the cross-try shape, with the
+    fixture's own finally shown NOT to run; an UNINJECTED rescue over the same nameless inode must
+    place the findings under a reserved name, so the armed verdict is about the cancellation and
+    not about a rescue that never worked; and the slot must have been observed holding a descriptor,
+    so a rename or an untaken path cannot read as a pass.
+    """
+    if not os.path.isdir("/proc/self/fd"):
+        pytest.skip("no descriptor directory here; live descriptors cannot be enumerated")
+    if not hasattr(_dis, "_parse_exception_table"):
+        pytest.skip("this interpreter exposes no exception table; the transition cannot be located")
+
+    body = hit("SECRET", "openai-style-key", "content", "docs/probe.txt", 3) + "\n"
+
+    def nameless_findings(reports: Path) -> int:
+        """A findings inode whose only name has been taken: the case this function exists for."""
+        held = reports / "held_findings.txt"
+        write(held, body)
+        held.chmod(0o600)
+        fd = os.open(str(held), os.O_RDWR)
+        os.unlink(str(held))
+        return fd
+
+    # CONTROL ON THE INJECTOR, before any verdict is read off it.
+    fired, released = instrument_fires_on_the_cross_try_shape(tmp_path)
+    assert fired, "CONTROL: the injector never fired on a fixture that IS the cross-try shape"
+    assert released == [], "CONTROL: and the fixture's own finally must not have run"
+
+    # CONTROL: an uninjected rescue puts the bytes under a reserved name.
+    clean_driver = make_tool(tmp_path, name="tool_clean92")
+    clean = import_driver(clean_driver, "g92_clean")
+    clean_reports = tmp_path / "reports_clean"
+    clean_reports.mkdir()
+    clean_dirfd = os.open(str(clean_reports), os.O_RDONLY | os.O_DIRECTORY)
+    clean_fd = nameless_findings(clean_reports)
+    try:
+        assert clean._copy_out_unpublished(clean_dirfd, clean_fd, 0) is True, \
+            "CONTROL: an uninjected rescue must take custody, or there is nothing to lose"
+    finally:
+        os.close(clean_fd)
+        os.close(clean_dirfd)
+    assert [p.name for p in clean_reports.iterdir() if p.is_file()
+            and body in p.read_text(encoding="utf8", errors="replace")], \
+        "CONTROL: and the bytes must actually be on disk under one of the reserved names"
+
+    # ARMED.
+    driver = make_tool(tmp_path, name="tool_armed92")
+    module = import_driver(driver, "g92_armed")
+    reports = tmp_path / "reports_armed"
+    reports.mkdir()
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+    source_fd = nameless_findings(reports)
+    rig = TransitionCancellation(module, "_copy_out_unpublished", "stage_fd")
+    base = live_fd_targets()
+    try:
+        with rig:
+            module._copy_out_unpublished(dirfd, source_fd, 0)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        os.close(source_fd)
+        os.close(dirfd)
+        for f, t in live_fd_targets() - base:   # never leave a leak behind for the rest of the session
+            if str(reports) in t:
+                try:
+                    os.close(f)
+                except OSError:
+                    pass
+
+    assert rig.observed, (
+        "CONTROL: the stage slot never held a descriptor during this run, so nothing was "
+        "measured. A renamed slot or an untaken path must not read as a pass")
+
+    carried = sorted(p.name for p in reports.iterdir() if p.is_file()
+                     and body in p.read_text(encoding="utf8", errors="replace"))
+    assert carried, (
+        "REPAIRED: a cancellation delivered at line %r — the transition between the block that "
+        "creates the rescue stage and the block whose finally owns it — left the findings "
+        "nowhere. The source inode had no name left, which is the only reason this function is "
+        "called; the stage existed but was empty; and because the owning block had not been "
+        "entered, nothing narrowed it, nothing measured it, nothing asked whether its name still "
+        "reached it and nothing closed it. The report directory holds %r. Moving the acquiring "
+        "loop INSIDE the owning try — the stage slot preset to None, released under an "
+        "`is not None` guard — leaves no point at which this function holds a descriptor that no "
+        "block can act on."
+        % (rig.fired_at, sorted(p.name for p in reports.iterdir())))
+
+
+# =============================================================================================
+# GROUP 93 — the sixty-sixth round. `_open_held_copy` HAS THE SAME TRANSITION AND THE LINT PASSES
+# IT, because the function hands the descriptor back and the lint's shape D treats the release as
+# the caller's obligation.
+#
+# The obligation cannot be the caller's yet. `fd` is bound at the `os.open` inside a `try` whose
+# only handler answers `(None, False)` on an OSError; the guard whose `except BaseException` asks
+# the last-reference question and closes — the one the function's own comment says "owns the
+# acquisition interval" — is the NEXT block. Between them the descriptor exists, the caller has
+# not received it and cannot name it, and no block in this frame can act on it. It is the shape
+# the lint calls `cross-try` everywhere else, and it is not in the pinned cross-try list because
+# shape D answers first, on nothing more than the slot's name appearing in a `return`.
+#
+# THE DESCRIPTOR HERE IS A PRESERVED FINDINGS REPORT. A same-uid writer who takes the name in that
+# same interval makes it the last reference, and the guard that exists to copy those bytes back
+# out is not installed yet. The report is freed at process exit with nothing on disk and nothing
+# on the stream. This arm was written after a reviewer named the site; the measurement, not the
+# reviewer, is what it reports.
+# =============================================================================================
+
+
+def test_a_cancellation_before_the_held_copy_guard_does_not_lose_the_preserved_findings(
+        tmp_path: Path) -> None:
+    """REPAIRED: the interval between the open and the guard must not be able to lose the report.
+
+    CONTROL: the injector is shown firing on a fixture that IS this shape, with the fixture's own
+    finally shown not to run; an UNINJECTED call over the same name must hand back a descriptor on
+    the recorded inode, so the armed verdict is about the cancellation; and the slot must have been
+    observed holding a descriptor. Where the interval no longer exists the injector finds nothing
+    to fire on — that is the repair, and it is only readable as one because the two controls above
+    prove the injector is alive and because the call is then asserted to have COMPLETED with the
+    report intact rather than merely not to have failed.
+    """
+    if not os.path.isdir("/proc/self/fd"):
+        pytest.skip("no descriptor directory here; live descriptors cannot be enumerated")
+    if not hasattr(_dis, "_parse_exception_table"):
+        pytest.skip("this interpreter exposes no exception table; the transition cannot be located")
+
+    body = hit("SECRET", "openai-style-key", "content", "docs/probe.txt", 3) + "\n"
+    kept_name = "scan_report.unpublished.txt"
+
+    # CONTROL ON THE INJECTOR.
+    fired, released = instrument_fires_on_the_cross_try_shape(tmp_path)
+    assert fired, "CONTROL: the injector never fired on a fixture that IS the cross-try shape"
+    assert released == [], "CONTROL: and the fixture's own finally must not have run"
+
+    # CONTROL: uninjected, the call hands back a descriptor on the inode it was asked for.
+    clean_driver = make_tool(tmp_path, name="tool_clean93")
+    clean = import_driver(clean_driver, "g93_clean")
+    clean_reports = tmp_path / "reports_clean93"
+    clean_reports.mkdir()
+    write(clean_reports / kept_name, body)
+    (clean_reports / kept_name).chmod(0o600)
+    clean_expect = os.stat(clean_reports / kept_name)
+    clean_dirfd = os.open(str(clean_reports), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        clean_fd, _via = clean._open_held_copy(clean_dirfd, kept_name, clean_expect)
+        assert clean_fd is not None, \
+            "CONTROL: the hold must succeed on an untouched name, or nothing below is measured"
+        os.close(clean_fd)
+    finally:
+        os.close(clean_dirfd)
+
+    # ARMED. The writer takes the preserved name in the same interval the cancellation lands in,
+    # which is what makes the descriptor the report's last reference.
+    driver = make_tool(tmp_path, name="tool_armed93")
+    module = import_driver(driver, "g93_armed")
+    reports = tmp_path / "reports_armed93"
+    reports.mkdir()
+    write(reports / kept_name, body)
+    (reports / kept_name).chmod(0o600)
+    expect = os.stat(reports / kept_name)
+    dirfd = os.open(str(reports), os.O_RDONLY | os.O_DIRECTORY)
+
+    taken: list = []
+
+    def racer(frame):
+        """Same uid, acting between two statements — the writer this module assumes throughout."""
+        try:
+            os.unlink(kept_name, dir_fd=dirfd)
+            taken.append(kept_name)
+        except OSError:
+            pass
+
+    rig = TransitionCancellation(module, "_open_held_copy", "fd", racer=racer)
+    base = live_fd_targets()
+    handed_back = None
+    try:
+        with rig:
+            handed_back, _via = module._open_held_copy(dirfd, kept_name, expect)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if isinstance(handed_back, int):
+            try:
+                os.close(handed_back)
+            except OSError:
+                pass
+        os.close(dirfd)
+        for f, t in live_fd_targets() - base:   # never leave a leak behind for the rest of the session
+            if str(reports) in t:
+                try:
+                    os.close(f)
+                except OSError:
+                    pass
+
+    assert rig.observed, (
+        "CONTROL: the slot never held a descriptor during this run, so nothing was measured. A "
+        "renamed slot or an untaken path must not read as a pass")
+
+    if rig.fired_at is None:
+        # THE REPAIRED READING, AND IT IS ASSERTED RATHER THAN ASSUMED. No interval was found where
+        # the descriptor was bound and no block could act on it, so nothing was injected and the
+        # racer never ran. That must show up as a COMPLETED call over an intact report, not merely
+        # as an absence of failure.
+        assert taken == [], "the racer runs only with the injection; it must not have fired alone"
+        assert handed_back is not None, (
+            "the interval is gone, so the call must have run to completion and handed the "
+            "descriptor back; it answered None instead")
+        assert body in (reports / kept_name).read_text(encoding="utf8", errors="replace"), \
+            "and the preserved report must still be at its name, intact"
+        return
+
+    carried = sorted(p.name for p in reports.iterdir() if p.is_file()
+                     and body in p.read_text(encoding="utf8", errors="replace"))
+    assert carried, (
+        "REPAIRED: a cancellation delivered at line %r — after the open and before the guard whose "
+        "`except BaseException` asks the last-reference question — lost the preserved findings "
+        "report. The name was taken in the same interval (%r), so the descriptor was the last "
+        "reference to it; the caller had not received that descriptor and could not name it; and "
+        "the guard that exists to copy the bytes back out was not installed yet, so nothing asked "
+        "and nothing copied. The report directory holds %r. The lint does not report this site "
+        "because the slot appears in a `return` and shape D hands the obligation to the caller — "
+        "an obligation the caller cannot discharge for an interval it never sees. Moving the "
+        "acquisition INSIDE the guard, with the slot preset to None and the existing "
+        "`if fd is None: raise` left as the acquisition-failure arm, closes it."
+        % (rig.fired_at, taken, sorted(p.name for p in reports.iterdir())))

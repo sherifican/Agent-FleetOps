@@ -127,12 +127,19 @@ from pathlib import Path
 # The sentence a clean run must carry. Printed, not commented: the scope limit travels with the
 # verdict or it is not a scope limit.
 COVERAGE_DISCLOSURE = (
-    "COVERAGE: no source-level statement stands between an acquisition and its owner, and no "
-    "block boundary does either — an acquisition whose enclosing try is not the try whose finally "
-    "releases it is reported as cross-try, not as clean. This does NOT close the window between "
-    "the acquiring syscall returning and the name being bound — a cancellation there leaves the "
-    "slot unset and the descriptor unowned, and no source check can see it, because it falls "
-    "between two bytecodes and not between two statements."
+    "COVERAGE: among the acquisitions this lint can classify as OWNED, no source-level statement "
+    "stands between one and its owner, and no block boundary does either — an acquisition whose "
+    "enclosing try is not the try whose finally releases it is reported as cross-try, not as "
+    "clean. THE SENTENCE SAYS NOTHING ABOUT SITES REPORTED UNOWNED, and that qualification is the "
+    "whole of it: this lint reads a try/finally as ownership and does NOT read a `with` block as "
+    "one, so an acquisition handed to a context manager is listed unowned, and statements standing "
+    "between such an acquisition and its `with` are outside everything above. Three sites in the "
+    "scanned module are exactly that shape today. The unqualified version of this sentence was "
+    "false for them, and a coverage claim in a coverage instrument is the last place a false one "
+    "belongs (team review, 51a4686). This also does NOT close the window between the acquiring "
+    "syscall returning and the name being bound — a cancellation there leaves the slot unset and "
+    "the descriptor unowned, and no source check can see it, because it falls between two "
+    "bytecodes and not between two statements."
 )
 
 # Standard-library calls that hand back a NEW descriptor. Narrow on purpose: a name not in here is
