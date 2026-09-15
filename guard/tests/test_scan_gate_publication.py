@@ -8834,3 +8834,117 @@ def test_a_release_pre_read_that_fails_still_copies_the_bytes_out(tmp_path: Path
         "REPAIRED: the helper's first read failed and it answered False without a copy; the copy-out's "
         "finally recorded a hollow copy and its close freed the only complete copy")
     assert answer is True
+
+
+# =============================================================================================
+# GROUP 62 — the fifty-fourth round. Gate 49's cold leg on 884e6c2: preservation asked the
+# last-reference question only when NO slot was linked; after a confirmed link it closed the
+# held canonical descriptor with no question, and both classification closes did the same —
+# the one sibling in the module still closing a findings-bearing descriptor unasked.
+# =============================================================================================
+
+
+def _preserve_with_racer(tmp_path: Path, tag: str, occupy_slots: bool, hook: str):
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, tag)
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    reports = tmp_path / "staging" / "_reports"
+    reports.mkdir(parents=True)
+    (reports / "scan_report.txt").write_text("generic\tkey\tassignment\tdocs/W.md:1\n", encoding="utf-8")
+    if occupy_slots:
+        for slot in module._superseded_slot_names():
+            (reports / slot).write_text("other\tkey\tassignment\tdocs/O.md:1\n", encoding="utf-8")
+    acts: list[str] = []
+
+    def _take_names(names):
+        for p in list(reports.iterdir()):
+            if p.name in names:
+                os.unlink(p)
+        acts.append("took:" + ",".join(sorted(names)))
+
+    real_lstat, real_prefix = module.os.lstat, module._read_prefix_held
+
+    def lstat_hook(path, *a, **k):
+        r = real_lstat(path, *a, **k)
+        f = sys._getframe(1)
+        if hook == "after_link_confirmation" and f.f_code.co_name == "_link_held_inode" and not acts:
+            _take_names({"scan_report.txt", str(path)})   # the racer's two acts, after the confirmation, before the close
+        return r
+
+    def prefix_hook(fd, via_proc, count):
+        r = real_prefix(fd, via_proc, count)
+        if hook in ("after_prefix_read_linked", "after_prefix_read_no_slot") and not acts:
+            names = {"scan_report.txt"} | ({p.name for p in reports.iterdir() if p.name.startswith("scan_report.superseded")}
+                                          if hook == "after_prefix_read_linked" else set())
+            _take_names(names)                            # during the classification, before that descriptor's close
+        return r
+
+    module.os.lstat, module._read_prefix_held = lstat_hook, prefix_hook
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        answer = module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        module.os.lstat, module._read_prefix_held = real_lstat, real_prefix
+        os.close(dirfd)
+    if not acts:
+        pytest.skip(f"the racer never acted ({hook}); this arm measured nothing")
+    return module, reports, answer, acts
+
+
+@pytest.mark.parametrize("hook", ["after_link_confirmation", "after_prefix_read_linked", "after_prefix_read_no_slot"])
+def test_preservation_asks_the_last_reference_question_before_every_findings_close(tmp_path: Path, hook: str) -> None:
+    """REPAIRED (cold #1, gate 49): a findings-bearing descriptor preservation holds is copied out
+    before its close when no name reaches the inode any more — after a confirmed link, after the
+    classification through the slot, and after the classification reopen with no slot."""
+    module, reports, answer, acts = _preserve_with_racer(tmp_path, "preserve_close_" + hook,
+                                                         occupy_slots=(hook == "after_prefix_read_no_slot"), hook=hook)
+    assert _findings_anywhere(reports, "docs/W.md:1"), (
+        f"REPAIRED ({hook}): the names were taken while preservation held the last reference and its close "
+        f"freed the previous report's findings (answer={answer}, acts={acts})")
+
+
+def test_a_cancellation_inside_the_pre_link_narrowing_does_not_leak_the_held_descriptor(tmp_path: Path) -> None:
+    """REPAIRED (inventory p.6, gate 49): the narrowing before the link runs under the same
+    cancellation guard as the one after it — an interrupt inside it closes the held descriptor
+    before propagating (884e6c2 leaked it; c3f5bb3 did not, having no pre-link narrowing)."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "preserve_prenarrow_kbi")
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    reports = tmp_path / "staging" / "_reports"
+    reports.mkdir(parents=True)
+    (reports / "scan_report.txt").write_text("generic\tkey\tassignment\tdocs/W.md:1\n", encoding="utf-8")
+    real_strip = module._strip_acl_by_fd
+    fired: list[str] = []
+
+    def strip_interrupted(fd):
+        f1, f2 = sys._getframe(1), sys._getframe(2)
+        if f1.f_code.co_name == "_narrow_held_copy" and f2.f_code.co_name == "_preserve_superseded" and not fired:
+            fired.append("kbi"); raise KeyboardInterrupt()
+        return real_strip(fd)
+
+    def _held_report_fds() -> list[str]:
+        out = []
+        for n in os.listdir("/proc/self/fd"):
+            try:
+                target = os.readlink("/proc/self/fd/%s" % n)
+            except OSError:
+                continue
+            if target.startswith(str(reports / "scan_report.txt")):
+                out.append("%s -> %s" % (n, target))
+        return out
+
+    module._strip_acl_by_fd = strip_interrupted
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        module._strip_acl_by_fd = real_strip
+        os.close(dirfd)
+    if not fired:
+        pytest.skip("the pre-link narrowing was never reached; this arm measured nothing")
+    leaked = _held_report_fds()
+    assert not leaked, f"REPAIRED: the interrupt inside the pre-link narrowing left the held descriptor open: {leaked}"
+    assert (reports / "scan_report.txt").exists()

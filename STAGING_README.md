@@ -73,8 +73,12 @@ scanner's staged `.scan_report_` name, which promises nothing.
 
 A SUPERSEDED file is a second NAME for the report that was about to be replaced, and there the
 denial **declines the replacement** instead: the findings stay at `scan_report.txt`, where they
-already were, and the refusal reaches the caller through the exit status. The reserved name is
-**kept**, deliberately. Removing it was this round's first shape, and it is wrong for a reason
+already were, and the refusal reaches the caller through the exit status. Since round fifty-three
+the policy is installed on the held inode BEFORE any link, so a denial ordinarily means no
+reserved name is taken at all (a cold leg measured the earlier order publishing a 0644 report
+under a reserved second name for the width of the link). Where the verification after the link
+fails even though the narrowing before it succeeded, the reserved name is **kept**,
+deliberately. Removing it was this round's first shape, and it is wrong for a reason
 worth stating: a link is a second name only while the canonical name still reaches the inode, and
 in a hostile tree it may stop doing so between the link and the removal — at which point giving
 the name back destroys the findings. POSIX cannot express "remove this name only if it is not the

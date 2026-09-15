@@ -1993,6 +1993,27 @@ def _canonical_still_classified(dirfd, guard):
     return (seen.st_dev, seen.st_ino) == (dev, ino)
 
 
+def _rescue_before_close(dirfd, fd, depth=0):
+    """THE LAST-REFERENCE QUESTION, ASKED BEFORE A CLOSE. If no name reaches the held inode any
+    more — or the count cannot be read — its bytes are copied out through the descriptor first,
+    so the close that follows does not free the only copy of a findings report.
+
+    Every other findings-bearing close in this module already asks (quarantine and the stage
+    writer through `_false_or_rescue`, the copy-out through its own finally); preservation asked
+    only when no slot was linked, and after a confirmed link it closed the held canonical
+    descriptor unasked, as did both of its classification closes — the sibling left out (cold
+    leg, 884e6c2). The question is the link count, not a name: after a link the inode has two
+    names, and either may be gone. The interval between the read and the close is the stated
+    check-then-act limit; a read that fails copies, at worst a duplicate.
+    """
+    try:
+        nameless = os.fstat(fd).st_nlink == 0
+    except OSError:
+        nameless = True
+    if nameless:
+        _copy_out_unpublished(dirfd, fd, depth)
+
+
 def _preserve_superseded(dirfd, report_name, guard_out=None):
     """Keep the report about to be replaced, and say whether replacing it is now safe.
 
@@ -2092,7 +2113,11 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         # inode, NO reserved name is taken — a reserved name asserts the policy, and the copy-out
         # has declined one in that state since round twenty-three — and the replacement is
         # declined below unless the report is a status line, which may always be replaced.
-        _policy_on_held = _narrow_held_copy(_cfd, _cvia)
+        try:
+            _policy_on_held = _narrow_held_copy(_cfd, _cvia)
+        except BaseException:
+            _close_quietly(_cfd)          # an interrupt here leaked the held descriptor (inventory, 884e6c2)
+            raise
     try:
         for candidate in (_superseded_slot_names() if linked is None and _policy_on_held else ()):
             try:
@@ -2123,6 +2148,12 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             _false_or_rescue(dirfd, report_name, _cfd)
     finally:
         if _cfd is not None:
+            if linked is not None:
+                # A CONFIRMED LINK IS NOT A NAME THAT WILL STILL BE THERE AT THE CLOSE. The rescue
+                # above runs only with no slot; with one, both names could be taken between the
+                # confirmation and this close, and the close freed the previous report's findings
+                # (cold leg, 884e6c2). Asked by count, since the name to ask about is now two.
+                _rescue_before_close(dirfd, _cfd)
             _close_quietly(_cfd)
     if _unconfirmed:
         return False                      # nothing this call can vouch for; the replacement is declined
@@ -2212,13 +2243,19 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         _cfd, _cvia = _open_held_copy(dirfd, report_name, previous)
         if _cfd is None:
             return False
+        _ask_before_close = True          # a read that never classified is treated as findings
         try:
             # `_read_prefix_held` answers None when it cannot read, and None is not the status
             # prefix: an unreadable copy is classified as findings, the costly case. (An
             # `except OSError` that used to sit here was unreachable — cold leg, d7e4a3c.)
             _prefix = _read_prefix_held(_cfd, _cvia, len(_STATUS_LINE_PREFIX))
             is_status_line = _prefix == _STATUS_LINE_PREFIX
+            _ask_before_close = not is_status_line   # a CLEAN is not evidence and takes no reserved name
         finally:
+            if _ask_before_close:
+                # ONE UNLINK OF THE ONLY REMAINING NAME during this read left the descriptor as
+                # the last reference, and the close freed it (cold leg, 884e6c2).
+                _rescue_before_close(dirfd, _cfd)
             _close_quietly(_cfd)
 
     if is_status_line:
@@ -2241,6 +2278,10 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
                 _close_quietly(held_fd)   # under finally: a cancellation in the cleanup leaked it
         return True
     if held_fd is not None:
+        # FINDINGS, CLASSIFIED THROUGH THE SLOT — and both names may have been taken while they
+        # were being read (cold leg, 884e6c2): asked before the close, like every other findings
+        # close in this module.
+        _rescue_before_close(dirfd, held_fd)
         _close_quietly(held_fd)
         held_fd = None
 
