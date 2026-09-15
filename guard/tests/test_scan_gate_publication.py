@@ -34,6 +34,7 @@ import ast
 import errno
 import hashlib
 import importlib.util
+import io
 import os
 import signal
 import shutil
@@ -9635,3 +9636,291 @@ def test_a_clean_run_that_cannot_write_says_nothing_extra(tmp_path: Path, capsys
         module.write_report(str(staging), [])
     err = capsys.readouterr().err
     assert "hit(s) follow" not in err, f"a CLEAN refusal printed a findings banner: {err!r}"
+
+
+# =============================================================================================
+# GROUP 68 — the sixtieth round. The executed review on 2dac6c6 measured a fourth window of the
+# same shape the round before closed at three: the status-line branch closes the slot descriptor
+# and clears the name as two statements inside its finally, so a cancellation between them leaves
+# the whole-life handler armed over a descriptor that is already closed.
+# =============================================================================================
+
+
+def test_no_descriptor_is_closed_twice_when_a_cancellation_lands_between_close_and_clear(tmp_path: Path) -> None:
+    """REPAIRED (executed review, gate 54): the status-line branch's cleanup closes the slot descriptor and
+    then clears the local name. A cancellation delivered between those two statements leaves the name
+    set, and the whole-life handler closes a descriptor nothing holds. The other three sites were given
+    a finally last round; this is the fourth."""
+    module, reports = _preserve_arm_setup(tmp_path, "close_clear_window", "scan_gate: CLEAN\n")
+    real_quietly, real_close, real_open = module._close_quietly, module.os.close, module.os.open
+    live: set = set()
+    stale: list = []
+    fired: list = []
+
+    def open_hook(*a, **k):
+        fd = real_open(*a, **k)
+        live.add(fd)
+        return fd
+
+    def close_hook(fd):
+        if fd not in live:
+            stale.append(fd)
+        live.discard(fd)
+        return real_close(fd)
+
+    def quietly_hook(fd):
+        caller = sys._getframe(1).f_code.co_name
+        real_quietly(fd)
+        if caller == "_preserve_superseded" and not fired:
+            fired.append("kbi")           # delivered after the close, before the name is cleared
+            raise KeyboardInterrupt()
+
+    for fd0 in os.listdir("/proc/self/fd"):
+        try:
+            live.add(int(fd0))
+        except ValueError:
+            pass
+    module.os.close, module.os.open, module._close_quietly = close_hook, open_hook, quietly_hook
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    live.add(dirfd)
+    try:
+        try:
+            module._preserve_superseded(dirfd, "scan_report.txt")
+        except BaseException:
+            pass
+    finally:
+        module.os.close, module.os.open, module._close_quietly = real_close, real_open, real_quietly
+        os.close(dirfd)
+    if not fired:
+        pytest.skip("the cleanup close was never reached from preservation; this arm measured nothing")
+    assert not stale, (
+        "REPAIRED: descriptor number(s) %s were closed while nothing held them — a cancellation landed "
+        "between the close and the name-clearing, and the whole-life handler closed again" % (stale,))
+
+
+def test_findings_reach_the_operator_when_the_stage_itself_cannot_be_made(tmp_path: Path) -> None:
+    """REPAIRED (cold #1, gate 55): the emission was wired only to the region that obtains the directory
+    descriptor. A stage that cannot be created — a report directory with no write permission, no
+    creatable name, no space — fails AFTER that guard with the findings still only in the argument
+    list and nothing durable anywhere. Everything above the first durable byte must emit."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "stage_cannot_be_made")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    os.chmod(reports, 0o500)                       # owner may read and traverse, not create
+    hits = [("docs/H.md", 1, "SECRET", "generic_key_assignment", "k = '" + "AKIA" + "IOSFODNN7EXAMPLE" + "'")]
+    capsys_err = io.StringIO()
+    real_stderr = sys.stderr
+    sys.stderr = capsys_err
+    try:
+        with pytest.raises((module.ScanRefused, OSError)):
+            module.write_report(str(staging), hits)
+    finally:
+        sys.stderr = real_stderr
+        os.chmod(reports, 0o700)
+    err = capsys_err.getvalue()
+    assert "docs/H.md:1" in err, (
+        f"REPAIRED: the stage could not be created, nothing durable was written, and the findings went "
+        f"nowhere — not to a file, not to the operator (stderr was {err!r})")
+
+
+def test_a_swap_of_the_stage_name_during_the_rename_does_not_publish_and_then_free_the_findings(tmp_path: Path) -> None:
+    """REPAIRED (cold #2, gate 55): the identity check sits before the rename, so a same-uid writer that
+    renames a planted symlink onto the staged name in that window has the rename move the PLANT to the
+    canonical name. The publish flag was set because the rename returned, the failure handler was then
+    skipped, and the close freed a findings inode with no name left. The canonical name is asked again
+    after the rename, and a landing that is not ours is not a publication."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "swap_during_rename")
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_replace = module.os.replace
+    acts: list[str] = []
+
+    def replace_hook(src, dst, *a, **k):
+        if not acts and isinstance(src, str) and src.startswith(".scan_report_"):
+            acts.append(src)
+            plant = reports / "plant.link"
+            os.symlink(tmp_path / "elsewhere", plant)
+            real_replace(str(plant), str(reports / src))   # the staged NAME now reaches the plant
+        return real_replace(src, dst, *a, **k)
+
+    module.os.replace = replace_hook
+    try:
+        try:
+            module.write_report(str(staging), [("docs/H.md", 1, "SECRET", "generic_key_assignment", "c")])
+        except BaseException:
+            pass
+    finally:
+        module.os.replace = real_replace
+    if not acts:
+        pytest.skip("the rename of the staged name was never reached; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/H.md:1"), (
+        f"REPAIRED: the rename moved a planted symlink to the canonical name, the run counted that as a "
+        f"publication, and the close freed the only copy of the findings (acts={acts})")
+
+
+def test_findings_are_never_written_into_a_stage_that_is_not_owner_only(tmp_path: Path) -> None:
+    """REPAIRED (cold #3, gate 55): the narrowing before the write is best effort and was never verified,
+    so where it did not stick — a report directory carrying a default ACL, or one left at 0755 whose
+    group read the hardening keeps — the findings were written into a file group could open. A
+    reserved name is refused in that state; the stage held the same bytes under no such rule. A mode
+    that cannot be READ is not a wide mode and still proceeds, which is the rule that keeps an
+    unreadable stage rather than deleting it."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "stage_not_owner_only")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_narrow, real_fstat = module._narrow_leftover, module.os.fstat
+    widened: list = []
+
+    def narrow_that_does_not_stick(fd):
+        real_narrow(fd)
+        widened.append(fd)
+
+    def fstat_reports_wide(f_, *a, **k):
+        st = real_fstat(f_, *a, **k)
+        if isinstance(f_, int) and f_ in widened and sys._getframe(1).f_code.co_name == "_stage_report":
+            class _Wide:
+                st_mode = (st.st_mode & ~0o777) | 0o640
+                st_size, st_dev, st_ino, st_nlink = st.st_size, st.st_dev, st.st_ino, st.st_nlink
+                st_ctime_ns = getattr(st, "st_ctime_ns", 0)
+            return _Wide()
+        return st
+
+    module._narrow_leftover, module.os.fstat = narrow_that_does_not_stick, fstat_reports_wide
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        try:
+            module._stage_report(dirfd, "SECRET\tgeneric_key_assignment\tk\tdocs/H.md:1\n", evidence=True)
+        except BaseException:
+            pass
+    finally:
+        module._narrow_leftover, module.os.fstat = real_narrow, real_fstat
+        os.close(dirfd)
+    if not widened:
+        pytest.skip("the stage narrowing was never reached; this arm measured nothing")
+    leftovers = [p for p in reports.iterdir() if p.name.startswith(".scan_report_")]
+    bodies = []
+    for leftover in leftovers:
+        try:
+            bodies.append(leftover.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            pass
+    assert not any("docs/H.md:1" in b for b in bodies), (
+        "REPAIRED: findings were written into a stage whose mode read as wider than owner-only; %s hold "
+        "them at whatever the directory gave" % ([p.name for p in leftovers],))
+
+
+def test_a_cancellation_at_the_rescue_call_itself_still_closes_the_descriptor(tmp_path: Path) -> None:
+    """REPAIRED (executed review, gate 55): a REGRESSION from the round before. Clearing the local name
+    under a finally stops a double close, but a cancellation delivered AT the call — before the callee's
+    own arms run — clears the name over a descriptor nobody closed, and the whole-life handler then
+    sees None and never fires. The handler asks the descriptor itself whether it is still ours rather
+    than trusting a name, which answers correctly whether the callee ran, did not run, or the number
+    was reused."""
+    module, reports = _preserve_arm_setup(tmp_path, "cancel_at_rescue_call", "generic\tkey\tassignment\tdocs/W.md:1\n")
+    real_rescue = module._rescue_then_close
+    fired: list[str] = []
+
+    calls: list = []
+
+    def rescue_interrupted(dirfd_, fd_, via_, depth=0):
+        if sys._getframe(1).f_code.co_name == "_preserve_superseded":
+            calls.append(fd_)
+            # The FIRST call from this frame is the canonical descriptor's own cleanup, which is
+            # the last line of defence and has nothing behind it by design. The SECOND is the
+            # findings close, which the whole-life handler is there to catch.
+            if len(calls) == 2 and not fired:
+                fired.append("kbi")
+                raise KeyboardInterrupt()  # delivered at the call, before the callee's own arms
+        return real_rescue(dirfd_, fd_, via_, depth)
+
+    module._rescue_then_close = rescue_interrupted
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        try:
+            module._preserve_superseded(dirfd, "scan_report.txt")
+        except BaseException:
+            pass
+    finally:
+        module._rescue_then_close = real_rescue
+        os.close(dirfd)
+    if not fired:
+        pytest.skip("the findings close was never reached from preservation (calls=%d); this arm "
+                    "measured nothing" % len(calls))
+    leaked = _open_report_fds(reports) + _open_report_fds(reports, "scan_report.superseded.txt")
+    assert not leaked, (
+        f"REPAIRED: the cancellation landed at the rescue call, the name was cleared over a descriptor "
+        f"nobody closed, and the handler never fired: {leaked}")
+
+
+def test_the_emission_does_not_carry_the_matched_text(tmp_path: Path) -> None:
+    """DECIDED (executed review, gate 55): the emission exists so a scan that found secrets cannot tell
+    nobody. It does not need to carry the secret ITSELF. The class, the pattern name and the path and
+    line say what and where; the matched surface is the one field that is the material. The error
+    stream is a descriptor this tool did not choose and cannot narrow, and an adversary picks the
+    moment it is used, so that field stays out of it."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "emission_no_surface")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (tmp_path / "payload").mkdir()
+    os.symlink(tmp_path / "payload", staging / "_reports")
+    secret = "AKIA" + "IOSFODNN7EXAMPLE" + "-do-not-print-me"
+    buf = io.StringIO()
+    real_stderr = sys.stderr
+    sys.stderr = buf
+    try:
+        with pytest.raises((module.ScanRefused, OSError)):
+            module.write_report(str(staging), [("docs/H.md", 1, "SECRET", "generic_key_assignment", secret)])
+    finally:
+        sys.stderr = real_stderr
+    err = buf.getvalue()
+    assert "docs/H.md:1" in err and "generic_key_assignment" in err, (
+        f"the emission must still say what and where (stderr was {err!r})")
+    assert secret not in err, (
+        f"DECIDED: the emission carried the matched text itself onto a stream this tool did not choose "
+        f"and cannot narrow (stderr was {err!r})")
+
+
+def test_a_failure_after_the_stage_does_not_emit(tmp_path: Path) -> None:
+    """PINNED (executed review, gate 55): nothing in the suite held the other half of the rule. Once the
+    report is staged the bytes are on disk under a name this scanner controls, and the retention paths
+    own them; printing as well would put findings on the error stream on every publish failure."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quiet_after_stage")
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    staging = tmp_path / "staging"
+    (staging / "_reports").mkdir(parents=True)
+    real_install = module._install_posix_acl_policy
+    fired: list[str] = []
+
+    def install_fails(dirfd, src_name, dst_fd, dst_name):
+        fired.append("boom")
+        raise OSError(errno.EIO, "injected: the publish fails after the stage")
+
+    module._install_posix_acl_policy = install_fails
+    buf = io.StringIO()
+    real_stderr = sys.stderr
+    sys.stderr = buf
+    try:
+        try:
+            module.write_report(str(staging), [("docs/H.md", 1, "SECRET", "generic_key_assignment", "c")])
+        except BaseException:
+            pass
+    finally:
+        sys.stderr = real_stderr
+        module._install_posix_acl_policy = real_install
+    if not fired:
+        pytest.skip("the publish never reached the policy install; this arm measured nothing")
+    err = buf.getvalue()
+    assert "hit(s)" not in err, (
+        f"PINNED: a failure AFTER the stage printed findings to the error stream; the bytes were already "
+        f"on disk under a name this scanner controls (stderr was {err!r})")

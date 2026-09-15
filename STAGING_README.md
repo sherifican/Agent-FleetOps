@@ -214,6 +214,26 @@ findings rather than destroying them. That is the safe direction, but it means a
 names can stop the report being updated. Occupancy is a denial of service against publication,
 never a way to make the scanner destroy evidence.
 
+**Findings the scanner cannot write anywhere go to the ERROR STREAM instead.** Every failure
+before the report is staged — `_reports` is a symlink, a regular file or a FIFO; the directory
+cannot be created, hardened or held; the stage itself cannot be made, or the mode on it reads as
+wider than owner-only, which this scanner refuses to write findings into — happens while this
+run's findings exist only in memory. The
+refusal writer that runs next receives the exception and never the hits, and under an unusable
+`_reports` it declines to write at all, so the operator used to get a path complaint and nothing
+else, beside an exit status of 2 and whatever was planted at the report name. Those runs now name
+the findings on the error stream — the class, the pattern and the path and line, capped at forty as
+the success path is. A run with no findings prints nothing. What that stream does NOT carry is the
+matched text itself. The successful run prints it, because that run completed and left an
+owner-only report beside it; this one is reached by failing, an adversary decides when it is
+reached by making a report impossible to write, and the error stream is a descriptor this scanner
+did not choose, cannot inspect, cannot narrow and cannot name. What and where stops a publication
+just as hard and sends the operator to the same place. One consequence is deliberate: a write to
+the error stream can wait if that stream is a pipe nobody drains — the one place this tool will
+wait on a peer, chosen because dropping the findings to avoid waiting is the failure this
+paragraph exists to close. Once the report IS staged the bytes are on disk under a name the
+scanner controls, and a later failure retains them there rather than printing them.
+
 **"Never raises" means never raises an error. It does not mean uninterruptible, and "never
 blocks" is a bounded claim.** The refusal writer will not let its own failure displace the failure
 it was called to report. It does not catch `KeyboardInterrupt` or `SystemExit`, and it should not:

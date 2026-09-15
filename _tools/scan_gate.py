@@ -1309,6 +1309,25 @@ def _stage_report(dirfd, body, evidence=False):
             # `_reports` let a group reader open the temporary name while the findings were being
             # written (cold leg, 0c28c5e). Best effort here; the verified install still follows.
             _narrow_leftover(fd)
+            if evidence:
+                # EVIDENCE IS NOT WRITTEN INTO A CONTAINER WHOSE ACCESS THIS SCANNER CANNOT ASSERT.
+                # The narrowing above is best effort and was never verified here, so where it did
+                # not stick — a report directory carrying a default ACL, or one left at 0755 whose
+                # group read the hardening keeps — the findings went into a file group could open,
+                # while a reserved name holding the same bytes is refused in exactly that state
+                # (cold leg, 8c2ca89). Refusing costs this run its report FILE and nothing else:
+                # the findings reach the operator through the emission above, which is what that
+                # channel exists for.
+                # A mode that cannot be READ is not a wide mode: an unanswerable question does not
+                # authorize degrading this run, the same rule `_staged_holds_evidence` is built on
+                # and the reason an unreadable stage is kept rather than deleted. Only a mode read
+                # and found wider refuses.
+                try:
+                    _mode_is_wide = stat.S_IMODE(os.fstat(fd).st_mode) != _REPORT_MODE
+                except OSError:
+                    _mode_is_wide = False
+                if _mode_is_wide:
+                    raise ScanRefused("report-mode-not-owner-only '_reports'")
             with os.fdopen(fd, "wb", closefd=False) as handle:
                 handle.write(body.encode("utf-8", "surrogateescape"))
         except BaseException:
@@ -1385,8 +1404,15 @@ def _emit_unwritten_findings(hits):
         if not hits:
             return
         sys.stderr.write("scan_gate: the report could not be written; %d hit(s) follow\n" % len(hits))
-        for rel, i, cls, name, surface in hits[:40]:
-            sys.stderr.write("%s\t%s\t%s\t%s:%d\n" % (cls, name, surface, rel, i))
+        for rel, i, cls, name, _surface in hits[:40]:
+            # WHAT AND WHERE, NOT THE MATERIAL. The matched surface is the one field that IS the
+            # secret, and this stream is a descriptor the scanner did not choose, cannot inspect,
+            # cannot narrow and cannot name — and an adversary picks the moment it is used, by
+            # deciding whether a report can be written at all. The class, the pattern name and the
+            # path and line stop a publication just as hard and send the operator to the same
+            # place (executed review, 8c2ca89). The successful run still prints the surface on the
+            # standard stream, where the run completed and a 0600 report exists beside it.
+            sys.stderr.write("%s\t%s\t%s:%d\n" % (cls, name, rel, i))
         if len(hits) > 40:
             sys.stderr.write("scan_gate: %d more hit(s) not shown\n" % (len(hits) - 40))
     except BaseException:
@@ -1464,7 +1490,18 @@ def write_report(staging, hits):
             body = "".join(f"{cls}\t{name}\t{surface}\t{rel}:{i}\n"
                            for rel, i, cls, name, surface in hits)
 
-        fd, tmp_name = _stage_report(dirfd, body, evidence=bool(hits))
+        # AND THE STAGE ITSELF IS ABOVE THE FIRST DURABLE BYTE. The guard further up covers the
+        # region that obtains the directory; a stage that cannot be MADE — a report directory with
+        # no write permission, no creatable name in sixty-four tries, no space — fails here, with
+        # the findings still only in the argument list and nothing on disk to retain. The same
+        # applies to a buffered flush that fails with nothing yet in the kernel: the stage measures
+        # empty and is removed, and what was in the buffer was this run's findings (cold leg,
+        # 8c2ca89). Below this line a durable copy exists and the retention paths own it.
+        try:
+            fd, tmp_name = _stage_report(dirfd, body, evidence=bool(hits))
+        except BaseException:
+            _emit_unwritten_findings(hits)
+            raise
         _staged_ctime_ns = None           # unknown age until read: no reference stamp means no sweep
         _published = False                # flips the instant the replace lands: from then on the
         try:                              # stage IS the report, and the handler must not copy it
@@ -1510,6 +1547,23 @@ def write_report(staging, hits):
             if (_named.st_dev, _named.st_ino) != (_held.st_dev, _held.st_ino):
                 raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
             os.replace(tmp_name, _REPORT_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
+            # AND THE CANONICAL NAME IS ASKED AFTER THE RENAME, because the check above is a
+            # lookup and the rename is the act. A same-uid writer that renames a planted symlink
+            # onto the staged name in that interval has THIS rename carry the plant to the
+            # canonical name — renameat moves the entry it finds, and does not follow a symlink.
+            # The flag was then set because the rename returned, the failure handler was skipped
+            # on the strength of it, and the close freed a findings inode with no name left (cold
+            # leg, 8c2ca89). A landing that is not the inode we hold is not a publication: the
+            # raise sends this run down the retention path with the descriptor still open, which
+            # is the one channel that can still keep the bytes.
+            try:
+                _landed = os.lstat(_REPORT_NAME, dir_fd=dirfd)
+                _ours = (stat.S_ISREG(_landed.st_mode)
+                         and (_landed.st_dev, _landed.st_ino) == (_held.st_dev, _held.st_ino))
+            except OSError:
+                _ours = False             # cannot tell: not a publication either
+            if not _ours:
+                raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
             _published = True             # a cancellation between these two statements reaches
                                           # the handler unflagged: a duplicate copy, no loss
             # A fresh scan has just published a report, so anything preserved from an EARLIER
@@ -2187,6 +2241,22 @@ def _rescue_then_close(dirfd, fd, via_proc, depth=0):
         _close_quietly(fd)
 
 
+def _cfd_still_ours(fd, expect):
+    """Whether FD is still open on the inode this call recorded. The question a cleanup handler asks.
+
+    A handler that keys on a local NAME being cleared cannot tell "the callee closed it" from "a
+    cancellation landed at the call and nobody closed it": clearing the name under a finally fixed
+    the first and broke the second (executed review, 8c2ca89). The descriptor answers all three
+    cases that matter — already closed is EBADF, a number reused by an unrelated open is a
+    different inode, and still ours is the one case a cleanup must act on.
+    """
+    try:
+        st = os.fstat(fd)
+    except OSError:
+        return False
+    return (st.st_dev, st.st_ino) == (expect.st_dev, expect.st_ino)
+
+
 def _preserve_superseded(dirfd, report_name, guard_out=None):
     """Keep the report about to be replaced, and say whether replacing it is now safe.
 
@@ -2286,15 +2356,15 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         # inode, NO reserved name is taken — a reserved name asserts the policy, and the copy-out
         # has declined one in that state since round twenty-three — and the replacement is
         # declined below unless the report is a status line, which may always be replaced.
-        try:
-            _policy_on_held = _narrow_held_copy(_cfd, _cvia)
-        except BaseException:
-            # An interrupt here leaked the held descriptor (inventory, 884e6c2); closing it
-            # unasked freed the findings when the name had been taken meanwhile (invariant leg,
-            # 8dd9edd). Asked during the unwinding, then closed.
-            _rescue_then_close(dirfd, _cfd, _cvia)
-            raise
     try:
+        if _cfd is not None:
+            # NARROWED INSIDE THE BLOCK THAT CLOSES IT. This had its own handler, which asked and
+            # closed and then re-raised — outside the try below, so a cancellation delivered AT
+            # that rescue call left the descriptor open with nothing left to close it (executed
+            # review, 8c2ca89). One block, one finally: the interrupt that leaked it (inventory,
+            # 884e6c2) and the close that freed findings unasked (invariant leg, 8dd9edd) are both
+            # answered there, and there is no second place to keep in step with it.
+            _policy_on_held = _narrow_held_copy(_cfd, _cvia)
         for candidate in (_superseded_slot_names() if linked is None and _policy_on_held else ()):
             try:
                 _link_held_inode(_cfd, candidate, dirfd)
@@ -2324,7 +2394,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             # question and the close are both in the finally now, for every exit of this block.
             pass
     finally:
-        if _cfd is not None:
+        if _cfd is not None and _cfd_still_ours(_cfd, previous):
             # ONE QUESTION AND ONE CLOSE, ON EVERY EXIT OF THIS BLOCK. A confirmed link is not a
             # name that will still be there at the close — both names could be taken between the
             # confirmation and this close, and the close freed the previous report's findings
@@ -2375,11 +2445,8 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             try:
                 narrowed = _narrow_held_copy(held_fd, held_via_proc)
             except BaseException:
-                try:
-                    _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
-                finally:
-                    held_fd = None        # UNDER A FINALLY: a rescue that RAISES used to skip this
-                raise                     # plain assignment, and the handler below closed it again
+                _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
+                raise                     # the handler below asks the DESCRIPTOR, so no name is cleared here
 
         # Classify only AFTER the link, so a failed read cannot prevent preservation — and classify
         # THROUGH THE LINK where one was made, not through report_path (with no link, the else
@@ -2404,11 +2471,8 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
                 _prefix = _read_prefix_held(held_fd, held_via_proc, len(_STATUS_LINE_PREFIX))
                 is_status_line = _prefix == _STATUS_LINE_PREFIX
             except BaseException:
-                try:
-                    _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
-                finally:
-                    held_fd = None        # UNDER A FINALLY: a rescue that RAISES used to skip this
-                raise                     # plain assignment, and the handler below closed it again
+                _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
+                raise                     # the handler below asks the DESCRIPTOR, so no name is cleared here
             # The descriptor stays open past this point: the release decision below needs it to
             # confirm the slot NAME still refers to this inode before anything is unlinked.
         else:
@@ -2463,17 +2527,13 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             finally:
                 if held_fd is not None:
                     _close_quietly(held_fd)   # under finally: a cancellation in the cleanup leaked it
-                    held_fd = None
             return True
         if held_fd is not None:
             # FINDINGS, CLASSIFIED THROUGH THE SLOT — and both names may have been taken while they
             # were being read (cold leg, 884e6c2): asked before the close, as every findings close
             # here is, the post-publish sweep's excepted for the reason its own helper states
             # (inventory, 212e683, on the wording).
-            try:
-                _rescue_then_close(dirfd, held_fd, held_via_proc)
-            finally:
-                held_fd = None            # the same shape: cleared even if the rescue raises
+            _rescue_then_close(dirfd, held_fd, held_via_proc)
 
         if linked is not None:
             if narrowed:
@@ -2567,7 +2627,16 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         # (invariant leg, aca6e8a). Every path that closes it above clears the name, so this asks
         # and closes only what is still held.
         if held_fd is not None:
-            _rescue_then_close(dirfd, held_fd, held_via_proc)
+            # ASKED OF THE DESCRIPTOR, NOT OF A NAME. Clearing a local name under a finally stops a
+            # double close, but a cancellation delivered AT the rescue call — before the callee's
+            # own arms run — cleared the name over a descriptor nobody had closed, and this handler
+            # then saw None and never fired (executed review, 8c2ca89: a regression from the round
+            # that installed the clearing). The descriptor itself answers all three cases: already
+            # closed by the callee is EBADF; a number reused by an unrelated open is a different
+            # inode; still ours and still open is the one that needs this handler. The name is kept
+            # is not cleared anywhere above: clearing it was what defeated this handler.
+            if _cfd_still_ours(held_fd, previous):
+                _rescue_then_close(dirfd, held_fd, held_via_proc)
 
 def _write_refusal_report(staging, refusal):
     """Best-effort: replace an EXISTING report with a single REFUSED line, so that a stale CLEAN
