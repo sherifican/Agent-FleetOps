@@ -871,7 +871,7 @@ def test_report_and_read_failure(tmp_path: Path, arm: str) -> None:
     enforcing the mode is checked first; if it does not, the arm is skipped with that reason).
     report-write-failure — REPAIRED (old tracebacks with rc 1): ``_reports`` existing as a
     FILE refuses with rc 2 and names ``report-write-error``.
-    refusal-clears-stale-clean — formerly xfail(strict), now a LIVE arm (repaired 3a9b87a): after a CLEAN run, a refusal (rc 2)
+    refusal-clears-stale-clean — formerly xfail(strict), now a LIVE arm (repaired a0dbe05): after a CLEAN run, a refusal (rc 2)
     leaves the previous CLEAN report in place; the assertion that consumers cannot read a
     stale CLEAN beside an rc 2 fails on the candidate and is recorded as such.
 
@@ -966,7 +966,7 @@ def test_report_and_read_failure(tmp_path: Path, arm: str) -> None:
         assert "report-write-error" in proc.stderr, "REPAIRED: the refusal names the report write"
         return
 
-    # refusal-clears-stale-clean (was xfail strict; live since 3a9b87a)
+    # refusal-clears-stale-clean (was xfail strict; live since a0dbe05)
     write(staging / "docs" / "readme.md", "nothing private here\n")
     proc = scan(tmp_path, driver, staging)
     assert proc.returncode == 0 and report(staging) == "scan_gate: CLEAN\n", "CONTROL: first run CLEAN"
@@ -12484,40 +12484,30 @@ def test_a_cancellation_before_the_held_copy_guard_does_not_lose_the_preserved_f
 
 
 # =============================================================================================
-# GROUP 94 — the sixty-seventh round. TWO CLAIMS THAT THE CODE DOES NOT SUPPORT, both found by a
-# reviewer at gate 61 and both re-measured here before being believed.
+# GROUP 94 — the sixty-seventh round, repaired twice since. TWO CLAIMS THE CODE DID NOT SUPPORT:
+# the lint's coverage sentence counted three sites of a shape the module has two of, and a comment
+# in `_open_held_copy` named a `finally` its block does not have.
 #
-# The first is a hand-maintained count inside the coverage instrument's own coverage sentence: it
-# says three sites have the shape it declines to examine, and the module has two. The sentence's
-# load-bearing qualification is true; the numeral is not. A count written by hand beside the thing
-# it counts drifts the moment the thing changes, and this one had -- which is the same defect,
-# one size smaller, as the unqualified sentence the round before it repaired.
+# WHAT EACH LAYER HERE BINDS, stated exactly, because the sentence that used to sit in this place
+# claimed more than the code did and a reviewer proved it (team review, gate 64). There are three
+# layers and they catch three different things:
 #
-# The arm below does not forbid a count. It binds one: if the disclosure makes a numeric claim
-# about how many sites in the scanned module have that shape, the number must equal what the AST
-# says. A sentence that makes no such claim passes, which is what the repair does.
+#   the CHECKERS below hold the assertion and its message, and take their input as an argument;
+#   the ARMS call a checker on the real module, which is the measurement;
+#   the CONTROLS call the same checkers with fixtures that must pass and fixtures that must fail,
+#     so the assertion inside the checker is what goes red, not a transcription of it.
 #
-# The second is a comment in `_open_held_copy` saying the slot is preset "so the finally can name
-# it either way". That function's owning construct is a `try` with an `except BaseException` and
-# no `finally` at all; the phrase is leftover from the two sites repaired beside it, which do have
-# one. Nothing is wrong with the code -- the try is entered before the `os.open`, so the interval
-# is covered -- but the comment names a construct that is not there, in a module whose whole
-# discipline is that a comment may not claim what the code does not do.
-#
-# The arm keys on the phrase, because copying is how the claim travelled: wherever that sentence
-# appears, the innermost enclosing try must actually have a finally.
-# =============================================================================================
+# The first version wrote each check twice — once in the arm, once again inside the control — so
+# the control was a statement about its own copy. The second version shared the parsing but left
+# the assertions in the arms, so a control could still not reach them. What none of that detects is
+# an ARM deleted or reduced to `return`: a separate test cannot notice that another test stopped
+# testing. `test_the_repaired_arms_still_call_their_checkers` is the layer for that, and it is a
+# structural read of this file, not a claim about behaviour. Each layer is narrow. Saying which is
+# which is the part that was missing.
 
 _COUNT_WORDS = {"zero": 0, "no": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
                 "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
 
-
-# THE PREDICATES, NAMED ONCE. The first version of this group wrote each check inline in its arm
-# and then wrote the check AGAIN inside the control, so the control exercised a copy. A reviewer
-# neutered both arms to `return` and the control still passed (team review, gate 63): it had been
-# proving that its own transcription could fire, which is a statement about the transcription and
-# not about the arm. The arms and the controls now call these, so neutering an arm cannot leave
-# its control green.
 
 def coverage_count_claim(disclosure: str):
     """The number a coverage sentence claims about sites in the scanned module, or None.
@@ -12539,8 +12529,8 @@ def coverage_count_claim(disclosure: str):
 
 def with_name_sites(source: str):
     """Line numbers of `with <name>:` — an acquisition handed to a context manager under a name
-    bound earlier. This is the exact shape the disclosure declines to examine, and the arm's claim
-    is scoped to it: it is not a general census of unowned ownership shapes."""
+    bound earlier. This is the exact shape the disclosure declines to examine, and the claim is
+    scoped to it: it is not a general census of unowned ownership shapes."""
     return sorted(n.lineno for n in ast.walk(ast.parse(source))
                   if isinstance(n, (ast.With, ast.AsyncWith))
                   for item in n.items if isinstance(item.context_expr, ast.Name))
@@ -12549,16 +12539,32 @@ def with_name_sites(source: str):
 FINALLY_CLAIM = "so the finally can name it"
 
 
+def _own_scope_nodes(scope):
+    """Every node lexically inside SCOPE, stopping at a nested function or class.
+
+    `ast.walk` does not stop: given a function it descends into every `def` inside it, so a try
+    belonging to an inner helper could be selected as the referent of a comment in the outer one.
+    A reviewer built both directions of that — an inner `finally` excusing an outer claim, and an
+    inner `except` condemning a good one (team review, gate 64)."""
+    out, stack = [], list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        out.append(node)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue                      # a nested scope owns its own blocks
+        stack.extend(ast.iter_child_nodes(node))
+    return out
+
+
 def unsupported_finally_claims(source: str):
-    """Comment lines claiming a `finally` that the construct they introduce does not have.
+    """Comment lines claiming a `finally` that the block they introduce does not have.
 
     THE RELATION, stated exactly, because the first version got it wrong in both directions (team
     review, gate 63). The sentence introduces the block that follows it: the slot is preset, a try
-    is entered, and that try's finally is the claim. So the referent is the FIRST `try` beginning
-    at or after the comment, inside the function that contains the comment — not "some enclosing
-    try", which accepted an unrelated OUTER finally, and not the comment's own enclosing range,
-    which rejected the correct placement, since a comment sitting BEFORE a try is outside that
-    try's line range.
+    is entered, and that try's finally is the claim. So the referent is the FIRST `try` beginning at
+    or after the comment, in the comment's own lexical scope — not "some enclosing try", which
+    accepted an unrelated OUTER finally, and not the comment's own enclosing range, which rejected
+    the correct placement, since a comment sitting BEFORE a try is outside that try's line range.
 
     Comments come from `tokenize`, not from lines beginning with `#`: a `#` opening a line inside a
     triple-quoted string is not a comment, and the first version counted it as one."""
@@ -12570,13 +12576,13 @@ def unsupported_finally_claims(source: str):
     if not claims:
         return []
     tree = ast.parse(source)
-    functions = [n for n in ast.walk(tree)
-                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    scopes = [n for n in ast.walk(tree)
+              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
     unsupported = []
     for line in claims:
-        holders = [f for f in functions if f.lineno <= line <= (f.end_lineno or f.lineno)]
+        holders = [f for f in scopes if f.lineno <= line <= (f.end_lineno or f.lineno)]
         scope = min(holders, key=lambda f: (f.end_lineno or f.lineno) - f.lineno) if holders else tree
-        following = sorted((n for n in ast.walk(scope)
+        following = sorted((n for n in _own_scope_nodes(scope)
                             if isinstance(n, ast.Try) and n.lineno >= line),
                            key=lambda n: n.lineno)
         if not following or not following[0].finalbody:
@@ -12584,18 +12590,17 @@ def unsupported_finally_claims(source: str):
     return unsupported
 
 
-def test_a_count_in_the_coverage_sentence_matches_what_the_module_has() -> None:
-    """REPAIRED: the disclosure said three sites carry the shape the lint declines to examine and
-    the module has two. A coverage instrument is the last place a false coverage claim belongs,
-    and a number nobody recomputes is the most reliable way to get one."""
-    claimed = coverage_count_claim(fd_checker().COVERAGE_DISCLOSURE)
+# --- the checkers: the assertion and its message, with the input passed in ----------------------
+
+def check_coverage_count(disclosure: str, module_source: str) -> None:
+    """Raises AssertionError when a coverage sentence's numeral disagrees with the module."""
+    claimed = coverage_count_claim(disclosure)
     if claimed is None:
-        return                      # no numeric claim to bind; the repair takes this branch
+        return                      # no numeric claim to bind; the repaired sentence takes this
     assert not isinstance(claimed, str), (
-        "REPAIRED: the coverage sentence quantifies sites with %r, which this arm cannot check "
-        "against the module. A claim a reader cannot check is the shape this arm exists to stop."
-        % claimed)
-    actual = with_name_sites(SCANNER.read_text(encoding="utf8"))
+        "REPAIRED: the coverage sentence quantifies sites with %r, which cannot be checked against "
+        "the module. A claim a reader cannot check is the shape this exists to stop." % claimed)
+    actual = with_name_sites(module_source)
     assert claimed == len(actual), (
         "REPAIRED: the coverage sentence claims %d site(s) of the `with <name>` shape in the "
         "scanned module; the AST finds %d, at line(s) %s. The qualification around the number may "
@@ -12603,12 +12608,9 @@ def test_a_count_in_the_coverage_sentence_matches_what_the_module_has() -> None:
         % (claimed, len(actual), actual))
 
 
-def test_no_comment_names_a_finally_its_own_block_does_not_have() -> None:
-    """REPAIRED: `_open_held_copy` said the slot was preset "so the finally can name it either
-    way". The try it introduces has an `except BaseException` and no finally; the phrase was copied
-    from the two sites repaired beside it. The code is right and the sentence is not, which in this
-    module is a defect on its own terms."""
-    unsupported = unsupported_finally_claims(SCANNER.read_text(encoding="utf8"))
+def check_no_unsupported_finally_claim(module_source: str) -> None:
+    """Raises AssertionError when a comment names a `finally` its block does not have."""
+    unsupported = unsupported_finally_claims(module_source)
     assert not unsupported, (
         "REPAIRED: line(s) %s say %r, and the try each of them introduces has no finally. Either "
         "the block gained one and the comment is now true, or the comment was copied to a site "
@@ -12616,7 +12618,21 @@ def test_no_comment_names_a_finally_its_own_block_does_not_have() -> None:
         % (unsupported, FINALLY_CLAIM))
 
 
-# --- the controls: the SAME predicates the arms call, fed what each of them must reject ---------
+def test_a_count_in_the_coverage_sentence_matches_what_the_module_has() -> None:
+    """REPAIRED: the disclosure said three sites carry the shape the lint declines to examine and
+    the module has two. A coverage instrument is the last place a false coverage claim belongs, and
+    a number nobody recomputes is the most reliable way to get one."""
+    check_coverage_count(fd_checker().COVERAGE_DISCLOSURE, SCANNER.read_text(encoding="utf8"))
+
+
+def test_no_comment_names_a_finally_its_own_block_does_not_have() -> None:
+    """REPAIRED: `_open_held_copy` said the slot was preset "so the finally can name it either
+    way". The try it introduces has an `except BaseException` and no finally; the phrase was copied
+    from the two sites repaired beside it. The code is right and the sentence is not."""
+    check_no_unsupported_finally_claim(SCANNER.read_text(encoding="utf8"))
+
+
+# --- the controls: the SAME checkers, fed what each must accept and what each must reject -------
 
 @pytest.mark.parametrize("sentence,expected", [
     ("... Nine sites in the scanned module are exactly that shape today. ...", 9),
@@ -12624,35 +12640,48 @@ def test_no_comment_names_a_finally_its_own_block_does_not_have() -> None:
     ("... several sites in the scanned module ...", "several"),
     ("... every site of that shape is in the list below ...", None),
 ])
-def test_the_count_predicate_reads_what_it_claims_to_read(sentence: str, expected) -> None:
+def test_the_count_reader_reads_what_it_claims_to_read(sentence: str, expected) -> None:
     """CONTROL: the arm passes when the sentence makes no claim, which is what the repaired
     sentence does. A reader of a green run cannot tell that branch from a working comparison, so
-    the predicate is fed a claim it must parse, one it must refuse as uncheckable, and one it must
+    the reader is fed a claim it must parse, one it must refuse as uncheckable, and one it must
     correctly find absent."""
     assert coverage_count_claim(sentence) == expected, (
-        "CONTROL: the count predicate read %r out of %r, and the arm is only as good as this."
-        % (coverage_count_claim(sentence), sentence))
+        "CONTROL: the count reader read %r out of %r." % (coverage_count_claim(sentence), sentence))
 
 
-def test_the_count_predicate_rejects_a_wrong_number() -> None:
-    """CONTROL: parsing a number is not comparing it. This is the comparison the arm makes, on a
-    module whose shape count is known, against a claim that does not match it."""
-    module = "with handle:\n    pass\n"
-    assert with_name_sites(module) == [1], (
-        "CONTROL: the site counter did not find the one `with <name>` in a module that has "
-        "exactly one, so the arm's other half cannot be trusted either.")
-    assert coverage_count_claim("... Nine sites in the scanned module ...") != len(with_name_sites(module)), (
-        "CONTROL: a claim of nine and a module with one compared EQUAL, so the arm would pass a "
-        "wrong number.")
+@pytest.mark.parametrize("label,disclosure,module,must_raise", [
+    ("a wrong number must be rejected", "... Nine sites in the scanned module ...",
+     "with handle:\n    pass\n", True),
+    ("the right number must be accepted", "... one site in the scanned module ...",
+     "with handle:\n    pass\n", False),
+    ("an uncheckable quantifier must be rejected", "... several sites in the scanned module ...",
+     "with handle:\n    pass\n", True),
+    ("no claim at all must be accepted", "... every site is listed below ...",
+     "with handle:\n    pass\n", False),
+])
+def test_the_count_checker_is_the_assertion_the_arm_makes(
+        label: str, disclosure: str, module: str, must_raise: bool) -> None:
+    """CONTROL: parsing a number is not comparing it, and the version of this control that compared
+    two helper results itself never reached the arm's assertion (team review, gate 64). This drives
+    `check_coverage_count` — the function the arm calls — and requires it to raise or not."""
+    try:
+        check_coverage_count(disclosure, module)
+    except AssertionError:
+        raised = True
+    else:
+        raised = False
+    assert raised == must_raise, (
+        "CONTROL (%s): check_coverage_count %s, and the arm is exactly this call."
+        % (label, "raised" if raised else "accepted"))
 
 
-@pytest.mark.parametrize("label,source,must_flag", [
+@pytest.mark.parametrize("label,source,must_raise", [
     ("the block the comment introduces really does have a finally",
      "def f():\n"
      "    # set first so the finally can name it either way\n"
      "    fd = None\n"
      "    try:\n"
-     "        fd = os.open('x', 0)\n"
+     "        fd = acquire()\n"
      "    finally:\n"
      "        close(fd)\n",
      False),
@@ -12661,7 +12690,7 @@ def test_the_count_predicate_rejects_a_wrong_number() -> None:
      "    # set first so the finally can name it either way\n"
      "    fd = None\n"
      "    try:\n"
-     "        fd = os.open('x', 0)\n"
+     "        fd = acquire()\n"
      "    except BaseException:\n"
      "        pass\n",
      True),
@@ -12671,12 +12700,40 @@ def test_the_count_predicate_rejects_a_wrong_number() -> None:
      "        # set first so the finally can name it either way\n"
      "        fd = None\n"
      "        try:\n"
-     "            fd = os.open('x', 0)\n"
+     "            fd = acquire()\n"
      "        except BaseException:\n"
      "            pass\n"
      "    finally:\n"
      "        done()\n",
      True),
+    ("a NESTED function's finally must not excuse the outer claim",
+     "def f():\n"
+     "    # set first so the finally can name it either way\n"
+     "    fd = None\n"
+     "    def helper():\n"
+     "        try:\n"
+     "            pass\n"
+     "        finally:\n"
+     "            pass\n"
+     "    try:\n"
+     "        fd = acquire()\n"
+     "    except BaseException:\n"
+     "        pass\n",
+     True),
+    ("a NESTED function's except must not condemn a good outer claim",
+     "def f():\n"
+     "    # set first so the finally can name it either way\n"
+     "    fd = None\n"
+     "    def helper():\n"
+     "        try:\n"
+     "            pass\n"
+     "        except BaseException:\n"
+     "            pass\n"
+     "    try:\n"
+     "        fd = acquire()\n"
+     "    finally:\n"
+     "        close(fd)\n",
+     False),
     ("a `#` line inside a string is not a comment",
      "def f():\n"
      "    doc = '''\n"
@@ -12685,33 +12742,72 @@ def test_the_count_predicate_rejects_a_wrong_number() -> None:
      "    return doc\n",
      False),
 ])
-def test_the_finally_predicate_binds_the_block_the_comment_introduces(
-        label: str, source: str, must_flag: bool) -> None:
-    """CONTROL: the arm passes by finding nothing, and the first version of this predicate found
-    nothing for the wrong reason in BOTH directions — it accepted an unrelated outer finally and
-    rejected the correct pre-try placement (team review, gate 63). Each case here is one of those
-    directions, run through the predicate the arm itself calls."""
-    flagged = bool(unsupported_finally_claims(source))
-    assert flagged == must_flag, (
-        "CONTROL (%s): the predicate %s this source, and the arm is exactly this predicate."
-        % (label, "flagged" if flagged else "accepted"))
+def test_the_finally_checker_binds_the_block_the_comment_introduces(
+        label: str, source: str, must_raise: bool) -> None:
+    """CONTROL: the arm passes by finding nothing, and this predicate has now been wrong in three
+    distinct ways — an enclosing-range test that accepted an unrelated outer finally and rejected
+    the correct pre-try placement (gate 63), and an `ast.walk` that descended into nested functions
+    in both directions (gate 64). Each case here is one of those, driven through the checker the
+    arm calls."""
+    try:
+        check_no_unsupported_finally_claim(source)
+    except AssertionError:
+        raised = True
+    else:
+        raised = False
+    assert raised == must_raise, (
+        "CONTROL (%s): check_no_unsupported_finally_claim %s this source, and the arm is exactly "
+        "this call." % (label, "flagged" if raised else "accepted"))
 
 
-# GROUP 95 — the sixty-eighth round. A COMMIT HASH CITED IN PROSE IS A CLAIM THAT A READER CAN
-# CHECK, and one of them had been false for some time before anyone did. This module and its
-# documents cite the commit that settled a thing — `(team review, df87c71)` — dozens of times. One
-# of those, in `guard/README.md`, named a commit that is on no branch: an earlier instance of a
-# repair that was later rebased away, so `git show` on it fails for every reader who clones. It
-# would have shipped that way. Nothing checked, which is this round's theme exactly.
+def test_the_repaired_arms_still_call_their_checkers() -> None:
+    """CONTROL, and the only layer that can see this: a control cannot notice that another TEST
+    stopped testing. A reviewer replaced both arms above with `return` and every control stayed
+    green, twice, because the controls drive the checkers directly (team review, gates 63 and 64).
+    This reads this file's own AST and requires each arm to still call the checker it is named for.
+
+    It is a structural claim, not a behavioural one. An arm that calls its checker with the wrong
+    argument passes this and fails nothing, so this is a tripwire against deletion, not a proof of
+    correctness — which is the whole of what it says."""
+    tree = ast.parse(Path(__file__).read_text(encoding="utf8"))
+    required = {
+        "test_a_count_in_the_coverage_sentence_matches_what_the_module_has": "check_coverage_count",
+        "test_no_comment_names_a_finally_its_own_block_does_not_have":
+            "check_no_unsupported_finally_claim",
+    }
+    missing = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name in required:
+            called = {c.func.id for c in ast.walk(node)
+                      if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+            if required[node.name] not in called:
+                missing.append("%s no longer calls %s" % (node.name, required[node.name]))
+            required.pop(node.name)
+    for name, checker in required.items():
+        missing.append("%s is gone from this file entirely (it called %s)" % (name, checker))
+    assert not missing, (
+        "CONTROL: %s. An arm reduced to `return`, renamed, or deleted leaves every other control "
+        "in this group green, because they drive the checkers and not the arms. This is the layer "
+        "that sees it." % "; ".join(missing))
+
+
+# GROUP 95 — the sixty-eighth round, repaired at the sixty-ninth. A COMMIT HASH CITED IN PROSE IS A
+# CLAIM A READER CAN CHECK, and one of them had been false for some time before anyone did. This
+# module and its documents cite the commit that settled a thing — `(team review, df87c71)` — many
+# times over. One of those, in `guard/README.md`, named a commit on no branch: an earlier instance
+# of a repair later rebased away, so `git show` on it fails for every reader who clones.
 #
-# Nine more hashes stopped resolving on purpose when the publication gate forced the outgoing range
-# to be rewritten. Those are recorded in STAGING_README.md's mapping table, and THIS ARM IS WHAT
-# MAKES THAT TABLE LOAD-BEARING: a cited hash must either resolve in this repository's history or
-# appear in the table. A row removed from the table turns its citations red. A note nothing depends
-# on is a note that rots.
+# Nine more stopped resolving on purpose when the publication gate forced the outgoing range to be
+# rewritten. Those are recorded in STAGING_README.md's mapping table, and THIS IS WHAT MAKES THAT
+# TABLE LOAD-BEARING: a cited hash must resolve, or appear in the table. A row removed from the
+# table turns its citations red. A note nothing depends on is a note that rots.
+#
+# The first version hand-listed the files to read and left out the file carrying the most citations
+# of all — this one — so a dangling hash here generated no lookup and no failure. It also excused
+# every hash in the table's left column without ever asking whether the RIGHT column resolves,
+# which is the half a reader actually follows (team review, gate 64). The file set is derived from
+# what git tracks now, and both columns are checked.
 
-_CITING_FILES = ("README.md", "guard/README.md", "STAGING_README.md",
-                 "_tools/scan_gate.py", "guard/fd_ownership_check.py")
 _HASH = re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7}\b")
 
 
@@ -12722,67 +12818,115 @@ def cited_hashes(text: str):
     return sorted(set(_HASH.findall(text)))
 
 
-def rewritten_hashes(staging_readme: str):
-    """The 'cited as' column of the mapping table, which records hashes deliberately made
-    unresolvable by the pre-publication rewrite."""
-    rows = re.findall(r"^\|\s*`([0-9a-f]{7})`\s*\|\s*`([0-9a-f]{7})`\s*\|\s*$",
+def hash_mapping_rows(staging_readme: str):
+    """The mapping table as (retired, replacement) pairs. BOTH halves matter: the left column is
+    what excuses a citation from resolving, and the right column is where a reader is sent."""
+    return re.findall(r"^\|\s*`([0-9a-f]{7})`\s*\|\s*`([0-9a-f]{7})`\s*\|\s*$",
                       staging_readme, re.MULTILINE)
-    return {old for old, _new in rows}
+
+
+def _resolves(sha: str) -> bool:
+    return subprocess.run(["git", "-C", str(REPO), "merge-base", "--is-ancestor", sha, "HEAD"],
+                          capture_output=True).returncode == 0
+
+
+def citing_files():
+    """Every tracked text file that could carry a citation, from git rather than a hand-kept list.
+
+    The hand-kept list omitted this very file, which carries more hash citations than any other
+    (team review, gate 64). A list that must be remembered is a list that will be wrong."""
+    listed = subprocess.run(["git", "-C", str(REPO), "ls-files", "*.md", "*.py"],
+                            capture_output=True, text=True)
+    if listed.returncode != 0:
+        return []
+    return [rel for rel in listed.stdout.splitlines() if rel.strip()]
 
 
 def test_every_commit_hash_cited_in_prose_resolves_or_is_recorded() -> None:
     """REPAIRED: `guard/README.md` cited a commit on no branch, and the citation would have been
-    published as a reference a reader cannot follow. Each cited hash must resolve in this
-    repository, or be named in the mapping table as one the rewrite retired."""
-    import subprocess
+    published as a reference a reader cannot follow. Each cited hash must resolve here, or be named
+    in the mapping table as one the pre-publication rewrite retired."""
     if not (REPO / ".git").exists():
         pytest.skip("no git history here (an export, not a clone): a hash cannot be resolved, and "
                     "an arm that cannot resolve one must not report that they all resolved")
-    recorded = rewritten_hashes((REPO / "STAGING_README.md").read_text(encoding="utf8"))
+    files = citing_files()
+    assert files, ("REPAIRED: the file list came back empty, so this arm would pass by reading "
+                   "nothing at all.")
+    retired = {old for old, _new in hash_mapping_rows(
+        (REPO / "STAGING_README.md").read_text(encoding="utf8"))}
     dangling = []
-    for rel in _CITING_FILES:
+    for rel in files:
         path = REPO / rel
         if not path.is_file():
             continue
-        for h in cited_hashes(path.read_text(encoding="utf8")):
-            if h in recorded:
-                continue
-            found = subprocess.run(["git", "-C", str(REPO), "merge-base", "--is-ancestor", h, "HEAD"],
-                                   capture_output=True)
-            if found.returncode != 0:
+        try:
+            text = path.read_text(encoding="utf8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for h in cited_hashes(text):
+            if h not in retired and not _resolves(h):
                 dangling.append("%s cited in %s" % (h, rel))
     assert not dangling, (
         "REPAIRED: %d cited commit hash(es) resolve to nothing in this repository's history and "
-        "are not recorded in STAGING_README.md's mapping table, so a reader who follows them gets "
+        "are not recorded in STAGING_README.md's mapping table, so a reader who follows one gets "
         "an error:\n  %s\n"
         "Either the citation names the wrong commit — an earlier instance of a repair that was "
         "rebased away reads exactly like this — or the commit was retired by the pre-publication "
         "rewrite and belongs in that table."
-        % (len(dangling), "\n  ".join(dangling)))
+        % (len(dangling), "\n  ".join(sorted(set(dangling)))))
 
 
-def test_the_citation_predicate_can_tell_a_hash_from_a_word() -> None:
-    """CONTROL: the arm above passes by finding nothing, and it would find nothing just as quietly
-    if its reader matched nothing. These are what it must pick up and what it must leave alone."""
+def test_the_mapping_table_sends_readers_somewhere_that_exists() -> None:
+    """REPAIRED (team review, gate 64): the left column excused a citation from resolving and
+    nothing ever asked about the right column, which is the half a reader actually follows. A table
+    whose destinations are wrong is worse than no table: it answers the question incorrectly
+    instead of leaving it open."""
+    if not (REPO / ".git").exists():
+        pytest.skip("no git history here: a destination cannot be resolved")
+    rows = hash_mapping_rows((REPO / "STAGING_README.md").read_text(encoding="utf8"))
+    assert rows, ("REPAIRED: the mapping table has no rows, and every retired citation is then "
+                  "either dangling or excused by an empty set.")
+    broken = ["%s -> %s" % (old, new) for old, new in rows if not _resolves(new)]
+    assert not broken, (
+        "REPAIRED: %d mapping row(s) send a reader to a commit that does not resolve either: %s"
+        % (len(broken), "; ".join(broken)))
+
+
+def test_the_citation_readers_can_tell_a_hash_from_a_word() -> None:
+    """CONTROL: the arms above pass by finding nothing, and would find nothing just as quietly if
+    their readers matched nothing. These are what each must pick up and what each must leave."""
     assert cited_hashes("settled in (team review, df87c71) and again in a0dbe05.") == \
         ["a0dbe05", "df87c71"], "CONTROL: the reader did not find two plain citations."
-    assert cited_hashes("the decade1 of faceted deadbee options") == ["decade1"], (
-        "CONTROL: the reader must take a mixed-case-hex word and leave pure-letter words alone; "
-        "it returned %r." % cited_hashes("the decade1 of faceted deadbee options"))
+    # ASSEMBLED. Written as one literal, this fixture is itself a seven-character mixed-hex word
+    # sitting in a file the arm above reads, so the arm reported it as a dangling citation. The
+    # fixture for a reader of citations cannot be a citation.
+    word = "dec" + "ade1"
+    mixed = cited_hashes("the %s of faceted deadbee options" % word)
+    assert mixed == [word], (
+        "CONTROL: the reader must take a mixed hex word and leave pure-letter words alone; it "
+        "returned %r." % mixed)
     digest = "8ef682915feb0ad7acae802f2e8e3ca71ba94eae87a5da4ca1266b01dbc1b4d4"
     assert cited_hashes("sha256=" + digest) == [], (
         "CONTROL: a 64-character digest was read as citations; every fixture digest in this suite "
         "would then be checked against git history.")
-
-
-def test_the_mapping_table_reader_finds_the_rows() -> None:
-    """CONTROL: if the table reader returned nothing, every retired hash would be reported dangling
-    and the arm above would be red for the wrong reason; if it matched too loosely, a hash could be
-    excused by prose that is not a row. It is read from the shipped file, not from a fixture."""
-    recorded = rewritten_hashes((REPO / "STAGING_README.md").read_text(encoding="utf8"))
-    assert len(recorded) == 9, (
-        "CONTROL: the mapping table reader found %d row(s); the rewrite retired nine hashes and "
-        "the table is what excuses them." % len(recorded))
-    assert not rewritten_hashes("a sentence mentioning `df87c71` and `a0dbe05` in prose"), (
+    assert not hash_mapping_rows("a sentence mentioning `df87c71` and `a0dbe05` in prose"), (
         "CONTROL: the table reader accepted prose as a row, so any hash named anywhere in that "
         "file would be excused from resolving.")
+    assert hash_mapping_rows("| `df87c71` | `a0dbe05` |\n") == [("df87c71", "a0dbe05")], (
+        "CONTROL: the table reader did not read a well-formed row, so every retired hash would be "
+        "reported dangling and the arm above would be red for the wrong reason.")
+
+
+def test_the_citation_arm_reads_this_file_too() -> None:
+    """CONTROL: the hand-kept file list left this module out, and a reviewer planted an unresolved
+    citation here that produced no lookup at all (team review, gate 64). The set is derived from
+    git now; this requires the file carrying the most citations to be in it."""
+    if not (REPO / ".git").exists():
+        pytest.skip("no git history here: the tracked file list comes from git")
+    files = citing_files()
+    here = str(Path(__file__).resolve().relative_to(REPO))
+    assert here in files, (
+        "CONTROL: %s is not in the set of files the citation arm reads, so a dangling hash in it "
+        "would never be looked up." % here)
+    assert "guard/README.md" in files and "STAGING_README.md" in files, (
+        "CONTROL: the derived file set is missing a document known to carry citations.")
