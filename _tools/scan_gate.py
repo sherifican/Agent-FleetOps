@@ -237,8 +237,27 @@ def scan(staging: str):
                 if oid is not None:
                     raw = _git(staging, ["cat-file", "blob", oid], "unreadable-blob", rel)
                 else:
-                    with open(os.path.join(staging, rel), "rb") as f:
-                        raw = f.read()
+                    # O_NONBLOCK, AND THE TYPE ASKED OF THE DESCRIPTOR. This was a plain blocking
+                    # open of a path in the UNTRUSTED tree, so a FIFO planted anywhere under the
+                    # staging directory made the scan itself wait for a writer, forever — measured
+                    # here as a run that never returns while the same tree with a regular file in
+                    # that place answers in well under a second (guarantee inventory, 3adf105).
+                    # Every OTHER open in this module had already been given the flag; the one on
+                    # the most attacker-reachable surface in the tool had not, and the README's
+                    # blocking statement was scoped to the refusal path, so nothing said the scan
+                    # could hang. A non-regular entry carries no publishable content — git stores
+                    # none — and is skipped rather than refused, which is the same direction the
+                    # walk already takes for a directory. The type is read from the DESCRIPTOR, so
+                    # a swap between the lookup and the open cannot change the answer.
+                    _in_fd = os.open(os.path.join(staging, rel),
+                                     os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+                    try:
+                        if not stat.S_ISREG(os.fstat(_in_fd).st_mode):
+                            continue
+                        with os.fdopen(_in_fd, "rb", closefd=False) as f:
+                            raw = f.read()
+                    finally:
+                        _close_quietly(_in_fd)
             except OSError:
                 raise ScanRefused(f"unreadable-input {rel!r}") from None
             lines = ((i, ln) for view in _text_views(raw, rel)
@@ -1322,12 +1341,29 @@ def _stage_report(dirfd, body, evidence=False):
                 # authorize degrading this run, the same rule `_staged_holds_evidence` is built on
                 # and the reason an unreadable stage is kept rather than deleted. Only a mode read
                 # and found wider refuses.
+                # WIDER MEANS GROUP OR OTHER, AND THIS TESTED INEQUALITY TO 0600. A stage that read
+                # back as 0400, 0200 or 0000 is NARROWER than owner-only and reachable by nobody
+                # else, and the inequality refused it anyway: the run lost its report file and the
+                # hit list went to the uncontrolled error stream instead, on a mode that was never
+                # a confidentiality failure (cold leg, 3adf105). The question this check exists to
+                # ask is whether anyone but the owner can reach the bytes.
                 try:
-                    _mode_is_wide = stat.S_IMODE(os.fstat(fd).st_mode) != _REPORT_MODE
+                    _mode_is_wide = (stat.S_IMODE(os.fstat(fd).st_mode) & 0o077) != 0
                 except OSError:
                     _mode_is_wide = False
                 if _mode_is_wide:
                     raise ScanRefused("report-mode-not-owner-only '_reports'")
+                # THE DENIED STRIP IS NOT REFUSED HERE, AND THE GATE ASKED WHY. A cold leg read the
+                # swallowed strip in `_narrow_leftover` and proposed refusing before the bytes land,
+                # the way `_install_posix_acl_policy` refuses afterwards. Four arms pin the opposite,
+                # and they are right: the staged name lives under this scanner's own temporary
+                # prefix, which promises nothing and claims nothing, so evidence written there with
+                # inherited entries still masked to nothing at 0600 is kept rather than destroyed —
+                # while no RESERVED or CANONICAL name is ever taken in that state. Refusing here
+                # would spend invariant A on a B the file already holds by placement (grok, 3adf105;
+                # adjudicated against, with `test_the_no_injection_control_retains_the_stage` and
+                # `test_a_retained_report_whose_policy_failed_is_not_presented_as_compliant` as the
+                # measurement).
             with os.fdopen(fd, "wb", closefd=False) as handle:
                 handle.write(body.encode("utf-8", "surrogateescape"))
         except BaseException:
@@ -1383,7 +1419,20 @@ def _stage_report(dirfd, body, evidence=False):
                         try:
                             _narrow_leftover(fd)
                         finally:
-                            _false_or_rescue(dirfd, name, fd)
+                            # THE ANSWER IS CARRIED OUT ON THE EXCEPTION. False here means the
+                            # staged name still reaches these bytes (the two other False arms are
+                            # a status line and a failed rescue, neither of which is kept findings),
+                            # so the caller's emission would be a second publication of hits that
+                            # are already on disk. The flag travels with the failure because this
+                            # descriptor never reaches the caller (cold leg, 3adf105).
+                            _diverged = _false_or_rescue(dirfd, name, fd)
+                            if not _diverged:
+                                try:
+                                    _inflight = sys.exc_info()[1]
+                                    if _inflight is not None:
+                                        _inflight._scan_findings_retained = True
+                                except BaseException:
+                                    pass
             finally:
                 _close_quietly(fd)        # under finally: a cancellation in the cleanup leaked it
             raise
@@ -1405,8 +1454,12 @@ def _emit_unwritten_findings(hits):
             return
         sys.stderr.write("scan_gate: the report could not be written; %d hit(s) follow\n" % len(hits))
         for rel, i, cls, name, _surface in hits[:40]:
-            # WHAT AND WHERE, NOT THE MATERIAL. The matched surface is the one field that IS the
-            # secret, and this stream is a descriptor the scanner did not choose, cannot inspect,
+            # WHAT AND WHERE, NOT THE MATERIAL. On this tree `scan()` fills the fifth field with
+            # which arm fired — "content" or "name" — not with the matched bytes, so dropping it
+            # buys no confidentiality by itself and the sentence that called it "the one field that
+            # IS the secret" was false here (cold leg, 3adf105). It is dropped because this line is
+            # the shape a future surface would travel on, and because this stream is a descriptor
+            # the scanner did not choose, cannot inspect,
             # cannot narrow and cannot name — and an adversary picks the moment it is used, by
             # deciding whether a report can be written at all. The class, the pattern name and the
             # path and line stop a publication just as hard and send the operator to the same
@@ -1415,6 +1468,14 @@ def _emit_unwritten_findings(hits):
             sys.stderr.write("%s\t%s\t%s:%d\n" % (cls, name, rel, i))
         if len(hits) > 40:
             sys.stderr.write("scan_gate: %d more hit(s) not shown\n" % (len(hits) - 40))
+    except (KeyboardInterrupt, SystemExit):
+        # A CANCELLATION IS NOT A FAILURE TO PRINT, and this swallowed it. `_write_refusal_report`
+        # states that boundary in its own docstring and does not catch these two; this function
+        # caught everything, so a SIGINT delivered while the hit list was being written vanished
+        # and the run continued under the original error (cold leg, 3adf105). Two functions whose
+        # shared contract is "do not displace the failure already on its way out" now have the
+        # same cancellation policy.
+        raise
     except BaseException:
         pass
 
@@ -1497,13 +1558,26 @@ def write_report(staging, hits):
         # applies to a buffered flush that fails with nothing yet in the kernel: the stage measures
         # empty and is removed, and what was in the buffer was this run's findings (cold leg,
         # 8c2ca89). Below this line a durable copy exists and the retention paths own it.
-        try:
-            fd, tmp_name = _stage_report(dirfd, body, evidence=bool(hits))
-        except BaseException:
-            _emit_unwritten_findings(hits)
-            raise
+        # THE ASSIGNMENTS COME FIRST, SO NOTHING STANDS BETWEEN THE STAGE AND ITS OWNER. These two
+        # sat between the emitting guard and the try whose handlers own the staged descriptor, and a
+        # cancellation delivered at either one left the stage on disk with nobody asking whether to
+        # quarantine it under a reserved name, and nothing on the error stream (cold leg, 3adf105).
+        # `_copy_out_unpublished` was given the same shape in round fifty-five for the same reason:
+        # moving the assignments up needs no new handler, because the try below already owns
+        # everything the stage call returns.
         _staged_ctime_ns = None           # unknown age until read: no reference stamp means no sweep
         _published = False                # flips the instant the replace lands: from then on the
+        try:
+            fd, tmp_name = _stage_report(dirfd, body, evidence=bool(hits))
+        except BaseException as _stage_exc:
+            # AND NOT WHEN THE STAGE KEPT THEM. `_stage_report`'s own cleanup retains a non-empty
+            # findings leftover and then re-raises; emitting here as well published the same hits
+            # twice, once to a file and once to a descriptor this process did not choose (cold leg,
+            # 3adf105). The emission is for findings that are NOWHERE, which is what its docstring
+            # has always said.
+            if not getattr(_stage_exc, "_scan_findings_retained", False):
+                _emit_unwritten_findings(hits)
+            raise
         try:                              # stage IS the report, and the handler must not copy it
             # Inside the ownership try, so a cancellation during this read still reaches the close
             # in the finally (invariant leg, 3c075f0).
@@ -1543,6 +1617,14 @@ def write_report(staging, hits):
             # and other. It narrows the window; it does not close it, and renameat would
             # otherwise publish a planted symlink under the canonical name.
             _held = os.fstat(fd)          # the held side first; the name lookup is the syscall before the rename
+            # AND THE MODE IS ALREADY IN HAND. The identity fields of this stat decided the rename
+            # and `st_mode` went unread, so a report whose mode had been widened after the verified
+            # policy install was published anyway and REPORTED as a publication — the one thing the
+            # exit status is not allowed to be wrong about (cold leg, 3adf105). Read, not inferred:
+            # a mode this stat could not carry is not a wide mode, and this stat either succeeded
+            # or the rename never happens.
+            if (stat.S_IMODE(_held.st_mode) & 0o077) != 0:
+                raise ScanRefused("report-mode-not-owner-only '_reports/scan_report.txt'")
             _named = os.lstat(tmp_name, dir_fd=dirfd)
             if (_named.st_dev, _named.st_ino) != (_held.st_dev, _held.st_ino):
                 raise ScanRefused("report-path-unsafe '_reports/scan_report.txt'")
@@ -1700,7 +1782,28 @@ def write_report(staging, hits):
                         _false_or_rescue(dirfd, tmp_name, fd)
             raise
         finally:
-            _close_quietly(fd)
+            # NOWHERE ON DISK IS THE QUESTION — NOT WHICH RETENTION PATH ANSWERED. Every post-stage
+            # failure trusted quarantine, the kept stage and `_false_or_rescue` to place the bytes,
+            # and `_false_or_rescue`'s answer was discarded because it is not usable as one: False
+            # means "still at its name" on one arm and "the rescue could not copy" on another. So
+            # the interleaving where the staged name had diverged AND the copy-out could not be
+            # made reached this close as the last reference — nothing on disk, nothing on the
+            # stream, and a refusal line carrying no hits (cold leg, 3adf105). The descriptor
+            # answers the real question directly, the same instrument
+            # `_remove_stage_if_another_name_remains` re-reads after its unlink: a link count of
+            # zero means this close frees them. A count that cannot be read is treated as zero —
+            # emitting costs a duplicate on an already-failing run, staying silent costs the
+            # findings, and A outranks that duplicate.
+            try:
+                if hits and not _published:
+                    try:
+                        _nameless = os.fstat(fd).st_nlink == 0
+                    except OSError:
+                        _nameless = True
+                    if _nameless:
+                        _emit_unwritten_findings(hits)
+            finally:
+                _close_quietly(fd)   # one question and one close, on every exit of this block
     finally:
         _close_quietly(dirfd)
 
@@ -2252,8 +2355,19 @@ def _cfd_still_ours(fd, expect):
     """
     try:
         st = os.fstat(fd)
-    except OSError:
-        return False
+    except OSError as exc:
+        if getattr(exc, "errno", None) == errno.EBADF:
+            return False          # nothing is open on this number: nothing to rescue, nothing to close
+        # CANNOT TELL IS NOT ALREADY CLOSED, AND THIS ONE COLLAPSED THEM. Every OSError answered
+        # False, so an fstat that failed with EIO or EACCES on a descriptor that was still open —
+        # and, with both names already taken, was the LAST reference to a findings inode — took
+        # neither branch: no rescue, no close, and the bytes died at process exit. That is the
+        # process-exit loss the comments on both of these handlers say they exist to prevent
+        # (cold leg, 3adf105). The rest of this file answers the same question the other way:
+        # `_staged_holds_evidence` keeps on an unreadable stat, `_rescue_before_close` treats one
+        # as nameless and copies out, `_open_held_copy` rescues on a failed identity read. Acting
+        # costs a duplicate; not acting costs the findings.
+        return True
     return (st.st_dev, st.st_ino) == (expect.st_dev, expect.st_ino)
 
 
@@ -2315,9 +2429,16 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         return True                       # not a regular file; not ours to preserve
 
     linked = None
-    # THE SAME INODE NEVER TAKES A SECOND SLOT FROM ONE RUN. (Two runs preserving the same
-    # report at once can each take one — the concurrent same-UID writer limit; capacity, not
-    # findings.) The link loop below takes the first FREE name,
+    # THE SAME INODE NEVER TAKES A SECOND SLOT FROM ONE RUN — EXCEPT OVER A SLOT THIS SCAN
+    # CANNOT READ. (Two runs preserving the same report at once can each take one — the
+    # concurrent same-UID writer limit; capacity, not findings.) The scan below skips a
+    # candidate whose lstat fails, so a slot that IS this inode but answers EIO or EACCES
+    # leaves `linked` None and the link loop then takes a fresh name: one inode, two reserved
+    # names (grok, 3adf105). Both alternatives are worse and were weighed — treating an
+    # unreadable slot as a match would reuse a name that may hold someone else's inode, and
+    # declining to preserve at all would spend the previous report's findings to save a slot.
+    # The cost here is capacity, which the README already calls finite, and the sentence above
+    # used to claim a rule this loop does not hold. The link loop below takes the first FREE name,
     # and the "already preserved" scan ran only when no name was free — so every refusal over a
     # report whose policy could not be installed (a denied strip; no xattr API at all) linked
     # the same inode into a fresh slot, and eight refusals of one report exhausted the capacity
@@ -2395,7 +2516,13 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             pass
     finally:
         if _cfd is not None and _cfd_still_ours(_cfd, previous):
-            # ONE QUESTION AND ONE CLOSE, ON EVERY EXIT OF THIS BLOCK. A confirmed link is not a
+            # ONE QUESTION AND ONE CLOSE, ON EVERY EXIT OF THIS BLOCK — where "one close" means
+            # the descriptor does not outlive this handler, not that a close syscall always runs.
+            # A cold leg read the guard as leaving zero closes on a False answer; the only False
+            # answer with a descriptor still open behind it was the unreadable-fstat one, and that
+            # arm now acts (see `_cfd_still_ours`). What remains False is EBADF and a reused
+            # number: nothing of ours is open, and closing would take someone else's descriptor.
+            # A confirmed link is not a
             # name that will still be there at the close — both names could be taken between the
             # confirmation and this close, and the close freed the previous report's findings
             # (cold leg, 884e6c2) — and with NO slot the question used to be asked by a helper
@@ -2962,7 +3089,15 @@ def self_test():
         # so the self-test stays red-capable for any user's terms (a fresh-clone run with a
         # different terms file exposed the hardcoded version as unable to fail)
         # Plant the literal term, not its escaped regex representation.
-        first_term = _load_identity_terms()[0]
+        _terms = _load_identity_terms()
+        if not _terms:
+            # A COMMENTS-ONLY TERMS FILE IS LEGAL, and this indexed it. `_identity_terms` compiles
+            # such a file to a never-matching pattern, so the loader answers an empty list and
+            # `--self-test` died with an IndexError traceback instead of this module's own refusal
+            # (cold leg, 3adf105). The self-test plants a term it draws from that file; with no
+            # term there is nothing to plant and the red-capable arm cannot run.
+            raise ScanRefused("self-test-no-identity-terms")
+        first_term = _terms[0]
         open(os.path.join(tmp, "skills", "m2.md"), "w").write(
             f"ask {first_term} about it\n")
         # MUTATION 3: the NAME arm. A clean-bodied file whose NAME carries the same identity

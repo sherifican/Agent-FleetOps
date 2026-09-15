@@ -9924,3 +9924,503 @@ def test_a_failure_after_the_stage_does_not_emit(tmp_path: Path) -> None:
     assert "hit(s)" not in err, (
         f"PINNED: a failure AFTER the stage printed findings to the error stream; the bytes were already "
         f"on disk under a name this scanner controls (stderr was {err!r})")
+# GROUP 69 — the sixty-first round. `_cfd_still_ours` reads EVERY OSError from its identity
+# fstat as "not ours". Both of preservation's cleanup handlers are gated on it, so an EIO or an
+# EACCES on a descriptor that is STILL OPEN and is the last reference to a findings inode
+# disarms the handler completely: no rescue, no close, and the findings are freed at process
+# exit with nothing standing behind them.
+# =============================================================================================
+
+
+def test_a_cleanup_acts_when_the_identity_question_cannot_be_answered(tmp_path: Path) -> None:
+    """REPAIRED: EBADF is an ANSWER — the callee closed it, and there is nothing to do. EIO and
+    EACCES are not answers: the descriptor may still be open on the recorded inode, and this
+    handler is the only thing left that can copy the bytes out before the close frees them. The
+    rule this file is built on — a question this code cannot answer never authorizes destruction —
+    has a second half here: it must not authorize INACTION either, because doing nothing over a
+    last reference is the destruction, arriving at process exit instead of at a close."""
+    module, reports = _preserve_arm_setup(tmp_path, "cfd_question_unanswerable",
+                                          "generic\tkey\tassignment\tdocs/W.md:1\n")
+    for slot in module._superseded_slot_names():
+        (reports / slot).write_text("other\tkey\tassignment\tdocs/O.md:1\n", encoding="utf-8")   # no slot free
+    real_strip, real_fstat = module._strip_acl_by_fd, module.os.fstat
+    acts: list[str] = []
+    asked: list[str] = []
+
+    def strip_hook(fd):
+        f1, f2 = sys._getframe(1), sys._getframe(2)
+        if f1.f_code.co_name == "_narrow_held_copy" and f2.f_code.co_name == "_preserve_superseded" and not acts:
+            acts.append("took")
+            _take(reports, {"scan_report.txt"})   # the held descriptor is the last reference now
+        return real_strip(fd)
+
+    def fstat_cannot_answer(f_, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_cfd_still_ours":
+            asked.append("eio")
+            raise OSError(errno.EIO, "injected: the identity question cannot be answered")
+        return real_fstat(f_, *a, **k)
+
+    before = _open_report_fds(reports)
+    module._strip_acl_by_fd, module.os.fstat = strip_hook, fstat_cannot_answer
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        answer = module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        module._strip_acl_by_fd, module.os.fstat = real_strip, real_fstat
+        os.close(dirfd)
+    if not acts or not asked:
+        pytest.skip("the narrowing or the cleanup question was never reached (acts=%s asked=%s); this "
+                    "arm measured nothing" % (acts, asked))
+    leaked = [f for f in _open_report_fds(reports) if f not in before]
+    assert _findings_anywhere(reports, "docs/W.md:1"), (
+        f"REPAIRED: the identity fstat failed with EIO, the handler read that as 'not ours', and the last "
+        f"reference to the findings was neither rescued nor closed (answer={answer}, leaked={leaked})")
+    assert not leaked, (
+        f"REPAIRED: the handler did nothing on a question it could not answer and leaked the descriptor to "
+        f"process exit ({leaked})")
+
+
+# =============================================================================================
+# GROUP 70 — the sixty-first round. Once a stage exists, write_report's post-stage handler never
+# calls `_emit_unwritten_findings`, and the answer `_quarantine_unpublished` and `_false_or_rescue`
+# return is DISCARDED. When the staged name has stopped reaching the findings inode AND the
+# copy-out declines, the close in the finally is the last reference: nothing on disk, nothing on
+# the error stream, and an exit status of 2 with no sign the tree held secrets.
+# =============================================================================================
+
+
+def test_a_retention_answer_of_false_after_the_stage_still_reaches_the_operator(tmp_path: Path) -> None:
+    """REPAIRED (the other half of the post-stage rule): "the bytes are on disk" is what makes the
+    emission unnecessary after a stage, and the retention path ANSWERS that question — False means
+    no custody was taken. The handler threw the answer away, so the one case where the bytes are
+    NOT on disk was indistinguishable from the ordinary one. The pin that a failure after the stage
+    stays quiet is unchanged: it is quiet because custody was TAKEN, not because a stage existed."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "retention_false_emits")
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_install, real_copy = module._install_posix_acl_policy, module._copy_out_unpublished
+    acts: list[str] = []
+    declines: list[int] = []
+
+    def install_fails(dirfd_, src_name, dst_fd, dst_name):
+        acts.append(dst_name)
+        decoy = reports / "decoy.txt"
+        decoy.write_text("not the findings\n", encoding="utf-8")
+        os.replace(str(decoy), str(reports / dst_name))   # the staged NAME reaches another inode
+        raise OSError(errno.EIO, "injected: the publish fails after the stage")
+
+    def copy_out_declines(dirfd_, fd_, depth=0):
+        declines.append(depth)
+        return False                       # the copy-out's stated limit: no name, or no readable source
+
+    hits = [("docs/H.md", 1, "SECRET", "generic_key_assignment", "k = '" + "AKIA" + "IOSFODNN7EXAMPLE" + "'")]
+    module._install_posix_acl_policy, module._copy_out_unpublished = install_fails, copy_out_declines
+    buf = io.StringIO()
+    real_stderr = sys.stderr
+    sys.stderr = buf
+    try:
+        try:
+            module.write_report(str(staging), hits)
+        except BaseException:
+            pass
+    finally:
+        sys.stderr = real_stderr
+        module._install_posix_acl_policy, module._copy_out_unpublished = real_install, real_copy
+    if not acts or len(declines) < 2:
+        pytest.skip("the diverged-stage retention path was not reached (acts=%s declines=%s); this arm "
+                    "measured nothing" % (acts, declines))
+    if _findings_anywhere(reports, "docs/H.md:1"):
+        pytest.skip("the findings survived on disk after all; this arm measured nothing")
+    err = buf.getvalue()
+    assert "docs/H.md:1" in err, (
+        f"REPAIRED: the retention path answered False, the close freed the only copy of the findings, and "
+        f"the discarded answer meant nothing reached the operator either (stderr was {err!r})")
+
+
+# =============================================================================================
+# GROUP 71 — the sixty-first round. Two plain assignments sit between the `except BaseException`
+# that emits for a stage that could not be made and the `try:` whose handlers own the staged
+# descriptor. A cancellation delivered at either one leaves the stage on disk with nobody asking
+# whether to quarantine it under a reserved name, and no emission.
+# =============================================================================================
+
+
+def test_no_statement_sits_between_the_stage_call_and_the_block_that_owns_its_descriptor(tmp_path: Path) -> None:
+    """REPAIRED: structural, for the reason the opener's-return and slot-descriptor arms already are —
+    the window is a statement boundary, and an injection aimed at it can only interrupt one of the
+    two handlers that bracket it, which measures the handler and not the gap. (This project discarded
+    a cancellation arm for exactly that.) `_staged_ctime_ns` and `_published` are initialised from
+    constants and depend on nothing the stage call produces, so they belong ABOVE it, where the
+    region that emits still covers them and the gap closes to zero statements."""
+    driver = make_tool(tmp_path)
+    tree = ast.parse(Path(driver).read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "write_report")
+
+    def _blocks(node):
+        for field in ("body", "orelse", "finalbody"):
+            seq = getattr(node, field, None)
+            if isinstance(seq, list) and seq and all(isinstance(s, ast.stmt) for s in seq):
+                yield seq
+        for handler in getattr(node, "handlers", []):
+            yield handler.body
+
+    def _calls_stage(stmts) -> bool:
+        return any(isinstance(c, ast.Call) and getattr(c.func, "id", "") == "_stage_report"
+                   for s in stmts for c in ast.walk(s))
+
+    def _stages(node) -> bool:
+        """The INNERMOST try whose own body makes the stage call — not every ancestor of it."""
+        if not isinstance(node, ast.Try) or not _calls_stage(node.body):
+            return False
+        for s in node.body:
+            for d in ast.walk(s):
+                if isinstance(d, ast.Try) and d is not node and _calls_stage(d.body):
+                    return False
+        return True
+
+    gaps = []
+    found = False
+    for node in ast.walk(fn):
+        for stmts in _blocks(node):
+            for i, s in enumerate(stmts):
+                if not _stages(s):
+                    continue
+                found = True
+                j = next((k for k in range(i + 1, len(stmts)) if isinstance(stmts[k], ast.Try)), None)
+                assert j is not None, "nothing owns the staged descriptor after the stage call"
+                gaps.append([type(g).__name__ for g in stmts[i + 1:j]])
+    assert found, "write_report no longer calls _stage_report inside a guarded block"
+    assert all(not g for g in gaps), (
+        "REPAIRED: %s statement(s) sit between the stage call's emitting handler and the block whose "
+        "handlers own the staged descriptor (%s); a cancellation there leaves the stage on disk with "
+        "nobody asking whether to quarantine it, and nothing on the error stream" % (
+            sum(len(g) for g in gaps), gaps))
+
+
+# =============================================================================================
+# GROUP 72 — the sixty-first round. `_stage_report`'s pre-write check tests the staged mode with
+# `!= 0o600`, an inequality rather than a wideness test. A stage that reads back NARROWER than
+# owner-only — 0400, 0200, 0000 — is refused, which destroys this run's report file and pushes
+# the whole hit list onto the uncontrolled error stream.
+# =============================================================================================
+
+
+def test_a_stage_narrower_than_owner_only_still_takes_the_findings(tmp_path: Path) -> None:
+    """REPAIRED: the rule the comment states is "only a mode read and found WIDER refuses". 0400 is
+    not wider than 0600 — it grants strictly less — and refusing it costs the run its report while
+    sending the findings to a descriptor this tool did not choose and cannot narrow. The test is
+    `mode & 0o077`, which is what "group and other can reach this" actually asks."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "stage_narrower_than_owner_only")
+    reports = tmp_path / "staging" / "_reports"
+    reports.mkdir(parents=True)
+    real_fstat = module.os.fstat
+    reads: list = []
+
+    def fstat_reports_narrow(f_, *a, **k):
+        st = real_fstat(f_, *a, **k)
+        if sys._getframe(1).f_code.co_name == "_stage_report" and not reads:
+            reads.append(f_)
+
+            class _Narrow:
+                st_mode = (st.st_mode & ~0o777) | 0o400
+                st_size, st_dev, st_ino, st_nlink = st.st_size, st.st_dev, st.st_ino, st.st_nlink
+                st_ctime_ns = getattr(st, "st_ctime_ns", 0)
+            return _Narrow()
+        return st
+
+    body = "SECRET\tgeneric_key_assignment\tk\tdocs/H.md:1\n"
+    module.os.fstat = fstat_reports_narrow
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    fd = None
+    refused = None
+    try:
+        try:
+            fd, _name = module._stage_report(dirfd, body, evidence=True)
+        except BaseException as exc:
+            refused = exc
+    finally:
+        module.os.fstat = real_fstat
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        os.close(dirfd)
+    if not reads:
+        pytest.skip("the staged mode was never read; this arm measured nothing")
+    bodies = []
+    for leftover in reports.iterdir():
+        if leftover.name.startswith(".scan_report_"):
+            try:
+                bodies.append(leftover.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                pass
+    assert refused is None and any("docs/H.md:1" in b for b in bodies), (
+        f"REPAIRED: a stage that read back at 0400 — narrower than owner-only, not wider — was refused "
+        f"({refused!r}); the report was destroyed and the hit list is left with nowhere to go but the "
+        f"error stream (leftover bodies {bodies!r})")
+
+
+# =============================================================================================
+# GROUP 73 WAS NOT PORTED. It was written, proven RED on the parent and proven satisfiable, and
+# then adjudicated against: it pins a refusal to write findings into a stage whose POSIX ACL strip
+# was DENIED. Implementing that refusal turns four arms red —
+# `test_the_no_injection_control_retains_the_stage`,
+# `test_a_retained_report_whose_policy_failed_is_not_presented_as_compliant`,
+# `test_an_unreadable_stage_is_kept_rather_than_deleted` and
+# `test_a_cancellation_inside_the_callers_kept_stage_narrowing_still_rescues` — each of which
+# carries a CONTROL or REPAIRED marker bought by a past failure, and each of which is right. This
+# file already holds that narrowness by PLACEMENT rather than by refusal: the bytes sit under the
+# scanner's own temporary prefix, which promises nothing and claims nothing, and no reserved or
+# canonical name is ever taken while the strip is denied. Porting GROUP 73 would have spent
+# findings-never-lost to buy a guarantee the module already has. The reviewer's finding was real;
+# the fix it implied was not the one to make.
+# GROUP 74 — the sixty-first round. `_emit_unwritten_findings` ends in `except BaseException:
+# pass`, so a KeyboardInterrupt or a SystemExit delivered while it writes is SWALLOWED. Its
+# sibling `_write_refusal_report` documents the opposite policy in its own docstring — "a
+# cancellation is not a refusal to report".
+# =============================================================================================
+
+
+@pytest.mark.parametrize("cancellation", [KeyboardInterrupt, SystemExit])
+def test_the_emission_does_not_swallow_a_cancellation(tmp_path: Path, cancellation) -> None:
+    """REPAIRED: "never raises" is about not DISPLACING the exception already on its way out — an
+    OSError on the error stream must not become the failure the operator sees. A cancellation is a
+    different thing: swallowing it turns an interrupt into a silently-continued run, which is the
+    one behaviour the sibling writer's docstring already forbids in this file."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "emission_cancellation_" + cancellation.__name__)
+
+    class _Interrupting(io.StringIO):
+        def write(self, s):
+            raise cancellation("injected: the operator interrupts the emission")
+
+    hits = [("docs/H.md", 1, "SECRET", "generic_key_assignment", "k"),
+            ("docs/J.md", 7, "PERSONAL", "email_address", "someone@example.test")]
+    real_stderr = sys.stderr
+    sys.stderr = _Interrupting()
+    try:
+        with pytest.raises(cancellation):
+            module._emit_unwritten_findings(hits)
+    finally:
+        sys.stderr = real_stderr
+
+
+# =============================================================================================
+# GROUP 75 — the sixty-first round. write_report takes `_held = os.fstat(fd)` immediately before
+# the rename and never consults `_held.st_mode`; only identity is checked, and only after the
+# rename. So this scanner can report a successful publication of an inode that was not 0600 at
+# the instant it landed at the canonical name.
+# =============================================================================================
+
+
+def test_a_publication_is_refused_when_the_held_inode_is_not_owner_only(tmp_path: Path) -> None:
+    """REPAIRED: the descriptor is already in hand one syscall before the rename, and its mode is the
+    single number the whole policy reduces to. The installer's own verify happens earlier and through
+    a different call; reading the mode off the stat that is ALREADY taken for identity costs nothing
+    and is the last moment at which a wide inode can be stopped from becoming the report."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "held_mode_before_replace")
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_fstat = module.os.fstat
+    reads: list = []
+
+    def fstat_reports_group_readable(f_, *a, **k):
+        st = real_fstat(f_, *a, **k)
+        if sys._getframe(1).f_code.co_name == "write_report":
+            reads.append(f_)
+            if len(reads) == 2:            # the first is the sweep's reference stamp; this is `_held`
+                class _Wide:
+                    st_mode = (st.st_mode & ~0o777) | 0o640
+                    st_size, st_dev, st_ino, st_nlink = st.st_size, st.st_dev, st.st_ino, st.st_nlink
+                    st_ctime_ns = getattr(st, "st_ctime_ns", 0)
+                return _Wide()
+        return st
+
+    hits = [("docs/H.md", 1, "SECRET", "generic_key_assignment", "k = '" + "AKIA" + "IOSFODNN7EXAMPLE" + "'")]
+    module.os.fstat = fstat_reports_group_readable
+    raised = None
+    try:
+        try:
+            module.write_report(str(staging), hits)
+        except BaseException as exc:
+            raised = exc
+    finally:
+        module.os.fstat = real_fstat
+    if len(reads) < 2:
+        pytest.skip("the held-side stat before the rename was never reached (reads=%d); this arm "
+                    "measured nothing" % len(reads))
+    published = reports / "scan_report.txt"
+    assert not published.exists() and raised is not None, (
+        f"REPAIRED: the held inode read as group-readable at the instant before the rename and the run "
+        f"published it anyway, then reported success (raised={raised!r}); `_held.st_mode` has no reader")
+
+
+# =============================================================================================
+# GROUP 76 — the sixty-first round. The emission is keyed on an EXCEPTION rather than on whether
+# the bytes landed. `_stage_report` has a path that KEEPS a non-empty findings leftover and then
+# raises; the region above it then also prints the whole hit list to the error stream, so the
+# same findings are published twice — once to a file this scanner controls, once to a descriptor
+# it did not choose and cannot narrow.
+# =============================================================================================
+
+
+def test_a_kept_partial_stage_does_not_also_put_the_findings_on_the_error_stream(tmp_path: Path) -> None:
+    """PINNED: the rule the post-stage silence already states, applied one frame lower. `_stage_report`'s
+    own handler exists to KEEP a partial findings body — the gate fault-injected an EFBIG partway
+    through one — and it re-raises afterwards, so the exception says nothing about whether bytes
+    landed. The answer is a fact the handler holds and the caller does not; the emission belongs
+    behind it, not behind "an exception came out of the stage call"."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "kept_partial_stage_quiet")
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_fdopen = module.os.fdopen
+    partials: list = []
+
+    class _PartialHandle:
+        def __init__(self, fd):
+            self.fd = fd
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def write(self, data):
+            half = data[:len(data) // 2] or data[:1]
+            os.write(self.fd, half)        # bytes reach the disk, and then the write fails
+            partials.append(len(half))
+            raise OSError(errno.EFBIG, "injected: the body did not fit")
+
+    def fdopen_partial(fd, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_stage_report":
+            return _PartialHandle(fd)
+        return real_fdopen(fd, *a, **k)
+
+    hits = [("docs/A.md", 1, "SECRET", "generic_key_assignment", "k1"),
+            ("docs/B.md", 2, "SECRET", "generic_key_assignment", "k2"),
+            ("docs/C.md", 3, "SECRET", "generic_key_assignment", "k3"),
+            ("docs/D.md", 4, "SECRET", "generic_key_assignment", "k4")]
+    module.os.fdopen = fdopen_partial
+    buf = io.StringIO()
+    real_stderr = sys.stderr
+    sys.stderr = buf
+    try:
+        try:
+            module.write_report(str(staging), hits)
+        except BaseException:
+            pass
+    finally:
+        sys.stderr = real_stderr
+        module.os.fdopen = real_fdopen
+    if not partials:
+        pytest.skip("the staged body was never written; this arm measured nothing")
+    kept = [p for p in reports.iterdir()
+            if p.name.startswith(".scan_report_") and p.stat().st_size > 0]
+    if not kept:
+        pytest.skip("no non-empty leftover was kept; this arm measured nothing")
+    err = buf.getvalue()
+    assert "hit(s)" not in err, (
+        f"PINNED: a non-empty findings leftover was KEPT at {[p.name for p in kept]} and the hit list was "
+        f"printed to the error stream as well — the same findings published twice, the second time to a "
+        f"descriptor this tool did not choose (stderr was {err!r})")
+
+
+# =============================================================================================
+# GROUP 77 — the sixty-first round. `self_test` does `_load_identity_terms()[0]`. A terms file
+# that is LEGAL but holds only comments loads to an empty list, so `--self-test` dies with an
+# IndexError traceback instead of this module's own refusal type — the one state the loader
+# already documents (`_identity_terms` carries the comment about it) and does not refuse.
+# =============================================================================================
+
+
+def test_a_comments_only_terms_file_refuses_rather_than_raising_indexerror(tmp_path: Path) -> None:
+    """REPAIRED: the missing-file case is a named ScanRefused with a five-line diagnostic; the
+    comments-only case is the same missing input arriving through a file that exists, and it is
+    already known to this module — `_identity_terms` compiles `(?!)` for it precisely because an
+    empty alternation once made every line a PERSONAL hit. The self-test's mutation-2 arm cannot be
+    built without a term, so it is the same refusal, not a traceback."""
+    tool = tmp_path / "tool_comments_only"
+    tool.mkdir()
+    driver = tool / "scan_gate.py"
+    shutil.copy(SCANNER, driver)
+    (tool / "identity_terms.txt").write_text(
+        "# every line here is a comment\n#\n#   and so is this one\n", encoding="utf8")
+    module = import_driver(driver, "self_test_comments_only")
+    assert module._load_identity_terms() == [], "CONTROL: the fixture terms file must load empty"
+    raised = None
+    try:
+        module.self_test()
+    except BaseException as exc:
+        raised = exc
+    assert isinstance(raised, module.ScanRefused), (
+        f"REPAIRED: a legal comments-only terms file made --self-test die with {raised!r} instead of this "
+        f"module's own refusal type; an IndexError traceback exits 1, not the documented 2, and names no "
+        f"missing input")
+
+
+# GROUP 78 — the sixty-first round, from the guarantee inventory rather than from a review. The
+# module's "never blocks" invariant was verified all over the REFUSAL path — every open there
+# carries O_PATH, O_NONBLOCK, O_DIRECTORY or O_EXCL, and several rounds were spent putting them
+# there. The scan itself, which is the one part of this tool that reads the UNTRUSTED tree, used a
+# plain blocking `open(path, "rb")`. A FIFO planted anywhere under the staging directory therefore
+# made scan() wait for a writer and never return: the most attacker-reachable surface in the tool
+# was the one surface the invariant did not actually cover, and the README's blocking statement is
+# scoped to the refusal path, so nothing said otherwise. The arm is a real FIFO and a real timeout,
+# with a regular file in the same place as the control — a hang arm with no control cannot tell a
+# fixed scanner from a slow one.
+
+def test_the_scan_does_not_wait_for_a_writer_on_a_planted_fifo(tmp_path: Path) -> None:
+    driver = make_tool(tmp_path)
+    staging = make_staging(tmp_path)
+    (staging / "skills").mkdir(parents=True, exist_ok=True)
+    (staging / "skills" / "plain.md").write_text("nothing here\n", encoding="utf8")
+
+    runner = tmp_path / "run_scan.py"
+    runner.write_text(
+        "import importlib.util, sys\n"
+        "spec = importlib.util.spec_from_file_location('sg', %r)\n"
+        "m = importlib.util.module_from_spec(spec); sys.modules['sg'] = m\n"
+        "spec.loader.exec_module(m)\n"
+        "print('HITS', len(m.scan(%r)))\n" % (str(driver), str(staging)),
+        encoding="utf8")
+
+    def run_once() -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, str(runner)], capture_output=True, text=True,
+                              encoding="utf8", errors="replace", env=clean_env(tmp_path),
+                              timeout=30)
+
+    # CONTROL FIRST: a regular file in that place must return, or a later timeout proves nothing.
+    (staging / "skills" / "subject.md").write_text("ordinary\n", encoding="utf8")
+    control = run_once()
+    assert control.returncode == 0 and "HITS" in control.stdout, (
+        "CONTROL: the scan must complete on a tree of regular files, else the arm below cannot "
+        "distinguish a blocked scan from a broken one — got rc=%r stderr=%r"
+        % (control.returncode, control.stderr[-400:]))
+
+    (staging / "skills" / "subject.md").unlink()
+    os.mkfifo(staging / "skills" / "subject.md")
+    try:
+        armed = run_once()
+    except subprocess.TimeoutExpired:
+        raise AssertionError(
+            "REPAIRED: a FIFO planted in the scanned tree made scan() wait for a writer and the "
+            "run never returned. The scan's own open is the one this module left blocking.")
+    assert armed.returncode == 0 and "HITS" in armed.stdout, (
+        "the scan must complete with a non-regular entry in the tree, skipping it — got rc=%r "
+        "stderr=%r" % (armed.returncode, armed.stderr[-400:]))

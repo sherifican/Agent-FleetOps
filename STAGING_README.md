@@ -217,26 +217,38 @@ never a way to make the scanner destroy evidence.
 **Findings the scanner cannot write anywhere go to the ERROR STREAM instead.** Every failure
 before the report is staged — `_reports` is a symlink, a regular file or a FIFO; the directory
 cannot be created, hardened or held; the stage itself cannot be made, or the mode on it reads as
-wider than owner-only, which this scanner refuses to write findings into — happens while this
-run's findings exist only in memory. The
+reachable by group or other, which this scanner refuses to write findings into — happens while this
+run's findings exist only in memory. Wider means exactly that: a stage that reads back NARROWER than
+owner-only is not a confidentiality failure and is written to, where an earlier inequality to 0600
+refused it and cost the run its report file. The
 refusal writer that runs next receives the exception and never the hits, and under an unusable
 `_reports` it declines to write at all, so the operator used to get a path complaint and nothing
 else, beside an exit status of 2 and whatever was planted at the report name. Those runs now name
 the findings on the error stream — the class, the pattern and the path and line, capped at forty as
-the success path is. A run with no findings prints nothing. What that stream does NOT carry is the
-matched text itself. The successful run prints it, because that run completed and left an
-owner-only report beside it; this one is reached by failing, an adversary decides when it is
+the success path is. A run with no findings prints nothing. What that stream does NOT carry is the field naming which
+ARM fired. No matched text is carried anywhere by either stream, because none is captured: every hit
+this module builds fills that field with the literal "content" or "name", and values are never
+printed. This document used to describe the successful run as printing the matched material and the
+error stream as withholding it, and neither half was true; this one is reached by failing, an adversary decides when it is
 reached by making a report impossible to write, and the error stream is a descriptor this scanner
 did not choose, cannot inspect, cannot narrow and cannot name. What and where stops a publication
 just as hard and sends the operator to the same place. One consequence is deliberate: a write to
 the error stream can wait if that stream is a pipe nobody drains — the one place this tool will
 wait on a peer, chosen because dropping the findings to avoid waiting is the failure this
 paragraph exists to close. Once the report IS staged the bytes are on disk under a name the
-scanner controls, and a later failure retains them there rather than printing them.
+scanner controls, and a later failure retains them there rather than printing them — so a failure
+that KEEPS a non-empty leftover prints nothing, because the findings are not nowhere. The one
+exception is the case that motivated all of this: if every retention path has been tried and the
+held inode has no name left, the close about to happen is the last reference, and the findings are
+named on the error stream instead of dying silently. That question is asked of the descriptor
+itself, immediately before the close, and a link count that cannot be read counts as none — a
+duplicate on an already-failing run is cheaper than a loss.
 
 **"Never raises" means never raises an error. It does not mean uninterruptible, and "never
 blocks" is a bounded claim.** The refusal writer will not let its own failure displace the failure
-it was called to report. It does not catch `KeyboardInterrupt` or `SystemExit`, and it should not:
+it was called to report. The error-stream emission above now holds the same boundary, where it used
+to swallow a cancellation delivered mid-print along with everything else. It does not catch
+`KeyboardInterrupt` or `SystemExit`, and it should not:
 a cancellation is not a refusal to report, and swallowing one would be a different defect. The same holds for the rescues that run in cleanup: a cancellation inside the narrowing reaches the re-check, and a cancellation inside the re-check or the copy-out itself is the one interrupt no further code can stand behind — at that point the bytes are on disk only if a stage already holds them.
 The same shape applies to an error that is not an I/O error at all: a `MemoryError` or a
 `RecursionError` raised inside the copy-out's stream is not caught by its I/O handlers. It leaves
@@ -281,7 +293,10 @@ Two more things were measured after that paragraph was written, and both belong 
 scanner no longer links by name for an inode it HOLDS: every reserved name it creates from a held descriptor is made through the
 descriptor directory (`linkat` on `/proc/self/fd/N`, the documented unprivileged form), which
 attaches the inode the scanner holds or fails — it cannot attach something a writer put at the
-name in between. That closes the "reserved name holds a decoy" family for those names. The one link still made by name is preservation's first link of the canonical name into a slot, which is then re-opened and compared with the inode preservation recorded; a slot that is not that inode declines the whole operation. It does not close
+name in between. That closes the "reserved name holds a decoy" family for those names. No link by name remains anywhere in this module: the sentence that followed here described
+preservation's first link as the one exception, and at this commit that link is made from a held
+descriptor bound by identity, like every other. The closure below is therefore wider than it used to
+claim. What was preservation's first link of the canonical name into a slot, which is then re-opened and compared with the inode preservation recorded; a slot that is not that inode declines the whole operation. It does not close
 the replace: `os.replace` still acts on the canonical NAME. Review reproduced the gap that left:
 preserve report A, substitute a new findings report B at the canonical name while the refusal is
 being staged, and the refusal replaced B — a report the scanner never preserved. A guard for A
@@ -302,7 +317,12 @@ Also not a concurrency limit: **the access-policy guarantees are for POSIX-ACL f
 xattr API.** Where that API is absent the scanner cannot verify that a preserved copy carries no
 ACL, so it answers "not verified": a stale CLEAN is still replaced by a refusal, but a FINDINGS
 report is never replaced there — it is left standing, unnarrowed beyond its mode, which is the safe
-direction. One preservation slot is used per distinct report by any one run, never more; two runs preserving the same report at the same moment can each take one, which is the concurrent same-UID writer limit above — what that costs is slot capacity, never the findings.
+direction. One preservation slot is used per distinct report by any one run, never more — but a slot is not the
+same thing as a reserved NAME, and the bound is on slots. A preservation whose held descriptor has to
+be rescued sends those bytes through the same copy-out the staged paths use, which takes a name from
+the unpublished family. So a previous-generation report CAN appear under `scan_report.unpublished.*`,
+a family this document otherwise describes as holding only this run's staged findings, and one
+preservation can consume a name from each family for the same inode; two runs preserving the same report at the same moment can each take one, which is the concurrent same-UID writer limit above — what that costs is slot capacity, never the findings.
 
 **The by-descriptor rescue needs a descriptor directory and a creatable temporary name.** When a staged or held name has stopped naming the bytes the scanner holds, the last resort copies them out through `/proc/self/fd/N` (or `/dev/fd/N`) into a fresh temporary name. On a system with neither directory, or when no temporary name can be created, that copy cannot be made, the function says so by answering False, and the close that follows frees the descriptor's inode. That, and a source the descriptor cannot read back (a read or write error before the first byte lands), are the two cases in which bytes this scanner held are not on disk afterwards (the scanner's own stages are opened for reading, so a stage is read back from the descriptor it holds even when the reopen by mode is refused; a path-only descriptor still needs the reopen); they are stated here because two comments used to read as if the copy-out were unconditional, and this paragraph first said "the one case". The same directory is how the ACL strip reaches a held descriptor, so without it a kept leftover stays at mode 0600 with any inherited entries masked rather than removed, and quarantine takes no reserved name at all (an executed review measured both on a module with the directory unset). Preservation links through the same directory since round forty-six, so without it a stale FINDINGS report is not preserved and therefore not replaced. The access-policy install strips through it as well, so on a platform that has the xattr API but no descriptor directory no refusal lands at the canonical name at all — not even over a stale CLEAN — and the tree's report directory is left as it was found; the safe direction, at the cost of the refusal being visible only in the exit status. Where the xattr API is absent too there is nothing to strip, and a refusal still replaces a stale CLEAN there (gate 43 caught the previous sentence claiming otherwise).
 
@@ -335,10 +355,24 @@ clone but cannot pass from one — it is not a check a downstream user is expect
 Two scanners ship in this repo, and they do not have the same reach. guard/scrub_arm.py reads the
 bytes of each file (UTF-8, then UTF-16 in both byte orders when NUL bytes are present, then
 latin-1) and picks up the printable ASCII runs inside genuinely binary bytes; _tools/scan_gate.py
-opens each file decoded as UTF-8 with decode errors ignored and has no byte view at all, so a
-wide-encoded payload is invisible to it. On four of the five surfaces the two scanners agree:
+reads the same bytes and decodes them as UTF-8 with errors ignored, and ALSO as UTF-16 and UTF-32 in
+both byte orders — with a BOM, strictly, and without one at offset zero. A wide-encoded payload is
+NOT invisible to it: this document said it was, and a probe reported a UTF-16-LE-with-BOM key and a
+UTF-16-BE-no-BOM key alongside the plain control (guarantee inventory, 3adf105, re-measured here). On four of the five surfaces the two scanners agree:
 contents: covered; filenames and paths: covered by the name arm, as a separate case from
-contents; compressed payloads: NOT covered (bytes are read as stored); git history: NOT covered. They differ on binaries: covered for
-guard/scrub_arm.py, as the printable ASCII runs inside them, NOT covered for _tools/scan_gate.py.
+contents; compressed payloads: NOT covered (bytes are read as stored); git history: NOT covered. They differ on binaries only in how much is promised: guard/scrub_arm.py covers the printable ASCII
+runs inside them deliberately, and _tools/scan_gate.py covers them OPPORTUNISTICALLY — dropping
+invalid bytes keeps the ASCII runs, and a key embedded between NUL bytes in an ELF-shaped file was
+reported by it. What is not covered, and is the honest statement, is arbitrary extraction and
+embedded text at arbitrary offsets: a preceding byte that forms a valid UTF-8 lead can swallow the
+run that follows it. This document used to say "NOT covered", which sent an adopter to the other
+scanner for a surface this one already reaches.
+One more limit belongs with these, and it used to be a hang rather than a limit: an entry in the
+scanned tree that is not a regular file is opened without blocking, identified from the descriptor,
+and SKIPPED. Before that, a FIFO planted anywhere under the staging directory made the scan itself
+wait for a writer and never return — the blocking statement further up is about the refusal path and
+never covered the scan. Nothing publishable is lost by the skip, since a tree cannot carry such an
+entry as content.
+
 On git history neither scanner reaches: each scans one tree, so a value removed in a later commit
 is still published by the earlier one. ref_gate.py is the instrument for that surface.
