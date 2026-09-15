@@ -9198,3 +9198,180 @@ def test_the_staged_rescue_does_not_copy_a_status_line_to_a_reserved_name(tmp_pa
     assert not reserved, (
         f"REPAIRED: a staged status line was copied to a reserved name {reserved} — a file saying CLEAN "
         f"under a name that means retained evidence, beside an exit status of 2 (answer={answer})")
+
+
+# =============================================================================================
+# GROUP 65 — the fifty-seventh round. Gate 52's invariant leg on 212e683: quarantine's own
+# diverged arm calls the copy-out directly, so the status-line test the staged rescue had just
+# been given was bypassed at the one site that reaches it most often; and the copy-out's source
+# descriptor was acquired outside the block whose finally closes it.
+# =============================================================================================
+
+
+def test_quarantine_does_not_copy_a_staged_status_line_to_a_reserved_name(tmp_path: Path) -> None:
+    """REPAIRED (invariant leg, gate 52): quarantine's diverged arm reaches the copy-out without going
+    through the name-identity rescue, so the status-line test added there did not cover it. A staged
+    CLEAN or REFUSED whose name has diverged takes no reserved name by any route."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quarantine_status_line")
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here; the rescue cannot run")
+    reports = tmp_path / "staging" / "_reports"
+    reports.mkdir(parents=True)
+    stage = reports / ".scan_report_probe"
+    stage.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    fd = os.open(stage, os.O_RDWR)
+    decoy = reports / "decoy.txt"
+    decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    os.replace(decoy, stage)                       # the staged name reaches another inode now
+    real_holds = module._staged_holds_evidence
+    module._staged_holds_evidence = lambda f, h: True   # the conservative answer, as a failed fstat gives
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        answer = module._quarantine_unpublished(dirfd, ".scan_report_probe", fd,
+                                               [("docs/H.md", 1, "S", "generic_key_assignment", "c")])
+    finally:
+        module._staged_holds_evidence = real_holds
+        os.close(dirfd); os.close(fd)
+    reserved = [p.name for p in reports.iterdir() if p.name.startswith("scan_report.unpublished")]
+    assert not reserved, (
+        f"REPAIRED: quarantine copied a staged status line to a reserved name {reserved} — the namespace "
+        f"that means retained evidence, holding a file that says this tree passed (answer={answer})")
+
+
+def test_the_copy_outs_source_descriptor_is_acquired_inside_the_block_that_closes_it(tmp_path: Path) -> None:
+    """REPAIRED (invariant leg, gate 52): the source reopen sat above the try whose finally closes it,
+    so a cancellation in the gap leaked it to process exit. Structural, like the opener's return:
+    the window is a statement boundary no injection can address."""
+    driver = make_tool(tmp_path)
+    tree = ast.parse(Path(driver).read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_copy_out_unpublished")
+    closers = [t for t in ast.walk(fn) if isinstance(t, ast.Try)
+               and any(isinstance(c, ast.Expr) and isinstance(c.value, ast.Call)
+                       and getattr(c.value.func, "id", "") == "_close_quietly"
+                       and any(getattr(a, "id", "") == "src" for a in c.value.args)
+                       for c in ast.walk(t) if isinstance(c, ast.Expr))]
+    assert closers, "the copy-out no longer closes its source descriptor in a finally"
+    assigns = [a for a in ast.walk(fn) if isinstance(a, ast.Assign)
+               and any(getattr(t_, "id", "") == "src" for t_ in a.targets)
+               and isinstance(a.value, ast.Call) and getattr(a.value.func, "attr", "") == "open"]
+    assert assigns, "the copy-out no longer opens a source descriptor"
+    guarded = [a for a in assigns
+               if any(a in list(ast.walk(t)) for t in closers)
+               or any(a in list(ast.walk(t)) for t in ast.walk(fn)
+                      if isinstance(t, ast.Try)
+                      and any(isinstance(h.type, ast.Name) and h.type.id == "BaseException" for h in t.handlers))]
+    assert len(guarded) == len(assigns), (
+        "REPAIRED: the source descriptor is acquired outside every block that would close it; a "
+        "cancellation between the open and the owning try leaks it to process exit")
+
+
+def test_preservation_closes_the_classification_descriptor_for_a_status_line_too(tmp_path: Path) -> None:
+    """REPAIRED (executed review, gate 52): the classification's finally both ASKS and CLOSES, and it was
+    gated on the report not being a status line — so a CLEAN left the descriptor open. The question
+    already lets a status line go on its own; the close must not be conditional on the answer."""
+    module, reports = _preserve_arm_setup(tmp_path, "preserve_clean_classify_close", "scan_gate: CLEAN\n")
+    for slot in module._superseded_slot_names():
+        (reports / slot).write_text("other\tkey\tassignment\tdocs/O.md:1\n", encoding="utf-8")   # no slot free
+    before = _open_report_fds(reports)
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        answer = module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        os.close(dirfd)
+    leaked = [f for f in _open_report_fds(reports) if f not in before]
+    assert not leaked, (
+        f"REPAIRED: the classification left its descriptor open for a status line ({leaked}); the close "
+        f"was conditional on the classification's own answer (answer={answer})")
+
+
+def test_an_unreadable_status_line_is_repaired_before_it_is_classified(tmp_path: Path) -> None:
+    """REPAIRED (cold #1, gate 52): the last-reference question classified a path-only descriptor BEFORE
+    anyone repaired owner-read, so a CLEAN at mode 000 read as unreadable, fell to the findings side,
+    and the copy-out — which does repair owner-read — copied `scan_gate: CLEAN` into the namespace that
+    means retained evidence. The repair happens first, so the classification reads what is there."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "unreadable_status_line")
+    if module._PROC_FD_DIR is None or not getattr(os, "O_PATH", 0):
+        pytest.skip("no descriptor directory or no O_PATH here")
+    reports = tmp_path / "staging" / "_reports"
+    reports.mkdir(parents=True)
+    victim = reports / "scan_report.txt"
+    victim.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    os.chmod(victim, 0o000)
+    fd = os.open(victim, os.O_PATH)
+    os.unlink(victim)                                  # the descriptor is the last reference now
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._rescue_before_close(dirfd, fd, True)
+    finally:
+        os.close(dirfd); os.close(fd)
+    reserved = [p.name for p in reports.iterdir() if p.name.startswith("scan_report.unpublished")]
+    assert not reserved, (
+        f"REPAIRED: an unreadable status line was classified as findings and copied to a reserved name "
+        f"{reserved}; the copy-out repaired owner-read that the classification never tried")
+
+
+def test_the_opener_asks_before_closing_when_the_identity_read_itself_fails(tmp_path: Path) -> None:
+    """REPAIRED (cold #3, gate 52): an identity read that FAILED closed the descriptor without asking. A
+    question this code cannot answer never authorizes destruction — the same rule the staged-evidence
+    helper is built on — so the last-reference question runs there too, at worst a duplicate."""
+    module, reports = _preserve_arm_setup(tmp_path, "opener_identity_eio", "generic\tkey\tassignment\tdocs/W.md:1\n")
+    expect = os.lstat(reports / "scan_report.txt")
+    real_fstat = module.os.fstat
+    acts: list[str] = []
+
+    def fstat_hook(f_, *a, **k):
+        if sys._getframe(1).f_code.co_name == "_open_held_copy" and not acts:
+            acts.append("took+eio")
+            _take(reports, {"scan_report.txt"})        # the only name goes, then the read fails
+            raise OSError(errno.EIO, "injected: the identity read fails")
+        return real_fstat(f_, *a, **k)
+
+    module.os.fstat = fstat_hook
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        got, _via = module._open_held_copy(dirfd, "scan_report.txt", expect)
+    finally:
+        module.os.fstat = real_fstat
+        os.close(dirfd)
+        if got is not None:
+            os.close(got)
+    if not acts:
+        pytest.skip("the opener's identity read was never reached; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/W.md:1"), (
+        "REPAIRED: the identity read failed and the close ran unasked while that descriptor was the "
+        "last reference; the previous report's findings are gone")
+
+
+def test_a_status_line_is_never_left_parked_in_a_superseded_slot(tmp_path: Path) -> None:
+    """REPAIRED (inventory, gate 52): the slot is linked before the report is classified, and the release
+    of a status line's slot was refused whenever that slot had become the only name — the trade round
+    twenty-six refused for EVIDENCE. A status line is not evidence, and a stale CLEAN under a reserved
+    name beside an exit status of two is the very thing the reserved namespace must not say."""
+    module, reports = _preserve_arm_setup(tmp_path, "status_line_parked", "scan_gate: CLEAN\n")
+    real_prefix = module._read_prefix_held
+    acts: list[str] = []
+
+    def prefix_hook(fd, via_proc, count):
+        r = real_prefix(fd, via_proc, count)
+        if not acts:
+            acts.append("took"); _take(reports, {"scan_report.txt"})   # the slot becomes the only name
+        return r
+
+    module._read_prefix_held = prefix_hook
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        answer = module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        module._read_prefix_held = real_prefix
+        os.close(dirfd)
+    if not acts:
+        pytest.skip("the classification read was never reached; this arm measured nothing")
+    parked = [p.name for p in reports.iterdir()
+              if p.name.startswith("scan_report.superseded")
+              and p.read_bytes().startswith(b"scan_gate: ")]
+    assert not parked, (
+        f"REPAIRED: a status line is parked in a reserved slot {parked}; it says this tree passed, under "
+        f"a name that means retained evidence, beside an exit status of two (answer={answer})")

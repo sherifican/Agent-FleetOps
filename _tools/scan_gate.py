@@ -608,11 +608,20 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
     file's identity — but it carries the findings, and the alternative measured by review is that
     the next close frees them.
 
-    THE SAME RULE AS EVERYWHERE ELSE, since round thirty-nine: a reserved name is refused when
+    THE SAME RULE AS EVERY OTHER RESERVED NAME THIS MODULE TAKES, since round thirty-nine, with
+    one platform difference stated where it bites: a reserved name is refused when
     the access policy could not be installed on the file behind it. An earlier shape took an
     exception here ("it may be the only remaining copy") — written when a refused name meant a
     deleted stage. The stage is now kept by default, so refusing the name loses nothing: the
     bytes stay under the temporary prefix, narrowed as far as this code can narrow them.
+
+    THE PLATFORM DIFFERENCE: where the xattr API does not exist at all there is nothing to
+    strip, so nothing is refused and this path takes its reserved name — while preservation's
+    narrowing answers False there and declines the replacement instead. The two are asking
+    different questions and the README says so: this one asks whether a strip was DENIED on a
+    file it created and then verified at 0600, and preservation asks whether it can VERIFY the
+    policy on an inode it did not create. An invariant leg on 212e683 read the sentence above
+    as promising one answer for both.
 
     THE RETAINED STAGE EXISTS BEFORE THE FIRST BYTE IS READ, and the copy is streamed into it.
     The previous shape read the whole source into memory and only then created a stage, so a
@@ -636,18 +645,23 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
     # scanner's own stages are O_RDWR since round forty-six — is read with pread, which depends
     # on no mode at all (cold leg, e1c1404). What stays unreadable is a write-only or path-only
     # descriptor whose reopen is refused: the "readable source" half of the limit stated above.
-    src = None
-    try:
-        src = os.open("%s/%d" % (_PROC_FD_DIR, fd), os.O_RDONLY)
-    except OSError:
-        try:
-            os.pread(fd, 1, 0)            # EBADF on a descriptor not open for reading
-        except OSError:
-            return False
     _src_off = 0
     _hollow = []                      # set by the cleanup when the copy ended nameless
     _answer = False
+    src = None
     try:
+        # THE SOURCE IS ACQUIRED INSIDE THE BLOCK WHOSE FINALLY CLOSES IT. This open sat above
+        # that block, with three assignments between them, and a cancellation in the gap leaked
+        # the descriptor to process exit (invariant leg, 212e683). The assignments moved up
+        # instead, which needs no new handler: the finally below already closes whatever the
+        # open left, and a `return` from inside runs it.
+        try:
+            src = os.open("%s/%d" % (_PROC_FD_DIR, fd), os.O_RDONLY)
+        except OSError:
+            try:
+                os.pread(fd, 1, 0)        # EBADF on a descriptor not open for reading
+            except OSError:
+                return False
         try:
             nofollow = getattr(os, "O_NOFOLLOW", 0)
             flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | nofollow   # readable: a nested rescue can pread it
@@ -925,7 +939,14 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
             # end of the module and measured the repair that does NOT work: os.link on the
             # descriptor directory is ENOENT once the link count is zero, so the inode cannot be
             # given a new name. It can still be READ. So the bytes are copied out under a fresh
-            # reserved name before anyone closes anything.
+            # reserved name before anyone closes anything — UNLESS THEY ARE A STATUS LINE. This
+            # arm reaches the copy-out without passing through `_false_or_rescue`, so the test
+            # that helper was given did not cover the site that reaches it most often, and a
+            # staged CLEAN whose name had diverged took a reserved name here (invariant leg,
+            # 212e683). A status line is not evidence; False is what every caller already reads
+            # as "no custody taken", and none of them deletes on it.
+            if _held_is_status_line(fd, False):
+                return False
             return _copy_out_unpublished(dirfd, fd)
         # THE SAME ACCESS POLICY AS A PUBLISHED REPORT. The failure that sends us here happens
         # BEFORE the ordinary installer's ACL strip, so retained evidence was arriving with the
@@ -1619,7 +1640,14 @@ def _open_held_copy(dirfd, name, expect):
         try:
             got = os.fstat(fd)
         except OSError:
-            _close_quietly(fd)
+            # THE IDENTITY READ FAILED, WHICH IS NOT AN ANSWER — and this closed on it. If the
+            # only name had gone meanwhile, that close was the destruction of a report this scan
+            # did not write (cold leg, 212e683). A question this code cannot answer never
+            # authorizes destruction, the rule `_staged_holds_evidence` is built on, so the
+            # last-reference question runs here too. Identity is unverifiable at this point: the
+            # copy lands under the temporary prefix, which promises nothing, and a reserved name
+            # is still taken only after the policy verifies on it. At worst a duplicate.
+            _rescue_then_close(dirfd, fd, via_proc)
             return None, False
         if not stat.S_ISREG(got.st_mode) or (got.st_dev, got.st_ino) != (expect.st_dev, expect.st_ino):
             _close_quietly(fd)
@@ -2066,6 +2094,13 @@ def _rescue_before_close(dirfd, fd, via_proc, depth=0):
         nameless = True
     if not nameless:
         return
+    # THE REPAIR COMES BEFORE THE CLASSIFICATION, because the copy-out does it either way. A
+    # status line at mode 000 — the case a path-only descriptor exists for — read as UNREADABLE
+    # here, fell to the findings side (the right costly direction for findings), and the copy-out
+    # then chmodded through the descriptor directory and copied `scan_gate: CLEAN` into the
+    # namespace that means retained evidence (cold leg, 212e683). Narrowing is best effort and
+    # its failure changes nothing: an unreadable prefix is still treated as findings.
+    _narrow_leftover(fd)
     if _held_is_status_line(fd, via_proc):
         return                            # a status line: not evidence, and no reserved name for it
     _copy_out_unpublished(dirfd, fd, depth)
@@ -2283,19 +2318,16 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
     # read left the classification describing a DIFFERENT inode from the one preserved, and a
     # status line verdict then unlinked the findings just kept. An independent review leg
     # supplied that interleaving; the read below is through the descriptor we actually hold.
-    _slot_has_another_name = False
     if held_fd is not None:
         # READ THROUGH THE DESCRIPTOR. A held inode cannot be swapped under a read, which is the
         # difference between classifying what we preserved and classifying what someone left at
-        # the name. The link count is read here too, from the same descriptor, because releasing
-        # a slot is a destructive act and it needs to know whether this is the last name.
+        # the name. The link count USED to be read here too, to refuse a status line's slot
+        # release while that slot was the only name; that release is identity-checked and
+        # unconditional now, so the count had no reader left — and a dead read is how a later
+        # round mistakes a leftover for a live guard.
         try:
             _prefix = _read_prefix_held(held_fd, held_via_proc, len(_STATUS_LINE_PREFIX))
             is_status_line = _prefix == _STATUS_LINE_PREFIX
-            try:
-                _slot_has_another_name = os.fstat(held_fd).st_nlink >= 2
-            except OSError:
-                _slot_has_another_name = False
         except BaseException:
             _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
             raise
@@ -2316,25 +2348,30 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         _cfd, _cvia = _open_held_copy(dirfd, report_name, previous)
         if _cfd is None:
             return False
-        _ask_before_close = True          # a read that never classified is treated as findings
         try:
             # `_read_prefix_held` answers None when it cannot read, and None is not the status
             # prefix: an unreadable copy is classified as findings, the costly case. (An
             # `except OSError` that used to sit here was unreachable — cold leg, d7e4a3c.)
             _prefix = _read_prefix_held(_cfd, _cvia, len(_STATUS_LINE_PREFIX))
             is_status_line = _prefix == _STATUS_LINE_PREFIX
-            _ask_before_close = not is_status_line   # a CLEAN is not evidence and takes no reserved name
         finally:
-            if _ask_before_close:
-                # ONE UNLINK OF THE ONLY REMAINING NAME during this read left the descriptor as
-                # the last reference, and the close freed it (cold leg, 884e6c2).
-                _rescue_then_close(dirfd, _cfd, _cvia)
+            # ONE UNLINK OF THE ONLY REMAINING NAME during this read left the descriptor as
+            # the last reference, and the close freed it (cold leg, 884e6c2). UNCONDITIONALLY,
+            # because this helper both asks and closes: a flag that skipped it for a status
+            # line skipped the CLOSE with the question and leaked the descriptor to process
+            # exit (executed review, 212e683). The question needs no flag — it reads the prefix
+            # itself and lets a status line go, which is the same decision in one place.
+            _rescue_then_close(dirfd, _cfd, _cvia)
 
     if is_status_line:
         # A CLEAN or REFUSED report is not worth a slot, and parking one there was measured
-        # blocking a real findings report from ever being kept. Give the slot back — but ONLY
-        # while another name still reaches the inode. If this slot is the last one, releasing it
-        # destroys the file to reclaim a name, which is the trade round twenty-six refused.
+        # blocking a real findings report from ever being kept. Give the slot back — INCLUDING
+        # when this slot has become the only name. Round twenty-six refused to destroy a file to
+        # reclaim a name, and that refusal is about EVIDENCE: the slot is linked before the report
+        # is classified, so a status line whose canonical name went during the read stayed parked
+        # under a reserved name saying this tree passed, beside an exit status of two (inventory,
+        # 212e683). Destroying a stale CLEAN is the direction this whole file is pointed in, and
+        # the identity check below is what makes it safe — not the link count.
         #
         # AND ONLY WHILE THE SLOT NAME STILL REFERS TO THAT INODE. The link count says the
         # status inode has another name; it says nothing about what the slot name reaches now.
@@ -2343,7 +2380,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         # unlinked by name. The release goes through the identity-checked helper on the
         # descriptor held since the link, and a slot that is no longer this inode is left.
         try:
-            if linked is not None and _slot_has_another_name and held_fd is not None:
+            if linked is not None and held_fd is not None:
                 _remove_own_stage(dirfd, linked, held_fd)
         finally:
             if held_fd is not None:
@@ -2351,8 +2388,9 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         return True
     if held_fd is not None:
         # FINDINGS, CLASSIFIED THROUGH THE SLOT — and both names may have been taken while they
-        # were being read (cold leg, 884e6c2): asked before the close, like every other findings
-        # close in this module.
+        # were being read (cold leg, 884e6c2): asked before the close, as every findings close
+        # here is, the post-publish sweep's excepted for the reason its own helper states
+        # (inventory, 212e683, on the wording).
         _rescue_then_close(dirfd, held_fd, held_via_proc)
         held_fd = None
 
