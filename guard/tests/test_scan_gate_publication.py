@@ -9107,3 +9107,94 @@ def test_a_cancellation_inside_the_held_copy_opener_does_not_close_the_last_refe
         pytest.skip("the opener's identity read was never reached; this arm measured nothing")
     assert _findings_anywhere(reports, "docs/W.md:1"), (
         "REPAIRED: the opener closed the descriptor it had just opened, unasked, while the name was already gone")
+
+
+# =============================================================================================
+# GROUP 64 — the fifty-sixth round. Gate 51's cold leg on f863349: the no-slot arm of
+# preservation asked the last-reference question and then never closed the descriptor it had
+# asked about, so the hold leaked to process exit and a name taken afterwards took the findings
+# with it; the held-copy opener's successful return sat outside its own cancellation guard; and
+# the staged rescue copied a status line to a reserved name (invariant leg, same gate).
+# =============================================================================================
+
+
+def _open_report_fds(reports: Path, name: str = "scan_report.txt") -> list:
+    out = []
+    for n in os.listdir("/proc/self/fd"):
+        try:
+            target = os.readlink("/proc/self/fd/%s" % n)
+        except OSError:
+            continue
+        if target.startswith(str(reports / name)):
+            out.append("%s -> %s" % (n, target))
+    return out
+
+
+def test_preservation_closes_the_held_canonical_when_no_slot_took_it(tmp_path: Path) -> None:
+    """REPAIRED (cold #1, gate 51): the no-slot exit asked the last-reference question and left the
+    descriptor open. A leaked hold is the last reference once the canonical name goes, and nothing
+    runs on the way to process exit: the question and the close are one act at every exit."""
+    module, reports = _preserve_arm_setup(tmp_path, "preserve_noslot_close", "generic\tkey\tassignment\tdocs/W.md:1\n")
+    for slot in module._superseded_slot_names():
+        (reports / slot).write_text("other\tkey\tassignment\tdocs/O.md:1\n", encoding="utf-8")   # every slot occupied
+    before = _open_report_fds(reports)
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        answer = module._preserve_superseded(dirfd, "scan_report.txt")
+    finally:
+        os.close(dirfd)
+    leaked = [f for f in _open_report_fds(reports) if f not in before]
+    assert not leaked, (
+        f"REPAIRED: the no-slot exit left the held canonical descriptor open ({leaked}); it is the last "
+        f"reference the moment the name goes, and no code runs before process exit (answer={answer})")
+
+
+def test_the_held_copy_openers_success_return_is_inside_its_cancellation_guard(tmp_path: Path) -> None:
+    """REPAIRED (cold #2, gate 51): the opener's comment owns the interval from the open to the RETURN,
+    but the return statement sat outside the try, so a cancellation delivered between the identity
+    check and the return closed nothing. Structural, because the window is one bytecode boundary
+    that no injection can address: the return must be inside the guarded try."""
+    driver = make_tool(tmp_path)
+    source = Path(driver).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_open_held_copy")
+    guarded = [t for t in ast.walk(fn) if isinstance(t, ast.Try)
+               and any(isinstance(h.type, ast.Name) and h.type.id == "BaseException" for h in t.handlers)]
+    assert guarded, "the opener has no BaseException guard at all"
+    returns_of_fd = [r for r in ast.walk(fn) if isinstance(r, ast.Return)
+                     and isinstance(r.value, ast.Tuple) and len(r.value.elts) == 2
+                     and isinstance(r.value.elts[0], ast.Name) and r.value.elts[0].id == "fd"]
+    assert returns_of_fd, "the opener no longer returns (fd, via_proc)"
+    inside = [r for r in returns_of_fd
+              if any(r in list(ast.walk(t)) for t in guarded)]
+    assert len(inside) == len(returns_of_fd), (
+        "REPAIRED: the opener's successful return sits outside the cancellation guard that claims to own "
+        "the interval up to it; an interrupt there hands the caller nothing and closes nothing")
+
+
+def test_the_staged_rescue_does_not_copy_a_status_line_to_a_reserved_name(tmp_path: Path) -> None:
+    """REPAIRED (invariant leg, gate 51): the name-identity rescue on a staged file copied whatever it
+    held. A staged CLEAN or REFUSED is not evidence — the README says a reserved name means retained
+    evidence — so the rescue reads the prefix first, as the last-reference question already does."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "staged_rescue_status_line")
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here; the rescue cannot run")
+    reports = tmp_path / "staging" / "_reports"
+    reports.mkdir(parents=True)
+    stage = reports / ".scan_report_probe"
+    stage.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    fd = os.open(stage, os.O_RDWR)
+    decoy = reports / "decoy.txt"
+    decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+    os.replace(decoy, stage)                      # the staged name now reaches a different inode
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        answer = module._false_or_rescue(dirfd, ".scan_report_probe", fd)
+    finally:
+        os.close(dirfd); os.close(fd)
+    reserved = [p.name for p in reports.iterdir() if p.name.startswith("scan_report.unpublished")]
+    assert not reserved, (
+        f"REPAIRED: a staged status line was copied to a reserved name {reserved} — a file saying CLEAN "
+        f"under a name that means retained evidence, beside an exit status of 2 (answer={answer})")

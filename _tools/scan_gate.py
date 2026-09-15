@@ -1624,6 +1624,12 @@ def _open_held_copy(dirfd, name, expect):
         if not stat.S_ISREG(got.st_mode) or (got.st_dev, got.st_ino) != (expect.st_dev, expect.st_ino):
             _close_quietly(fd)
             return None, False
+        # THE RETURN IS INSIDE THE GUARD, because the interval this function claims to own ends at
+        # the return and not before it: an interrupt delivered between the identity check and the
+        # handing over closed nothing, the caller never received the descriptor, and a nameless
+        # inode went to process exit (cold leg, f863349). One bytecode boundary, addressable by no
+        # injection, which is why the arm for it reads the shape instead of running it.
+        return fd, via_proc
     except BaseException:
         # THE INTERRUPT LANDS ON A DESCRIPTOR THAT MAY BE THE LAST REFERENCE (cold leg,
         # 8dd9edd, the fourth instance): the name may already be gone. Identity is asked here,
@@ -1640,7 +1646,6 @@ def _open_held_copy(dirfd, name, expect):
         else:
             _close_quietly(fd)
         raise
-    return fd, via_proc
 
 
 def _read_prefix_held(fd, via_proc, count):
@@ -1867,6 +1872,14 @@ def _false_or_rescue(dirfd, tmp_name, fd, depth=0):
             return False                  # still ours by name: the caller keeps it
     except OSError:
         pass                              # cannot tell: treat as diverged
+    if _held_is_status_line(fd, False):
+        # A STAGED STATUS LINE IS NOT RESCUED. This copied whatever the descriptor held, so a
+        # staged CLEAN or REFUSED whose name had been taken landed under a reserved unpublished
+        # name — the one thing that namespace must never say (invariant leg, f863349). The
+        # answer is False, which every caller already reads as "no custody was taken": none of
+        # them deletes on it, and a status line is not evidence to keep. The stages are opened
+        # for reading, so the prefix is read from the descriptor itself.
+        return False
     return _copy_out_unpublished(dirfd, fd, depth)   # the depth travels with the rescue (gate 43)
 
 
@@ -2006,6 +2019,16 @@ def _canonical_still_classified(dirfd, guard):
     return (seen.st_dev, seen.st_ino) == (dev, ino)
 
 
+def _held_is_status_line(fd, via_proc):
+    """Whether the inode behind FD begins with the status prefix — a CLEAN or a REFUSED.
+
+    The two rescues ask this for the same reason: a reserved name means RETAINED EVIDENCE, and a
+    file saying CLEAN under one, beside an exit status of two, tells a reader this tree passed.
+    An unreadable prefix answers False and is treated as findings, the costly direction.
+    """
+    return _read_prefix_held(fd, via_proc, len(_STATUS_LINE_PREFIX)) == _STATUS_LINE_PREFIX
+
+
 def _rescue_before_close(dirfd, fd, via_proc, depth=0):
     """THE LAST-REFERENCE QUESTION, ASKED BEFORE A CLOSE. If no name reaches the held inode any
     more — or the count cannot be read — its bytes are copied out through the descriptor first,
@@ -2025,11 +2048,15 @@ def _rescue_before_close(dirfd, fd, via_proc, depth=0):
     and its already-preserved-slot cleanup ask here too, during the unwinding, as the copy-out's
     own finally does (same leg).
 
-    Every other findings-bearing close in this module already asks (quarantine and the stage
-    writer through `_false_or_rescue`, the copy-out through its own finally); preservation asked
-    only when no slot was linked, and after a confirmed link it closed the held canonical
-    descriptor unasked, as did both of its classification closes — the sibling left out (cold
-    leg, 884e6c2). The question is the link count, not a name: after a link the inode has two
+    The other findings-bearing closes ask too, by the question that fits them: quarantine and the
+    stage writer through `_false_or_rescue` and the copy-out through its own finally ask whether
+    the NAME they hold still reaches the inode, which is the right question where the module made
+    that name. The one close that asks nothing is the post-publish sweep's, and deliberately: it
+    closes a reserved name it has just removed on purpose, so a freed inode there is the
+    generation ending, not a loss (both gate legs on f863349 read this sentence as claiming more
+    than that, and it used to). Preservation asked only when no slot was linked, and after a
+    confirmed link it closed the held canonical descriptor unasked, as did both of its
+    classification closes — the sibling left out (cold leg, 884e6c2). The question is the link count, not a name: after a link the inode has two
     names, and either may be gone. The interval between the read and the close is the stated
     check-then-act limit; a read that fails copies, at worst a duplicate.
     """
@@ -2039,7 +2066,7 @@ def _rescue_before_close(dirfd, fd, via_proc, depth=0):
         nameless = True
     if not nameless:
         return
-    if _read_prefix_held(fd, via_proc, len(_STATUS_LINE_PREFIX)) == _STATUS_LINE_PREFIX:
+    if _held_is_status_line(fd, via_proc):
         return                            # a status line: not evidence, and no reserved name for it
     _copy_out_unpublished(dirfd, fd, depth)
 
@@ -2187,19 +2214,20 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             # it through the descriptor directory rather than fchmod, and its bytes are read by
             # the reopen rather than pread (round forty-seven; the sentence here used to say
             # "the same rescue", which a cold leg measured as false for a mode-000 report).
-            # Still at its name: nothing to do, and the replacement is declined below. ASKED BY
-            # LINK COUNT AND BY PREFIX through the same helper as every other close here: the
-            # name-identity question copied a CLEAN whose name had been taken to a reserved
-            # unpublished name (executed review, 8dd9edd) — a status line is let go.
-            _rescue_before_close(dirfd, _cfd, _cvia)
+            # Still at its name: nothing to do, and the replacement is declined below. The
+            # question and the close are both in the finally now, for every exit of this block.
+            pass
     finally:
         if _cfd is not None:
-            if linked is not None:
-                # A CONFIRMED LINK IS NOT A NAME THAT WILL STILL BE THERE AT THE CLOSE. The rescue
-                # above runs only with no slot; with one, both names could be taken between the
-                # confirmation and this close, and the close freed the previous report's findings
-                # (cold leg, 884e6c2). Asked by count, since the name to ask about is now two.
-                _rescue_then_close(dirfd, _cfd, _cvia)
+            # ONE QUESTION AND ONE CLOSE, ON EVERY EXIT OF THIS BLOCK. A confirmed link is not a
+            # name that will still be there at the close — both names could be taken between the
+            # confirmation and this close, and the close freed the previous report's findings
+            # (cold leg, 884e6c2) — and with NO slot the question used to be asked by a helper
+            # that does not close, so the hold leaked to process exit and a name taken afterwards
+            # took the findings with it (cold leg, f863349). Asked by count, since after a link
+            # there are two names and either may be gone; the classification below opens its own
+            # descriptor and does not use this one.
+            _rescue_then_close(dirfd, _cfd, _cvia)
     if _unconfirmed:
         return False                      # nothing this call can vouch for; the replacement is declined
 
