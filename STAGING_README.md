@@ -145,12 +145,15 @@ here rather than assumed — do not keep anything you care about at these names.
 the staged inode — a concurrent unlink or replace — no name reaches those bytes any more, and the
 descriptor this scanner holds is the last reference to them. Linking the inode back into the tree
 is not possible at that point (measured: the descriptor-directory path returns `ENOENT` once the
-link count is zero), so the bytes are READ through that descriptor and written to a fresh reserved
-name. That copy is a different inode carrying the same findings. It is kept even if its ACL strip
-is denied, which is the one place this tool reserves a name without having installed the policy on
-it: the alternative is destroying the only remaining copy to avoid mislabelling it, and evidence
-outranks labelling. The mode is set through the descriptor regardless, so such a file is at `0600`
-with its ACL entries masked to nothing.
+link count is zero), so the bytes are READ through that descriptor and written to a fresh
+temporary name, which is linked to a reserved name only once the policy has been installed on it
+and verified. That copy is a different inode carrying the same findings. It is kept even if its
+ACL strip is denied — the alternative is destroying the only remaining copy to avoid mislabelling
+it, and evidence outranks labelling — but in that state it stays under the temporary prefix and
+takes no reserved name (the leftover paragraph under the limits below says why; an earlier
+version of this paragraph said the reserved name was taken anyway, and an executed review on
+5850e01 measured that it is not). The mode is set through the descriptor regardless, so such a
+file is at `0600` with its ACL entries masked to nothing.
 
 `scan_report.unpublished.txt` is where a FINDINGS report goes when the publish could not
 complete — a FIFO or a foreign-owned file at the report name, a group that cannot be preserved, a
@@ -211,6 +214,12 @@ never a way to make the scanner destroy evidence.
 blocks" is a bounded claim.** The refusal writer will not let its own failure displace the failure
 it was called to report. It does not catch `KeyboardInterrupt` or `SystemExit`, and it should not:
 a cancellation is not a refusal to report, and swallowing one would be a different defect. The same holds for the rescues that run in cleanup: a cancellation inside the narrowing reaches the re-check, and a cancellation inside the re-check or the copy-out itself is the one interrupt no further code can stand behind — at that point the bytes are on disk only if a stage already holds them.
+The same shape applies to an error that is not an I/O error at all: a `MemoryError` or a
+`RecursionError` raised inside the copy-out's stream is not caught by its I/O handlers. It leaves
+the copy-out with whatever reached the stage kept under the temporary prefix, and when it leaves
+through `write_report`'s own failure handler, that handler's re-ask of the descriptor it holds
+does not run and the close that follows frees a source whose name was already taken (executed
+review, c3f5bb3). As for a cancellation, a partial stage is what stands behind it.
 
 On blocking, the precise statement: this path opens nothing that can wait for a peer — every open
 that could meet a FIFO carries `O_NONBLOCK` or is `O_PATH` — and it renders no arbitrary object.

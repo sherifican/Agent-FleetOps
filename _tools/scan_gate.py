@@ -817,8 +817,21 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                         # name then left the copy nameless with no further rescue (cold leg,
                         # 5b1a014). Kept, the module takes no last name of its own at that depth: a
                         # leftover under the temporary prefix is the whole cost, and both names must
-                        # be taken by someone else before the close can free anything.
-                        elif keep_stage:
+                        # be taken by someone else before the close can free anything — AND WHEN
+                        # THEY HAVE BEEN, THE ANSWER SAYS SO. This branch closed with no reading at
+                        # all and answered True over an inode with no name (invariant leg, c3f5bb3);
+                        # the count is read on the held descriptor, and zero — or a read that
+                        # fails — is a hollow copy, answered False so the callers above retry from
+                        # the descriptor write_report still holds. A read, not a rescue: nothing
+                        # recurses here.
+                        elif not keep_stage:
+                            try:
+                                _named_still = os.fstat(stage_fd).st_nlink >= 1
+                            except OSError:
+                                _named_still = False
+                            if not _named_still:
+                                _hollow.append(True)
+                        else:
                             # KEPT — AND THE NAME IS RE-ASKED BEFORE THE CLOSE, AT ANY DEPTH.
                             # Retention means "do not unlink the stage name"; it was being read
                             # as "the stage name still reaches this inode", which is a different
@@ -1848,7 +1861,8 @@ def _remove_stage_if_another_name_remains(dirfd, name, fd, depth=0):
     caller's close can free them. Answers whether custody still holds afterwards: a name still
     reaches the inode, or the copy-out kept a named complete copy — where a copy can be made; when none can (no creatable name,
     no readable source) the close frees them, which is the copy-out's stated limit, and the
-    caller still answers "custody taken" for a link that no longer exists (invariant leg, 5b1a014).
+    answer is False — the caller used to answer "custody taken" for a link that no longer
+    existed (invariant leg, 5b1a014); since c3f5bb3 it passes this answer through.
 
     The nlink read and the unlink are FOUR syscalls apart (the nlink fstat, then the helper's
     fstat, lstat and unlink), and the interval is the same check-then-act limit as everywhere
@@ -1863,7 +1877,12 @@ def _remove_stage_if_another_name_remains(dirfd, name, fd, depth=0):
     try:
         nlink = os.fstat(fd).st_nlink
     except OSError:
-        return True                       # cannot tell BEFORE any act: keep the name, nothing changed
+        # CANNOT TELL BEFORE ANY ACT: the name is kept, nothing changed — and nothing is KNOWN.
+        # This used to answer True, "custody holds", from a read that returned nothing, while the
+        # depth-one branch below answers False on the same failure; a racer who had already taken
+        # both names was then trusted away by the close (invariant leg, c3f5bb3). False here is
+        # not a removal: the caller re-asks the descriptor it still holds, at worst a duplicate.
+        return False
     if nlink == 1:
         return True                       # the stage may be the last name: keep it
     if nlink >= 2:

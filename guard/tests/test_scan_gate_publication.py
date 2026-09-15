@@ -8594,3 +8594,112 @@ def test_the_copy_outs_answer_is_false_when_its_kept_stage_lost_its_name_and_the
     assert _findings_anywhere(reports, "docs/H.md:1"), (
         f"REPAIRED ({mode}): the copy's inode had no name left and no nested copy kept one, yet the answer "
         f"reaching write_report was True; its False handler was skipped and the close freed the findings")
+
+
+# =============================================================================================
+# GROUP 60 — the fifty-second round. Gate 47's invariant leg on c3f5bb3: two answers given from
+# no reading. A depth-one copy whose link landed closed with no check at all, answering True
+# over an inode both of whose names a racer had taken; and the release helper answered "custody
+# holds" when its first link-count read failed, where its own depth-one branch answers False.
+# =============================================================================================
+
+
+def test_a_depth_one_copy_whose_link_landed_and_then_lost_both_names_answers_false(tmp_path: Path) -> None:
+    """REPAIRED (invariant leg #1, gate 47): the depth-one linked branch must still read the link count
+    before its close — a copy with no name left answers False, and every caller above then retries
+    from the original descriptor write_report still holds open."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "depth1_linked_hollow")
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_install, real_unlink, real_fstat = module._install_posix_acl_policy, module.os.unlink, module.os.fstat
+    acts: list[str] = []
+
+    def _decoy_over(target: Path) -> None:
+        decoy = reports / ("decoy-%d.txt" % len(acts))
+        decoy.write_text("scan_gate: CLEAN\n", encoding="utf-8")
+        os.replace(decoy, target)
+
+    def install_fails(dirfd, src_name, dst_fd, dst_name):
+        if not acts:
+            stages = [p for p in reports.iterdir() if p.name.startswith(".scan_report_")]
+            if len(stages) == 1:
+                acts.append("primary:" + stages[0].name); _decoy_over(stages[0])   # quarantine copies out at depth zero
+        raise OSError(5, "injected policy failure")
+
+    def unlink_hook(path, *a, **k):
+        real_unlink(path, *a, **k)
+        f1, f2 = sys._getframe(1), sys._getframe(2)
+        if (f1.f_code.co_name == "_remove_own_stage" and f2.f_code.co_name == "_remove_stage_if_another_name_remains"
+                and f2.f_locals.get("depth", 0) == 0 and "reserved0" not in "".join(acts)):
+            acts.append("reserved0")
+            for p in list(reports.iterdir()):
+                if p.name.startswith("scan_report.unpublished"):
+                    real_unlink(p)                     # the racer ends the depth-zero reserved name inside the release window
+
+    def fstat_hook(f_, *a, **k):
+        f = sys._getframe(1)
+        if (f.f_code.co_name == "_copy_out_unpublished" and f.f_locals.get("depth") == 1
+                and f.f_locals.get("keep_stage") is False and "both1" not in "".join(acts)):
+            acts.append("both1")
+            stage = f.f_locals.get("stage_name")
+            for p in list(reports.iterdir()):
+                if p.name.startswith("scan_report.unpublished") or (stage and p.name == stage):
+                    real_unlink(p)                     # the depth-one stage name AND its reserved name, before the close
+        return real_fstat(f_, *a, **k)
+
+    module._install_posix_acl_policy, module.os.unlink, module.os.fstat = install_fails, unlink_hook, fstat_hook
+    try:
+        with pytest.raises(Exception):
+            module.write_report(str(staging), [("docs/H.md", 1, "SECRET", "generic_key_assignment", "contents")])
+    finally:
+        module._install_posix_acl_policy, module.os.unlink, module.os.fstat = real_install, real_unlink, real_fstat
+    if "both1" not in acts:
+        pytest.skip(f"the schedule did not reach the depth-one linked close (acts={acts}); this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/H.md:1"), (
+        "REPAIRED: the depth-one copy's link landed, both of its names were taken before its close, and it "
+        "answered True with no reading; the release helper, quarantine and write_report all trusted it and the "
+        f"close freed the findings (acts={acts})")
+
+
+def test_a_release_pre_read_that_fails_does_not_answer_custody(tmp_path: Path) -> None:
+    """REPAIRED (invariant leg #2, gate 47): a link-count read that fails before the release acts is not
+    "custody holds" — the helper answers False, like its depth-one branch, and write_report's False
+    handler re-asks the original descriptor instead of closing it over an inode that may have no name."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "release_preread_fails")
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    staging = tmp_path / "staging"
+    reports = staging / "_reports"
+    reports.mkdir(parents=True)
+    real_install, real_fstat = module._install_posix_acl_policy, module.os.fstat
+    acts: list[str] = []
+
+    def install_fails(dirfd, src_name, dst_fd, dst_name):
+        raise OSError(5, "injected policy failure")     # the stage stays intact: quarantine links it
+
+    def fstat_hook(f_, *a, **k):
+        f = sys._getframe(1)
+        if f.f_code.co_name == "_remove_stage_if_another_name_remains" and not acts:
+            acts.append("preread")
+            for p in list(reports.iterdir()):
+                if p.name.startswith("scan_report.unpublished") or p.name.startswith(".scan_report_"):
+                    os.unlink(p)                       # both names taken before the first read, and the read fails
+            raise OSError(errno.EIO, "injected: the pre-read fails")
+        return real_fstat(f_, *a, **k)
+
+    module._install_posix_acl_policy, module.os.fstat = install_fails, fstat_hook
+    try:
+        with pytest.raises(Exception):
+            module.write_report(str(staging), [("docs/H.md", 1, "SECRET", "generic_key_assignment", "contents")])
+    finally:
+        module._install_posix_acl_policy, module.os.fstat = real_install, real_fstat
+    if not acts:
+        pytest.skip("the release helper's pre-read was never reached; this arm measured nothing")
+    assert _findings_anywhere(reports, "docs/H.md:1"), (
+        "REPAIRED: the release helper's first link-count read failed and it answered True from nothing; "
+        "quarantine and write_report trusted it and the close freed the findings")
