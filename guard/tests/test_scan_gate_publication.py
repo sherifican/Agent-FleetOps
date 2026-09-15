@@ -12576,8 +12576,14 @@ def unsupported_finally_claims(source: str):
     if not claims:
         return []
     tree = ast.parse(source)
+    # A CLASS IS A CANDIDATE OWNER, NOT ONLY A BOUNDARY. `_own_scope_nodes` refuses to descend into
+    # a ClassDef, so if a class could not also be SELECTED as the holding scope, a comment in a
+    # class body fell back to the module or the enclosing function — whose traversal then
+    # deliberately excludes that class's own blocks. A truthful class-local claim found no try at
+    # all, and a false one could be excused by an unrelated try further out. The boundary set and
+    # the candidate set have to be the same set (team review, gate 65).
     scopes = [n for n in ast.walk(tree)
-              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
     unsupported = []
     for line in claims:
         holders = [f for f in scopes if f.lineno <= line <= (f.end_lineno or f.lineno)]
@@ -12778,8 +12784,13 @@ def test_the_repaired_arms_still_call_their_checkers() -> None:
     missing = []
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name in required:
-            called = {c.func.id for c in ast.walk(node)
-                      if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+            # BY TRAILING NAME, not by call shape. Keyed on `ast.Name` alone, a checker reached
+            # through a module or an object — `checkers.check_coverage_count(...)` — parses as an
+            # `ast.Attribute` and the tripwire would report the arm as gutted when it is not, or
+            # miss a rename that routed around it (team review, gate 65).
+            called = {c.func.id if isinstance(c.func, ast.Name) else c.func.attr
+                      for c in ast.walk(node)
+                      if isinstance(c, ast.Call) and isinstance(c.func, (ast.Name, ast.Attribute))}
             if required[node.name] not in called:
                 missing.append("%s no longer calls %s" % (node.name, required[node.name]))
             required.pop(node.name)
@@ -12810,11 +12821,30 @@ def test_the_repaired_arms_still_call_their_checkers() -> None:
 
 _HASH = re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7}\b")
 
+# WHICH TRACKED FILES CAN CARRY PROSE. Declared by suffix, not discovered by whether a read
+# happened to succeed. The version before this one asked git for `*.md` and `*.py` and then
+# silently `continue`d past any file it could not decode, which made "every citation is checked"
+# unfalsifiable: an unreadable file counted as a file with no citations (team review, gate 65).
+# The repository's own rule is that UNMEASURED dominates a violation, so a file in this set that
+# cannot be read turns the arm RED and is named. Binaries are excluded by DECLARING them, below,
+# so that exclusion is a decision on the record rather than a swallowed exception.
+_PROSE_SUFFIXES = {".md", ".py", ".sh", ".txt", ".tsv", ".csv", ".json", ".jsonl", ".yml",
+                   ".yaml", ".toml", ".cfg", ".ini", ".svg", ".template", ".example", ""}
+_BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".ico", ".woff", ".woff2",
+                    ".zip", ".gz", ".tar", ".stamp"}
+
 
 def cited_hashes(text: str):
     """Short hashes cited in prose. Mixed letters and digits are required, so an ordinary
     seven-letter word is not read as a hash; a longer hex run (a digest in a fixture) has no word
-    boundary inside it and is not matched either."""
+    boundary inside it and is not matched either.
+
+    STATED LIMIT: an all-digit or all-letter short hash is not matched. Roughly one abbreviated
+    hash in forty is of that shape, and none of this repository's citations are (team review,
+    gate 65). The alternative — matching any seven hex characters — reads every English word
+    spellable in hex as a citation, and the arm becomes noise nobody runs. (The obvious examples
+    are not written here: this docstring is itself inside a file the arm reads, and naming one
+    made the arm report its own explanation as a dangling citation.)"""
     return sorted(set(_HASH.findall(text)))
 
 
@@ -12831,21 +12861,63 @@ def _resolves(sha: str) -> bool:
 
 
 def citing_files():
-    """Every tracked text file that could carry a citation, from git rather than a hand-kept list.
+    """Every tracked file that could carry a citation, from git rather than a hand-kept list.
 
-    The hand-kept list omitted this very file, which carries more hash citations than any other
-    (team review, gate 64). A list that must be remembered is a list that will be wrong."""
-    listed = subprocess.run(["git", "-C", str(REPO), "ls-files", "*.md", "*.py"],
+    The hand-kept list omitted the file carrying more citations than any other (team review,
+    gate 64). A list that must be remembered is a list that will be wrong."""
+    # NUL-DELIMITED. `git ls-files` quotes a path containing unusual bytes and splits nothing
+    # reliably on newlines; `-z` gives the raw bytes and a reader that cannot be fooled by a
+    # filename (team review, gate 65).
+    listed = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z"],
                             capture_output=True, text=True)
     if listed.returncode != 0:
         return []
-    return [rel for rel in listed.stdout.splitlines() if rel.strip()]
+    out = []
+    for rel in listed.stdout.split("\0"):
+        if not rel.strip():
+            continue
+        suffix = Path(rel).suffix.lower()
+        if suffix in _BINARY_SUFFIXES:
+            continue
+        if suffix in _PROSE_SUFFIXES:
+            out.append(rel)
+    return out
+
+
+def scan_citations(files, read_text, resolves, retired):
+    """(dangling, unreadable, unclassified) over FILES. Nothing is skipped quietly.
+
+    READ_TEXT and RESOLVES are passed in so a control can drive this with a file that raises and
+    require the failure to come back as UNREADABLE rather than as silence.
+
+    ENCODING POLICY, stated because it is a decision and not a detail: every file in the prose set
+    is read as UTF-8. A tracked source declaring a different encoding is not decoded leniently and
+    not skipped either — it arrives as UNREADABLE and turns the arm red, which is the honest
+    outcome for a file this arm cannot read rather than one it read and found clean."""
+    dangling, unreadable, unclassified = [], [], []
+    for rel in files:
+        suffix = Path(rel).suffix.lower()
+        if suffix not in _PROSE_SUFFIXES and suffix not in _BINARY_SUFFIXES:
+            unclassified.append(rel)
+            continue
+        if suffix in _BINARY_SUFFIXES:
+            continue
+        try:
+            text = read_text(rel)
+        except (OSError, UnicodeDecodeError) as exc:
+            unreadable.append("%s (%s)" % (rel, type(exc).__name__))
+            continue
+        for h in cited_hashes(text):
+            if h not in retired and not resolves(h):
+                dangling.append("%s cited in %s" % (h, rel))
+    return sorted(set(dangling)), sorted(set(unreadable)), sorted(set(unclassified))
 
 
 def test_every_commit_hash_cited_in_prose_resolves_or_is_recorded() -> None:
     """REPAIRED: `guard/README.md` cited a commit on no branch, and the citation would have been
     published as a reference a reader cannot follow. Each cited hash must resolve here, or be named
-    in the mapping table as one the pre-publication rewrite retired."""
+    in the mapping table as one the pre-publication rewrite retired. A file that cannot be read is
+    reported, not skipped."""
     if not (REPO / ".git").exists():
         pytest.skip("no git history here (an export, not a clone): a hash cannot be resolved, and "
                     "an arm that cannot resolve one must not report that they all resolved")
@@ -12854,18 +12926,18 @@ def test_every_commit_hash_cited_in_prose_resolves_or_is_recorded() -> None:
                    "nothing at all.")
     retired = {old for old, _new in hash_mapping_rows(
         (REPO / "STAGING_README.md").read_text(encoding="utf8"))}
-    dangling = []
-    for rel in files:
-        path = REPO / rel
-        if not path.is_file():
-            continue
-        try:
-            text = path.read_text(encoding="utf8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        for h in cited_hashes(text):
-            if h not in retired and not _resolves(h):
-                dangling.append("%s cited in %s" % (h, rel))
+    dangling, unreadable, unclassified = scan_citations(
+        files, lambda rel: (REPO / rel).read_text(encoding="utf8"), _resolves, retired)
+    assert not unreadable, (
+        "UNMEASURED: %d tracked file(s) in the prose set could not be read, so this arm does not "
+        "know whether they cite anything:\n  %s\n"
+        "An unreadable file is not a file with no citations. Either the file is binary and its "
+        "suffix belongs in the declared binary set, or the read failure is the finding."
+        % (len(unreadable), "\n  ".join(unreadable)))
+    assert not unclassified, (
+        "UNMEASURED: %d tracked file suffix(es) are in neither the prose set nor the binary set, "
+        "so nothing decided whether they can carry a citation:\n  %s"
+        % (len(unclassified), "\n  ".join(unclassified)))
     assert not dangling, (
         "REPAIRED: %d cited commit hash(es) resolve to nothing in this repository's history and "
         "are not recorded in STAGING_README.md's mapping table, so a reader who follows one gets "
@@ -12873,7 +12945,46 @@ def test_every_commit_hash_cited_in_prose_resolves_or_is_recorded() -> None:
         "Either the citation names the wrong commit — an earlier instance of a repair that was "
         "rebased away reads exactly like this — or the commit was retired by the pre-publication "
         "rewrite and belongs in that table."
-        % (len(dangling), "\n  ".join(sorted(set(dangling)))))
+        % (len(dangling), "\n  ".join(dangling)))
+
+
+def test_every_tracked_suffix_is_classified() -> None:
+    """CONTROL: the arm above excludes binaries by declaration. A suffix in neither set would be
+    scanned or skipped by accident depending on which branch it fell through, so the classification
+    is required to be total over what git actually tracks."""
+    if not (REPO / ".git").exists():
+        pytest.skip("no git history here: the tracked file list comes from git")
+    listed = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z"],
+                            capture_output=True, text=True)
+    suffixes = {Path(rel).suffix.lower() for rel in listed.stdout.split("\0") if rel.strip()}
+    unclassified = sorted(s for s in suffixes
+                          if s not in _PROSE_SUFFIXES and s not in _BINARY_SUFFIXES)
+    assert not unclassified, (
+        "CONTROL: %s tracked in this repository and in neither the prose set nor the binary set. "
+        "Add it to one, with the decision visible." % unclassified)
+
+
+def test_an_unreadable_file_is_reported_not_skipped() -> None:
+    """CONTROL: the previous version caught OSError and UnicodeDecodeError and continued, so a file
+    it could not read counted as a file with no citations and the arm still reported CLEAN (team
+    review, gate 65). This drives the same scanner with a reader that raises."""
+    def raises(rel):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "injected: not decodable")
+
+    dangling, unreadable, unclassified = scan_citations(
+        ["docs/whatever.md"], raises, lambda h: True, set())
+    assert unreadable and not dangling, (
+        "CONTROL: a file whose read raised came back as %r unreadable and %r dangling. An "
+        "unmeasured file must reach the caller as unmeasured." % (unreadable, dangling))
+
+    def good(rel):
+        return "settled in df87c71, which does not exist"
+
+    dangling, unreadable, _ = scan_citations(
+        ["docs/whatever.md"], good, lambda h: False, set())
+    assert dangling and not unreadable, (
+        "CONTROL: a readable file citing an unresolvable hash must come back as dangling; got "
+        "%r dangling, %r unreadable." % (dangling, unreadable))
 
 
 def test_the_mapping_table_sends_readers_somewhere_that_exists() -> None:
@@ -12930,3 +13041,45 @@ def test_the_citation_arm_reads_this_file_too() -> None:
         "would never be looked up." % here)
     assert "guard/README.md" in files and "STAGING_README.md" in files, (
         "CONTROL: the derived file set is missing a document known to carry citations.")
+    assert not any(Path(f).suffix.lower() in _BINARY_SUFFIXES for f in files), (
+        "CONTROL: a declared-binary suffix reached the prose set.")
+
+
+@pytest.mark.parametrize("label,source,must_raise", [
+    ("a truthful class-local claim must be accepted",
+     "class C:\n"
+     "    # set first so the finally can name it either way\n"
+     "    fd = None\n"
+     "    try:\n"
+     "        fd = acquire()\n"
+     "    finally:\n"
+     "        close(fd)\n",
+     False),
+    ("a false class-local claim must not be excused by an unrelated outer finally",
+     "class C:\n"
+     "    # set first so the finally can name it either way\n"
+     "    fd = None\n"
+     "    try:\n"
+     "        fd = acquire()\n"
+     "    except BaseException:\n"
+     "        pass\n"
+     "try:\n"
+     "    pass\n"
+     "finally:\n"
+     "    pass\n",
+     True),
+])
+def test_the_finally_checker_treats_a_class_as_a_scope_it_can_select(
+        label: str, source: str, must_raise: bool) -> None:
+    """CONTROL: a class was a boundary the walker refused to enter and NOT a scope the selector
+    could choose, so a comment in a class body was judged against blocks that are not its own — in
+    both directions (team review, gate 65). The boundary set and the candidate set are one set."""
+    try:
+        check_no_unsupported_finally_claim(source)
+    except AssertionError:
+        raised = True
+    else:
+        raised = False
+    assert raised == must_raise, (
+        "CONTROL (%s): check_no_unsupported_finally_claim %s this source."
+        % (label, "flagged" if raised else "accepted"))
