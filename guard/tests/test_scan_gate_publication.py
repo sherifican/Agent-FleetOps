@@ -35,6 +35,7 @@ import errno
 import hashlib
 import importlib.util
 import os
+import signal
 import shutil
 import stat
 import subprocess
@@ -9375,3 +9376,142 @@ def test_a_status_line_is_never_left_parked_in_a_superseded_slot(tmp_path: Path)
     assert not parked, (
         f"REPAIRED: a status line is parked in a reserved slot {parked}; it says this tree passed, under "
         f"a name that means retained evidence, beside an exit status of two (answer={answer})")
+
+
+# =============================================================================================
+# GROUP 66 — the fifty-eighth round. Gate 53's invariant leg on aca6e8a: the slot descriptor is
+# guarded only where it is USED, by two disjoint handlers, with plain statements between them
+# and no handler over the whole of its life; and quarantine takes a reserved name for whatever
+# the staged inode holds when its NAME never diverged — bytes overwritten in place included.
+# =============================================================================================
+
+
+def test_the_slot_descriptors_whole_life_is_under_one_handler(tmp_path: Path) -> None:
+    """REPAIRED (invariant leg, gate 53): the descriptor held on the superseded slot was covered only
+    inside the two blocks that use it. A cancellation between them — at a bare condition, where no
+    call can be hooked — left it open, and it is the last reference once both names go. Structural,
+    for the same reason the opener's return arm is: the window is a statement boundary."""
+    driver = make_tool(tmp_path)
+    tree = ast.parse(Path(driver).read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_preserve_superseded")
+    acquisitions = [a for a in ast.walk(fn) if isinstance(a, ast.Assign)
+                    and isinstance(a.value, ast.Call)
+                    and getattr(a.value.func, "id", "") == "_open_held_copy"
+                    and any(isinstance(t, ast.Tuple) and any(getattr(x, "id", "") == "held_fd" for x in t.elts)
+                            for t in a.targets)]
+    assert acquisitions, "preservation no longer acquires a slot descriptor named held_fd"
+
+    def closes_held_fd(nodes) -> bool:
+        for n in nodes:
+            for c in ast.walk(n):
+                if isinstance(c, ast.Call) and getattr(c.func, "id", "") in ("_close_quietly", "_rescue_then_close"):
+                    if any(getattr(a, "id", "") == "held_fd" for a in c.args):
+                        return True
+        return False
+
+    covered = []
+    for a in acquisitions:
+        enclosing = [t for t in ast.walk(fn) if isinstance(t, ast.Try) and a in list(ast.walk(t))
+                     and (closes_held_fd(t.finalbody) or closes_held_fd(t.handlers))]
+        covered.append(bool(enclosing))
+    assert all(covered), (
+        "REPAIRED: the slot descriptor is acquired outside any handler that closes it; the two blocks "
+        "that guard it cover only the calls that use it, and the statements between them are unguarded")
+
+
+def test_quarantine_takes_no_reserved_name_for_a_stage_overwritten_in_place(tmp_path: Path) -> None:
+    """REPAIRED (invariant leg, gate 53): quarantine asked the status-line question only where the staged
+    NAME had diverged. Bytes rewritten under the same inode leave the name intact, so a stage holding
+    `scan_gate: CLEAN` was linked straight to a reserved name that means retained evidence."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "quarantine_inplace_overwrite")
+    if not module._XATTR_SUPPORTED or module._PROC_FD_DIR is None:
+        pytest.skip("no xattr layer or descriptor directory here")
+    reports = tmp_path / "staging" / "_reports"
+    reports.mkdir(parents=True)
+    stage = reports / ".scan_report_probe"
+    stage.write_text("generic\tkey\tassignment\tdocs/H.md:1\n", encoding="utf-8")
+    fd = os.open(stage, os.O_RDWR)
+    with open(stage, "wb") as f:                   # rewritten IN PLACE: the same inode, the same name
+        f.write(b"scan_gate: CLEAN\n")
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        answer = module._quarantine_unpublished(dirfd, ".scan_report_probe", fd,
+                                               [("docs/H.md", 1, "S", "generic_key_assignment", "c")])
+    finally:
+        os.close(dirfd); os.close(fd)
+    reserved = [p.name for p in reports.iterdir() if p.name.startswith("scan_report.unpublished")]
+    assert not reserved, (
+        f"REPAIRED: a stage whose bytes were rewritten in place took a reserved name {reserved} while "
+        f"holding a status line; the name says retained evidence and the file says this tree passed "
+        f"(answer={answer})")
+
+
+def test_a_regular_inode_that_is_not_ours_is_left_exactly_as_it_was(tmp_path: Path) -> None:
+    """ADJUDICATED (cold #1 against the inventory, gate 53): the cold leg asked for the last-reference
+    rescue on an identity MISMATCH, reading it as the sibling of the failed-read arm. The inventory
+    measured what that costs on that arm — a foreign file narrowed and its bytes published under a
+    reserved name. "I cannot tell" is conservative toward copying; "this is not the inode we recorded"
+    is conservative toward leaving it alone. The mismatch arm touches nothing."""
+    module, reports = _preserve_arm_setup(tmp_path, "opener_not_ours", "generic\tkey\tassignment\tdocs/W.md:1\n")
+    expect = os.lstat(reports / "scan_report.txt")
+    other = reports / "other.txt"
+    other.write_text("generic\tkey\tassignment\tdocs/B.md:1\n", encoding="utf-8")
+    os.chmod(other, 0o400)
+    os.replace(other, reports / "scan_report.txt")   # a DIFFERENT regular inode now holds the name
+    before = stat.S_IMODE(os.lstat(reports / "scan_report.txt").st_mode)
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        got, _via = module._open_held_copy(dirfd, "scan_report.txt", expect)
+    finally:
+        os.close(dirfd)
+        if got is not None:
+            os.close(got)
+    assert got is None, "the opener handed back a descriptor for an inode it did not record"
+    reserved = [p.name for p in reports.iterdir() if p.name.startswith("scan_report.unpublished")]
+    assert not reserved, (
+        f"ADJUDICATED: a foreign inode's bytes were published under a reserved name {reserved}; that name "
+        f"asserts THIS scan's retained evidence")
+    after = stat.S_IMODE(os.lstat(reports / "scan_report.txt").st_mode)
+    assert after == before, (
+        f"ADJUDICATED: a foreign inode's mode was changed from {oct(before)} to {oct(after)}; an inode this "
+        f"scan did not record is not its to narrow")
+
+
+def test_the_copy_outs_source_reopen_does_not_wait_on_a_peer(tmp_path: Path) -> None:
+    """REPAIRED (cold #2, gate 53): the source reopen had no O_NONBLOCK, while the prefix read on the very
+    same descriptor directory has carried it all along. The identity-failure arm added last round can
+    hand the question an unverified descriptor, and opening the read end of a FIFO waits for a writer —
+    inside a function documented never to block. The wait itself was measured on this box directly; this
+    arm reads the flag, which is deterministic and cannot pass by measuring nothing."""
+    driver = make_tool(tmp_path)
+    module = import_driver(driver, "copyout_source_nonblock")
+    if module._PROC_FD_DIR is None:
+        pytest.skip("no descriptor directory here; the reopen cannot run")
+    reports = tmp_path / "staging" / "_reports"
+    reports.mkdir(parents=True)
+    source = reports / "body.txt"
+    source.write_text("generic\tkey\tassignment\tdocs/H.md:1\n", encoding="utf-8")
+    fd = os.open(source, os.O_RDWR)
+    real_open = module.os.open
+    flags: list[int] = []
+
+    def open_hook(path, *a, **k):
+        if isinstance(path, str) and path.startswith(str(module._PROC_FD_DIR)) and a:
+            flags.append(a[0])
+        return real_open(path, *a, **k)
+
+    module.os.open = open_hook
+    dirfd = os.open(reports, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        module._copy_out_unpublished(dirfd, fd, 0)
+    finally:
+        module.os.open = real_open
+        os.close(dirfd); os.close(fd)
+    if not flags:
+        pytest.skip("the source reopen never ran; this arm measured nothing")
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    assert all(f & nonblock for f in flags), (
+        f"REPAIRED: the copy-out reopened its source without O_NONBLOCK (flags {[oct(f) for f in flags]}); "
+        f"the read end of a FIFO waits for a writer, inside the path documented as never blocking")

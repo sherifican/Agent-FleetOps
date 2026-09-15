@@ -656,7 +656,12 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
         # instead, which needs no new handler: the finally below already closes whatever the
         # open left, and a `return` from inside runs it.
         try:
-            src = os.open("%s/%d" % (_PROC_FD_DIR, fd), os.O_RDONLY)
+            # O_NONBLOCK, LIKE THE PREFIX READ ON THIS SAME DIRECTORY. Without it, opening the
+            # read end of a FIFO waits for a writer, and the identity-failure arm added last round
+            # can hand this question a descriptor whose type was never verified — so a function
+            # documented never to block could wait forever (cold leg, aca6e8a; the wait was
+            # measured directly on this box). On a regular file the flag changes nothing.
+            src = os.open("%s/%d" % (_PROC_FD_DIR, fd), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
         except OSError:
             try:
                 os.pread(fd, 1, 0)        # EBADF on a descriptor not open for reading
@@ -976,6 +981,15 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
     except OSError:
         return _false_or_rescue(dirfd, tmp_name, fd)   # fchmod or fstat failed past the check
 
+    if _held_is_status_line(fd, False):
+        # AND ASKED ON THE INTACT PATH TOO. The question above fires only where the staged NAME
+        # diverged; bytes rewritten under the SAME inode leave the name intact, so a stage whose
+        # body had become `scan_gate: CLEAN` was linked straight to a name that means retained
+        # evidence (invariant leg, aca6e8a). False is no custody, which is true — there is
+        # nothing here worth keeping — and the caller leaves the stage where it is, under a
+        # temporary prefix that promises nothing.
+        return False
+
     # EXCLUSIVE, never replacing. os.link refuses an occupied name, so an earlier run's kept
     # findings cannot be overwritten to make room for this run's, and a populated directory at
     # one name simply moves us to the next rather than costing anyone their evidence.
@@ -1005,7 +1019,9 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
         # AND ONLY WHILE ANOTHER NAME STILL REACHES THE INODE. The reserved name just linked can
         # be ended by someone else before this removal; removing the stage then takes the LAST
         # name, and the caller's close frees the findings while believing them kept (cold leg,
-        # 0c28c5e). The same nlink rule preservation applies to a status-line slot. A leftover
+        # 0c28c5e). Preservation releases a status-line slot without that count — the rule it
+        # once shared with this one was removed when a status line proved not to be the evidence
+        # the count protects (inventory, aca6e8a, on the wording here). A leftover
         # stage is harmless; a nameless inode is the loss this whole path exists to prevent.
         # AND, SINCE ROUND FORTY-NINE, THE LINK COUNT IS RE-READ AFTER THE UNLINK: a reserved name
         # ended inside the helper's own four-syscall window made that unlink the last one, and
@@ -1647,9 +1663,27 @@ def _open_held_copy(dirfd, name, expect):
             # last-reference question runs here too. Identity is unverifiable at this point: the
             # copy lands under the temporary prefix, which promises nothing, and a reserved name
             # is still taken only after the policy verifies on it. At worst a duplicate.
-            _rescue_then_close(dirfd, fd, via_proc)
+            try:
+                _rescue_then_close(dirfd, fd, via_proc)
+            finally:
+                fd = None                 # the guard below must not close it a second time
             return None, False
-        if not stat.S_ISREG(got.st_mode) or (got.st_dev, got.st_ino) != (expect.st_dev, expect.st_ino):
+        if not stat.S_ISREG(got.st_mode):
+            # NOT A REPORT AT ALL — a FIFO, a directory, a device. Nothing here is ever copied out:
+            # the reserved names mean retained evidence, and this is not evidence. Closed, plainly.
+            _close_quietly(fd)
+            return None, False
+        if (got.st_dev, got.st_ino) != (expect.st_dev, expect.st_ino):
+            # A REGULAR INODE, JUST NOT THE ONE WE RECORDED — AND THAT IS AN ANSWER. A cold leg
+            # asked for the rescue here too, reading this as the sibling of the failed-read arm
+            # above; the inventory leg then measured what that costs, on the arm above: a foreign
+            # file at the canonical name had its mode changed and its bytes published at
+            # `scan_report.unpublished.txt` (both legs, aca6e8a). The two arms are not siblings.
+            # "I cannot tell whose this is" is conservative toward copying, because it may be the
+            # report we recorded. "This is NOT the inode we recorded" is conservative toward
+            # leaving it alone: a reserved name asserts THIS scan's retained evidence, and nothing
+            # here may be narrowed, copied, or published under one. Whoever unlinked it is the
+            # one destroying it; this descriptor is incidental. Closed, plainly.
             _close_quietly(fd)
             return None, False
         # THE RETURN IS INSIDE THE GUARD, because the interval this function claims to own ends at
@@ -1663,6 +1697,8 @@ def _open_held_copy(dirfd, name, expect):
         # 8dd9edd, the fourth instance): the name may already be gone. Identity is asked here,
         # since the caller never received the descriptor and the check above may not have run;
         # ours -> the last-reference question, then the close; not ours or unknowable -> close.
+        if fd is None:
+            raise                         # already asked and closed on the arm above
         _ours = False
         try:
             _g = os.fstat(fd)
@@ -2267,216 +2303,230 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         return False                      # nothing this call can vouch for; the replacement is declined
 
     held_fd, held_via_proc = (None, False)
-    if linked is not None:
-        held_fd, held_via_proc = _open_held_copy(dirfd, linked, previous)
-        if held_fd is None:
-            # THE SLOT IS NO LONGER THE INODE THAT WAS LINKED INTO IT (by this call, or by the
-            # earlier one whose slot the pre-scan found). Something replaced that name
-            # between the link and this open. Everything downstream — the narrowing, the
-            # classification, the decision to release the slot — would be describing a file this
-            # scan never preserved, which is exactly the sequence three legs reproduced. Nothing
-            # is unlinked (the name is not ours to remove now, and round twenty-six is why that
-            # matters) and the replacement is declined, so the findings stay where they are.
-            return False
+    try:
+        if linked is not None:
+            held_fd, held_via_proc = _open_held_copy(dirfd, linked, previous)
+            if held_fd is None:
+                # THE SLOT IS NO LONGER THE INODE THAT WAS LINKED INTO IT (by this call, or by the
+                # earlier one whose slot the pre-scan found). Something replaced that name
+                # between the link and this open. Everything downstream — the narrowing, the
+                # classification, the decision to release the slot — would be describing a file this
+                # scan never preserved, which is exactly the sequence three legs reproduced. Nothing
+                # is unlinked (the name is not ours to remove now, and round twenty-six is why that
+                # matters) and the replacement is declined, so the findings stay where they are.
+                return False
 
-    if linked is not None:
-        # NARROW THE PRESERVED COPY. The slot is a SECOND published name inside the untrusted
-        # tree, and a hard link keeps the old inode's mode and ACL by definition — which is the
-        # point when preserving evidence and the problem when that evidence was published wide.
-        # Review put it exactly: preservation keeps the leak the owner-only publish was about to
-        # close. A findings report sitting at a planted 0644 is replaced owner-only at the
-        # canonical name while the preserved copy stays group- and other-readable beside it, and
-        # os.replace would have dropped that inode entirely.
-        #
-        # This narrows BOTH names, because they are one inode — deliberately. The canonical one is
-        # about to be replaced, and narrowing a report nobody should have been able to read is
-        # safe in the interim. If preservation is refused and the report stays, it stays narrower
-        # than it was, which is the direction that cannot hurt.
-        #
-        # The ANSWER is kept. A reserved name THIS FUNCTION CREATES asserts that the inode it
-        # linked carries the report's access policy; it says nothing about a file that was
-        # already sitting at such a name, and nothing about what another writer may put there
-        # afterwards. Read as a claim about whatever currently occupies the name, it is false —
-        # the gate demonstrated a substitution. A reserved name asserts that the retained
-        # report carries its access policy; if it does not, this call has to decide that below rather than
-        # hand the caller an authorization built on a strip that was refused.
-        try:
-            narrowed = _narrow_held_copy(held_fd, held_via_proc)
-        except BaseException:
-            _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
-            raise
-
-    # Classify only AFTER the link, so a failed read cannot prevent preservation — and classify
-    # THROUGH THE LINK where one was made, not through report_path (with no link, the else
-    # branch below opens the name bound by identity to the recorded inode, and that is the only
-    # way it reads it). The two names described the same inode at link
-    # time, and the link is the name LESS likely to be replaced under us — not, as this comment
-    # said until round twenty-seven, a name nobody else is replacing. The gate landed a rename
-    # into the reserved slot between the link and this read and the classification then described
-    # the wrong inode; reading through a pathname is not reading through a held descriptor. That
-    # WAS the defect (past tense): an os.replace onto report_path between the link and a by-name
-    # read left the classification describing a DIFFERENT inode from the one preserved, and a
-    # status line verdict then unlinked the findings just kept. An independent review leg
-    # supplied that interleaving; the read below is through the descriptor we actually hold.
-    if held_fd is not None:
-        # READ THROUGH THE DESCRIPTOR. A held inode cannot be swapped under a read, which is the
-        # difference between classifying what we preserved and classifying what someone left at
-        # the name. The link count USED to be read here too, to refuse a status line's slot
-        # release while that slot was the only name; that release is identity-checked and
-        # unconditional now, so the count had no reader left — and a dead read is how a later
-        # round mistakes a leftover for a live guard.
-        try:
-            _prefix = _read_prefix_held(held_fd, held_via_proc, len(_STATUS_LINE_PREFIX))
-            is_status_line = _prefix == _STATUS_LINE_PREFIX
-        except BaseException:
-            _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
-            raise
-        # The descriptor stays open past this point: the release decision below needs it to
-        # confirm the slot NAME still refers to this inode before anything is unlinked.
-    else:
-        # THE VERDICT COMES FROM THE INODE THAT WAS RECORDED, or there is no verdict. With no
-        # slot there is no held copy, and this branch used to open the NAME and read whatever
-        # was there. The invariant leg ran it on f153122: findings A at the name, every slot
-        # occupied, a status line at the name for exactly the duration of this open, A restored
-        # before the descriptor was even returned. The verdict was "status line", the canonical
-        # guard saw A back in place and passed, and the replace destroyed A's only name — with
-        # no concurrent activity after the swap, so outside the documented check-to-rename
-        # interval. The identity-checked helper binds the bytes read to `previous`; a name that
-        # has stopped reaching that inode answers None, and with nothing preserved and nothing
-        # classifiable the replacement is declined. A FIFO cannot block this: identity is
-        # compared before any read, and a FIFO is not the regular inode that was recorded.
-        _cfd, _cvia = _open_held_copy(dirfd, report_name, previous)
-        if _cfd is None:
-            return False
-        try:
-            # `_read_prefix_held` answers None when it cannot read, and None is not the status
-            # prefix: an unreadable copy is classified as findings, the costly case. (An
-            # `except OSError` that used to sit here was unreachable — cold leg, d7e4a3c.)
-            _prefix = _read_prefix_held(_cfd, _cvia, len(_STATUS_LINE_PREFIX))
-            is_status_line = _prefix == _STATUS_LINE_PREFIX
-        finally:
-            # ONE UNLINK OF THE ONLY REMAINING NAME during this read left the descriptor as
-            # the last reference, and the close freed it (cold leg, 884e6c2). UNCONDITIONALLY,
-            # because this helper both asks and closes: a flag that skipped it for a status
-            # line skipped the CLOSE with the question and leaked the descriptor to process
-            # exit (executed review, 212e683). The question needs no flag — it reads the prefix
-            # itself and lets a status line go, which is the same decision in one place.
-            _rescue_then_close(dirfd, _cfd, _cvia)
-
-    if is_status_line:
-        # A CLEAN or REFUSED report is not worth a slot, and parking one there was measured
-        # blocking a real findings report from ever being kept. Give the slot back — INCLUDING
-        # when this slot has become the only name. Round twenty-six refused to destroy a file to
-        # reclaim a name, and that refusal is about EVIDENCE: the slot is linked before the report
-        # is classified, so a status line whose canonical name went during the read stayed parked
-        # under a reserved name saying this tree passed, beside an exit status of two (inventory,
-        # 212e683). Destroying a stale CLEAN is the direction this whole file is pointed in, and
-        # the identity check below is what makes it safe — not the link count.
-        #
-        # AND ONLY WHILE THE SLOT NAME STILL REFERS TO THAT INODE. The link count says the
-        # status inode has another name; it says nothing about what the slot name reaches now.
-        # The invariant leg swapped the slot for findings report B's last name while the prefix
-        # was being read, the count (canonical + alias) was still two, and the slot — B — was
-        # unlinked by name. The release goes through the identity-checked helper on the
-        # descriptor held since the link, and a slot that is no longer this inode is left.
-        try:
-            if linked is not None and held_fd is not None:
-                _remove_own_stage(dirfd, linked, held_fd)
-        finally:
-            if held_fd is not None:
-                _close_quietly(held_fd)   # under finally: a cancellation in the cleanup leaked it
-        return True
-    if held_fd is not None:
-        # FINDINGS, CLASSIFIED THROUGH THE SLOT — and both names may have been taken while they
-        # were being read (cold leg, 884e6c2): asked before the close, as every findings close
-        # here is, the post-publish sweep's excepted for the reason its own helper states
-        # (inventory, 212e683, on the wording).
-        _rescue_then_close(dirfd, held_fd, held_via_proc)
-        held_fd = None
-
-    if linked is not None:
-        if narrowed:
-            if guard_out is not None:
-                guard_out.append(("slot", linked, previous.st_dev, previous.st_ino))
-            return True
-        # THE POLICY WAS DENIED ON THE INODE WE JUST RESERVED A NAME FOR, so the replacement is
-        # refused. Round twenty-three settled the shape for quarantine and preservation was left
-        # behind: a reserved name means "retained evidence, carrying the report's access policy",
-        # and a successful link was authorizing the caller to replace the canonical report while
-        # that retained inode still carried an ACL.
-        #
-        # THE NAME IS KEPT, and that half was wrong in this round's first shape. It gave the name
-        # back too, on the reasoning that a link is a second NAME for the report's own inode and
-        # so removing it removes no bytes. That sentence holds only while the canonical name still
-        # REACHES that inode, and this module exists because it may stop reaching it at any
-        # moment: take the report between the link and the forfeit and the reserved name is the
-        # only name left, so giving it back destroys the findings. A review leg aimed at that
-        # sentence and the arm reproduces it. POSIX has no way to ask for a name to be removed
-        # only if it is not the last one, so a check before the unlink would be a smaller window
-        # rather than a closed one.
-        #
-        # Not removing it costs nothing here, and this is where preservation genuinely differs
-        # from quarantine rather than merely lagging it. A quarantined name would survive BESIDE
-        # a freshly published report and stand in for it. This one does not: the replacement is
-        # declined, so ordinarily the inode goes on standing at the canonical name too, and an
-        # ACL on the reserved name is an ACL already on the report itself — not a channel this
-        # call opened. After a successful write_report the sweep attempts cleanup of the older
-        # entries in both reserved families; newer or unreadable-age entries are left.
-        #
-        # "ORDINARILY" IS DOING REAL WORK IN THAT SENTENCE, and the round that wrote it said it
-        # unconditionally. The gate's own probe removed the canonical entry during preservation
-        # and left this reserved link as the SOLE name for the findings. That does not weaken the
-        # decision — it is the strongest argument for it, because under that schedule giving the
-        # name back is precisely what would destroy them.
-        return False
-
-    # Nothing could be linked. The findings may still be preserved already, by an earlier call
-    # that linked them under one of these names — but ONLY a second directory entry for THIS
-    # inode counts. The previous revision asked os.stat, which FOLLOWS symlinks, so a symlink
-    # planted at the slot and pointing back at the report answered "already preserved" when
-    # nothing was preserved at all, and the caller then destroyed the only copy. Both gate legs
-    # reproduced that independently, from the CLI, with no race.
-    #
-    # lstat does not follow. st_ino is unique only within a filesystem, so st_dev travels with
-    # it. A hard link is by definition a regular file, so a directory or a device at the name
-    # cannot pass either.
-    for candidate in _superseded_slot_names():
-        try:
-            kept = os.lstat(candidate, dir_fd=dirfd)
-        except OSError:
-            continue
-        if (stat.S_ISREG(kept.st_mode)
-                and (kept.st_dev, kept.st_ino) == (previous.st_dev, previous.st_ino)):
-            # NARROWED HERE TOO. This branch answered "already preserved" and returned without
-            # touching the mode, so a copy an earlier call left wide — or one whose narrowing
-            # failed that time — stayed wide for every run afterwards. The gate ruled it blocking,
-            # and it is the same defect as the one below in a place the eye skips: the publish
-            # about to happen is owner-only, and the second name beside it was not.
-            # THROUGH A HELD DESCRIPTOR, like the other branch. Round twenty-eight anchored the
-            # fresh-link path and left this one comparing an lstat and then handing the NAME to a
-            # helper that opens it again — so the identity test and the narrowing could describe
-            # two different files. A leg reproduced it: True returned after stripping and
-            # chmodding one inode having checked another. The same defect in a second place, two
-            # rounds later; the sibling of a fixed branch is where it goes to live.
-            _kept_fd, _kept_via_proc = _open_held_copy(dirfd, candidate, previous)
-            if _kept_fd is None:
-                return False              # the slot stopped being the inode we just checked
+        if linked is not None:
+            # NARROW THE PRESERVED COPY. The slot is a SECOND published name inside the untrusted
+            # tree, and a hard link keeps the old inode's mode and ACL by definition — which is the
+            # point when preserving evidence and the problem when that evidence was published wide.
+            # Review put it exactly: preservation keeps the leak the owner-only publish was about to
+            # close. A findings report sitting at a planted 0644 is replaced owner-only at the
+            # canonical name while the preserved copy stays group- and other-readable beside it, and
+            # os.replace would have dropped that inode entirely.
+            #
+            # This narrows BOTH names, because they are one inode — deliberately. The canonical one is
+            # about to be replaced, and narrowing a report nobody should have been able to read is
+            # safe in the interim. If preservation is refused and the report stays, it stays narrower
+            # than it was, which is the direction that cannot hurt.
+            #
+            # The ANSWER is kept. A reserved name THIS FUNCTION CREATES asserts that the inode it
+            # linked carries the report's access policy; it says nothing about a file that was
+            # already sitting at such a name, and nothing about what another writer may put there
+            # afterwards. Read as a claim about whatever currently occupies the name, it is false —
+            # the gate demonstrated a substitution. A reserved name asserts that the retained
+            # report carries its access policy; if it does not, this call has to decide that below rather than
+            # hand the caller an authorization built on a strip that was refused.
             try:
-                if _narrow_held_copy(_kept_fd, _kept_via_proc):
-                    if guard_out is not None:
-                        guard_out.append(("slot", candidate, previous.st_dev, previous.st_ino))
-                    return True           # already preserved by an earlier call; oldest wins
-            finally:
-                _rescue_then_close(dirfd, _kept_fd, _kept_via_proc)   # both names may be gone (invariant leg, 8dd9edd)
-            # AND THE NAME STAYS. This copy is a second name for the SAME inode the report is
-            # standing on — the identity check above is what establishes that — so an ACL on it
-            # is an ACL already on the report itself, not a channel this call opened. Unlinking a
-            # name an earlier call reserved would destroy something to fix nothing. Declining the
-            # replacement is the half that matters: the wide inode is not left behind under a
-            # reserved name while an owner-only report takes its place.
-            return False
-    return False                          # findings, and no slot would take them
+                narrowed = _narrow_held_copy(held_fd, held_via_proc)
+            except BaseException:
+                _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
+                held_fd = None
+                raise
 
+        # Classify only AFTER the link, so a failed read cannot prevent preservation — and classify
+        # THROUGH THE LINK where one was made, not through report_path (with no link, the else
+        # branch below opens the name bound by identity to the recorded inode, and that is the only
+        # way it reads it). The two names described the same inode at link
+        # time, and the link is the name LESS likely to be replaced under us — not, as this comment
+        # said until round twenty-seven, a name nobody else is replacing. The gate landed a rename
+        # into the reserved slot between the link and this read and the classification then described
+        # the wrong inode; reading through a pathname is not reading through a held descriptor. That
+        # WAS the defect (past tense): an os.replace onto report_path between the link and a by-name
+        # read left the classification describing a DIFFERENT inode from the one preserved, and a
+        # status line verdict then unlinked the findings just kept. An independent review leg
+        # supplied that interleaving; the read below is through the descriptor we actually hold.
+        if held_fd is not None:
+            # READ THROUGH THE DESCRIPTOR. A held inode cannot be swapped under a read, which is the
+            # difference between classifying what we preserved and classifying what someone left at
+            # the name. The link count USED to be read here too, to refuse a status line's slot
+            # release while that slot was the only name; that release is identity-checked and
+            # unconditional now, so the count had no reader left — and a dead read is how a later
+            # round mistakes a leftover for a live guard.
+            try:
+                _prefix = _read_prefix_held(held_fd, held_via_proc, len(_STATUS_LINE_PREFIX))
+                is_status_line = _prefix == _STATUS_LINE_PREFIX
+            except BaseException:
+                _rescue_then_close(dirfd, held_fd, held_via_proc)   # asked during the unwinding (invariant leg, 8dd9edd)
+                held_fd = None
+                raise
+            # The descriptor stays open past this point: the release decision below needs it to
+            # confirm the slot NAME still refers to this inode before anything is unlinked.
+        else:
+            # THE VERDICT COMES FROM THE INODE THAT WAS RECORDED, or there is no verdict. With no
+            # slot there is no held copy, and this branch used to open the NAME and read whatever
+            # was there. The invariant leg ran it on f153122: findings A at the name, every slot
+            # occupied, a status line at the name for exactly the duration of this open, A restored
+            # before the descriptor was even returned. The verdict was "status line", the canonical
+            # guard saw A back in place and passed, and the replace destroyed A's only name — with
+            # no concurrent activity after the swap, so outside the documented check-to-rename
+            # interval. The identity-checked helper binds the bytes read to `previous`; a name that
+            # has stopped reaching that inode answers None, and with nothing preserved and nothing
+            # classifiable the replacement is declined. A FIFO cannot block this: identity is
+            # compared before any read, and a FIFO is not the regular inode that was recorded.
+            _cfd, _cvia = _open_held_copy(dirfd, report_name, previous)
+            if _cfd is None:
+                return False
+            try:
+                # `_read_prefix_held` answers None when it cannot read, and None is not the status
+                # prefix: an unreadable copy is classified as findings, the costly case. (An
+                # `except OSError` that used to sit here was unreachable — cold leg, d7e4a3c.)
+                _prefix = _read_prefix_held(_cfd, _cvia, len(_STATUS_LINE_PREFIX))
+                is_status_line = _prefix == _STATUS_LINE_PREFIX
+            finally:
+                # ONE UNLINK OF THE ONLY REMAINING NAME during this read left the descriptor as
+                # the last reference, and the close freed it (cold leg, 884e6c2). UNCONDITIONALLY,
+                # because this helper both asks and closes: a flag that skipped it for a status
+                # line skipped the CLOSE with the question and leaked the descriptor to process
+                # exit (executed review, 212e683). The question needs no flag — it reads the prefix
+                # itself and lets a status line go, which is the same decision in one place.
+                _rescue_then_close(dirfd, _cfd, _cvia)
+
+        if is_status_line:
+            # A CLEAN or REFUSED report is not worth a slot, and parking one there was measured
+            # blocking a real findings report from ever being kept. Give the slot back — INCLUDING
+            # when this slot has become the only name. Round twenty-six refused to destroy a file to
+            # reclaim a name, and that refusal is about EVIDENCE: the slot is linked before the report
+            # is classified, so a status line whose canonical name went during the read stayed parked
+            # under a reserved name saying this tree passed, beside an exit status of two (inventory,
+            # 212e683). Destroying a stale CLEAN is the direction this whole file is pointed in, and
+            # the identity check below is what makes it safe — not the link count.
+            #
+            # AND ONLY WHILE THE SLOT NAME STILL REFERS TO THAT INODE. The link count says the
+            # status inode has another name; it says nothing about what the slot name reaches now.
+            # The invariant leg swapped the slot for findings report B's last name while the prefix
+            # was being read, the count (canonical + alias) was still two, and the slot — B — was
+            # unlinked by name. The release goes through the identity-checked helper on the
+            # descriptor held since the link, and a slot that is no longer this inode is left.
+            try:
+                if linked is not None and held_fd is not None:
+                    _remove_own_stage(dirfd, linked, held_fd)
+            finally:
+                if held_fd is not None:
+                    _close_quietly(held_fd)   # under finally: a cancellation in the cleanup leaked it
+                    held_fd = None
+            return True
+        if held_fd is not None:
+            # FINDINGS, CLASSIFIED THROUGH THE SLOT — and both names may have been taken while they
+            # were being read (cold leg, 884e6c2): asked before the close, as every findings close
+            # here is, the post-publish sweep's excepted for the reason its own helper states
+            # (inventory, 212e683, on the wording).
+            _rescue_then_close(dirfd, held_fd, held_via_proc)
+            held_fd = None
+
+        if linked is not None:
+            if narrowed:
+                if guard_out is not None:
+                    guard_out.append(("slot", linked, previous.st_dev, previous.st_ino))
+                return True
+            # THE POLICY WAS DENIED ON THE INODE WE JUST RESERVED A NAME FOR, so the replacement is
+            # refused. Round twenty-three settled the shape for quarantine and preservation was left
+            # behind: a reserved name means "retained evidence, carrying the report's access policy",
+            # and a successful link was authorizing the caller to replace the canonical report while
+            # that retained inode still carried an ACL.
+            #
+            # THE NAME IS KEPT, and that half was wrong in this round's first shape. It gave the name
+            # back too, on the reasoning that a link is a second NAME for the report's own inode and
+            # so removing it removes no bytes. That sentence holds only while the canonical name still
+            # REACHES that inode, and this module exists because it may stop reaching it at any
+            # moment: take the report between the link and the forfeit and the reserved name is the
+            # only name left, so giving it back destroys the findings. A review leg aimed at that
+            # sentence and the arm reproduces it. POSIX has no way to ask for a name to be removed
+            # only if it is not the last one, so a check before the unlink would be a smaller window
+            # rather than a closed one.
+            #
+            # Not removing it costs nothing here, and this is where preservation genuinely differs
+            # from quarantine rather than merely lagging it. A quarantined name would survive BESIDE
+            # a freshly published report and stand in for it. This one does not: the replacement is
+            # declined, so ordinarily the inode goes on standing at the canonical name too, and an
+            # ACL on the reserved name is an ACL already on the report itself — not a channel this
+            # call opened. After a successful write_report the sweep attempts cleanup of the older
+            # entries in both reserved families; newer or unreadable-age entries are left.
+            #
+            # "ORDINARILY" IS DOING REAL WORK IN THAT SENTENCE, and the round that wrote it said it
+            # unconditionally. The gate's own probe removed the canonical entry during preservation
+            # and left this reserved link as the SOLE name for the findings. That does not weaken the
+            # decision — it is the strongest argument for it, because under that schedule giving the
+            # name back is precisely what would destroy them.
+            return False
+
+        # Nothing could be linked. The findings may still be preserved already, by an earlier call
+        # that linked them under one of these names — but ONLY a second directory entry for THIS
+        # inode counts. The previous revision asked os.stat, which FOLLOWS symlinks, so a symlink
+        # planted at the slot and pointing back at the report answered "already preserved" when
+        # nothing was preserved at all, and the caller then destroyed the only copy. Both gate legs
+        # reproduced that independently, from the CLI, with no race.
+        #
+        # lstat does not follow. st_ino is unique only within a filesystem, so st_dev travels with
+        # it. A hard link is by definition a regular file, so a directory or a device at the name
+        # cannot pass either.
+        for candidate in _superseded_slot_names():
+            try:
+                kept = os.lstat(candidate, dir_fd=dirfd)
+            except OSError:
+                continue
+            if (stat.S_ISREG(kept.st_mode)
+                    and (kept.st_dev, kept.st_ino) == (previous.st_dev, previous.st_ino)):
+                # NARROWED HERE TOO. This branch answered "already preserved" and returned without
+                # touching the mode, so a copy an earlier call left wide — or one whose narrowing
+                # failed that time — stayed wide for every run afterwards. The gate ruled it blocking,
+                # and it is the same defect as the one below in a place the eye skips: the publish
+                # about to happen is owner-only, and the second name beside it was not.
+                # THROUGH A HELD DESCRIPTOR, like the other branch. Round twenty-eight anchored the
+                # fresh-link path and left this one comparing an lstat and then handing the NAME to a
+                # helper that opens it again — so the identity test and the narrowing could describe
+                # two different files. A leg reproduced it: True returned after stripping and
+                # chmodding one inode having checked another. The same defect in a second place, two
+                # rounds later; the sibling of a fixed branch is where it goes to live.
+                _kept_fd, _kept_via_proc = _open_held_copy(dirfd, candidate, previous)
+                if _kept_fd is None:
+                    return False              # the slot stopped being the inode we just checked
+                try:
+                    if _narrow_held_copy(_kept_fd, _kept_via_proc):
+                        if guard_out is not None:
+                            guard_out.append(("slot", candidate, previous.st_dev, previous.st_ino))
+                        return True           # already preserved by an earlier call; oldest wins
+                finally:
+                    _rescue_then_close(dirfd, _kept_fd, _kept_via_proc)   # both names may be gone (invariant leg, 8dd9edd)
+                # AND THE NAME STAYS. This copy is a second name for the SAME inode the report is
+                # standing on — the identity check above is what establishes that — so an ACL on it
+                # is an ACL already on the report itself, not a channel this call opened. Unlinking a
+                # name an earlier call reserved would destroy something to fix nothing. Declining the
+                # replacement is the half that matters: the wide inode is not left behind under a
+                # reserved name while an owner-only report takes its place.
+                return False
+        return False                          # findings, and no slot would take them
+
+
+    finally:
+        # ONE HANDLER OVER THE WHOLE OF THIS DESCRIPTOR'S LIFE. It was guarded only inside the
+        # two blocks that USE it — the narrowing and the classification — with plain statements
+        # between them, and a cancellation at one of those bare conditions left it open: the last
+        # reference once both names go, freed at process exit with nothing standing behind it
+        # (invariant leg, aca6e8a). Every path that closes it above clears the name, so this asks
+        # and closes only what is still held.
+        if held_fd is not None:
+            _rescue_then_close(dirfd, held_fd, held_via_proc)
 
 def _write_refusal_report(staging, refusal):
     """Best-effort: replace an EXISTING report with a single REFUSED line, so that a stale CLEAN
