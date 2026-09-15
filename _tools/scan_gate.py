@@ -539,12 +539,14 @@ def _link_held_inode(fd, candidate, dirfd):
     Measured on this box: while the inode still has at least one name the new link IS the held
     inode; once its link count is zero the call fails (ENOENT on the measured kernel) rather than
     linking anything else. So this either attaches OUR bytes to CANDIDATE, or it fails — it
-    cannot attach a decoy. ENOENT out of this helper therefore means "no custody was taken": the
-    kernel refused, or the post-link identity check below did. It does not prove the link count
-    is zero, and no caller relies on that. Callers answer it two ways: the stage paths keep
-    the stage and let their cleanup re-ask the stage name before the close; preservation,
-    whose link was a retry away, moves to the next reserved name and takes its rescue only
-    once every name has been tried.
+    cannot attach a decoy. ENOENT out of this helper therefore means "no custody REMAINS": the
+    kernel refused, or a name was added and the post-link identity check below found it already
+    replaced under us (the extra name is gone; the held count is what it was). It does not
+    prove the link count is zero, and no caller relies on that. Callers answer it three ways:
+    the copy-out keeps its stage and lets its cleanup re-ask the stage name before the close;
+    quarantine re-asks the stage name at once and copies out only if it is gone; preservation,
+    whose link was a retry away, moves to the next reserved name and takes its rescue only once
+    every name has been tried.
 
     Returns True on success. Raises FileNotFoundError when no custody was taken — the kernel refused, or the check below did (the
     caller's rescue path); `_CustodyUnconfirmed` when the link was made and the check after it
@@ -574,6 +576,13 @@ def _link_held_inode(fd, candidate, dirfd):
 
 def _copy_out_unpublished(dirfd, fd, depth=0):
     """Last resort: write the held inode's bytes to a fresh reserved name, by READING not linking.
+
+    THE ANSWER IS WHETHER A COMPLETE COPY IS ON DISK UNDER A NAME THIS SCANNER CONTROLS — a
+    reserved name, or the kept stage under the temporary prefix. False means no complete copy
+    was made (no source, no stage, a read that failed partway, nothing written): the caller may
+    try again. It used to mean "no reserved name was linked", and a caller that read it as "no
+    copy" — write_report, through quarantine — made a second copy of the same findings beside
+    a complete kept one (invariant leg, 5b1a014).
 
     This runs when the staged name has stopped naming the staged inode, or its state could not be read — neither of which proves that no
     rename, link or unlink can reach those bytes by name any more. The descriptor still can. The
@@ -704,16 +713,16 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                 # the reserved name — and the stage, holding the bytes, is kept.
                 try:
                     if stat.S_IMODE(os.fstat(stage_fd).st_mode) != _REPORT_MODE:
-                        return False
+                        return True       # complete bytes, kept under the temporary prefix (see the docstring)
                 except OSError:
-                    return False
+                    return True           # cannot verify the mode: the same — kept, no reserved name
                 if _strip_denied:
                     # THE SAME RULE AS QUARANTINE: a reserved name asserts the report's access
                     # policy, and a denied strip means it is not on the file. The bytes are on
                     # the stage and retention is on, so declining the name loses nothing — the
                     # "only remaining copy" exception this function used to take was written
                     # before the stage was kept by default (cold leg, 0c28c5e).
-                    return False
+                    return True           # complete bytes, kept; no reserved name
             except OSError:
                 return False
             for candidate in _unpublished_slot_names():
@@ -727,7 +736,7 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                     # finally's re-ask added in round forty-eight a taken stage name produced two
                     # copies of the same findings (invariant leg, e71e440).
                     keep_stage = True
-                    return False
+                    return True           # complete bytes, kept; the finally re-asks the name
                 except _CustodyUnconfirmed:
                     # THE LINK MAY HAVE LANDED. The next name would be a second one for this
                     # inode; the stage keeps the bytes (retention is on) and no more is tried —
@@ -742,7 +751,7 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                     # restarted at zero and a racer who kept taking names drove the chain until
                     # the reserved names, or the descriptors, ran out (invariant leg, cold leg
                     # and an inventory trace, all on 407a89c).
-                    return False
+                    return True           # complete bytes, kept (and possibly linked)
                 except OSError:
                     continue              # occupied or unusable — the next name
                 # THE LINK IS THE HELD INODE BY CONSTRUCTION: it was made through the descriptor
@@ -753,7 +762,7 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
             # EVERY RESERVED NAME WAS TAKEN — AND THE STAGE IS KEPT. A completed stage under the
             # scanner's own temporary prefix promises nothing and claims nothing, which makes it the
             # right place for evidence that no reserved name will take.
-            return False                  # retention still on: the stage is the only copy
+            return True                   # retention on: the kept stage IS the copy, complete
         finally:
             # THE CLOSE IS UNDER ITS OWN FINALLY. Round thirty-two put the identity cleanup before the
             # close (it needs the descriptor) and left the close after it unprotected; a cancellation
@@ -777,9 +786,15 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                         # (executed review, 4632326 — an interrupt before the first read
                         # kept an empty stage).
                         _remove_own_stage(dirfd, stage_name, stage_fd)
-                    elif not keep_stage:
+                    elif not keep_stage and depth < 1:
                         # only while the reserved name (or any other) still reaches the copy
                         _remove_stage_if_another_name_remains(dirfd, stage_name, stage_fd, depth)
+                    # AT DEPTH ONE THE STAGE IS KEPT, LINKED OR NOT. The rescue-of-a-rescue used to
+                    # release its stage after its link, and a racer's second act on the reserved
+                    # name then left the copy nameless with no further rescue (cold leg,
+                    # 5b1a014). Kept, the module takes no last name of its own at that depth: a
+                    # leftover under the temporary prefix is the whole cost, and both names must
+                    # be taken by someone else before the close can free anything.
                     elif depth < 1:
                         # KEPT — AND THE NAME IS RE-ASKED BEFORE THE CLOSE. Retention means "do
                         # not unlink the stage name"; it was being read as "the stage name still
@@ -800,7 +815,9 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
 def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
     """Keep a staged findings report the publish could not complete. Answer whether it was kept.
 
-    A False answer means THIS FUNCTION DID NOT TAKE CUSTODY of the staged file — nothing more. It
+    A False answer means THIS FUNCTION DID NOT TAKE CUSTODY of the staged file — nothing more.
+    Custody is a reserved name, or a complete copy kept under the temporary prefix by the
+    copy-out (its answer is passed through unchanged). It
     does not mean the file should be removed, and the gate required that distinction to be written
     down rather than inferred. The caller decides separately, from _staged_holds_evidence, whether
     removing it would destroy anything: a staged CLEAN or an empty stage is removed, staged
@@ -893,9 +910,12 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
             # reserved name is not ours. Its name may have been taken between the identity check
             # and this link, and the descriptor is the only thing still holding the findings.
             # Two review legs measured the previous shape closing that descriptor on a False
-            # answer. The rescue is the same one the pre-link divergence gets: copy the bytes
-            # out through the descriptor. Nothing at the old staged name is ours to remove.
-            return _copy_out_unpublished(dirfd, fd)
+            # answer. The rescue asks first whether the staged name still reaches the stage:
+            # intact, the stage IS the copy and nothing more is made (an unconditional copy here
+            # put a second 0600 copy beside an intact stage — executed review, 5b1a014); gone,
+            # the bytes are copied out through the descriptor. Nothing at the old staged name is
+            # ours to remove.
+            return _false_or_rescue(dirfd, tmp_name, fd)
         except _CustodyUnconfirmed:
             # THE LINK MAY HAVE LANDED. False here means "no custody confirmed" and nothing
             # more: the stage is left where it is, and no second reserved name is tried.
@@ -910,6 +930,9 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
         # name, and the caller's close frees the findings while believing them kept (cold leg,
         # 0c28c5e). The same nlink rule preservation applies to a status-line slot. A leftover
         # stage is harmless; a nameless inode is the loss this whole path exists to prevent.
+        # AND, SINCE ROUND FORTY-NINE, THE LINK COUNT IS RE-READ AFTER THE UNLINK: a reserved name
+        # ended inside the helper's own four-syscall window made that unlink the last one, and
+        # the helper now copies the bytes out before this function answers and the caller closes.
         _remove_stage_if_another_name_remains(dirfd, tmp_name, fd)
         return True
     return False
@@ -1743,8 +1766,8 @@ def _narrow_leftover(fd):
     try:
         os.fchmod(fd, _REPORT_MODE)
     except OSError:
-        # A PATH-ONLY DESCRIPTOR CANNOT BE FCHMOD'ED (EBADF — the platform fact recorded at the
-        # top of the file), and preservation's no-slot rescue hands exactly such a descriptor to
+        # A PATH-ONLY DESCRIPTOR CANNOT BE FCHMOD'ED (EBADF — the platform fact
+        # `_harden_report_dir` and `_narrow_held_copy` already work around), and preservation's no-slot rescue hands exactly such a descriptor to
         # the copy-out, whose reopen then needs owner-read on an inode this could not narrow: a
         # mode-000 findings report whose name was taken was freed at the close (cold leg and an
         # executed review, both on 4e0be0a). The same detour `_narrow_held_copy` uses reaches
@@ -1782,7 +1805,9 @@ def _false_or_rescue(dirfd, tmp_name, fd, depth=0):
 def _remove_stage_if_another_name_remains(dirfd, name, fd, depth=0):
     """Remove NAME (identity-checked) only if the held inode has at least one other name — and
     if that unlink turns out to have taken the last name anyway, copy the bytes out before the
-    caller's close can free them.
+    caller's close can free them — where a copy can be made; when none can (no creatable name,
+    no readable source) the close frees them, which is the copy-out's stated limit, and the
+    caller still answers "custody taken" for a link that no longer exists (invariant leg, 5b1a014).
 
     The nlink read and the unlink are FOUR syscalls apart (the nlink fstat, then the helper's
     fstat, lstat and unlink), and the interval is the same check-then-act limit as everywhere
@@ -1795,12 +1820,27 @@ def _remove_stage_if_another_name_remains(dirfd, name, fd, depth=0):
     unlink, and zero sends the bytes through the copy-out, one level deep.
     """
     try:
-        if os.fstat(fd).st_nlink >= 2:
-            _remove_own_stage(dirfd, name, fd)
-            if depth < 1 and os.fstat(fd).st_nlink == 0:
-                _copy_out_unpublished(dirfd, fd, depth + 1)
+        nlink = os.fstat(fd).st_nlink
     except OSError:
-        pass                              # cannot tell: keep the name
+        return                            # cannot tell BEFORE any act: keep the name
+    if nlink == 1:
+        return                            # the stage may be the last name: keep it
+    if nlink >= 2:
+        _remove_own_stage(dirfd, name, fd)
+    # nlink was ZERO ON ENTRY (every name already taken — the racer's two acts, and no act of
+    # ours; the cold leg on 5b1a014 read the old `>= 2` gate skipping exactly the case this
+    # helper exists for), or our unlink may just have taken the last name: either way this
+    # descriptor may be the last reference, and the copy-out decides on the count it reads.
+    if depth < 1:
+        try:
+            nameless = os.fstat(fd).st_nlink == 0
+        except OSError:
+            # CANNOT TELL AFTER THE UNLINK — and "keep the name" no longer means anything, the
+            # name is gone. A copy is attempted: at worst a duplicate, where silence was a loss
+            # (executed review, 5b1a014).
+            nameless = True
+        if nameless:
+            _copy_out_unpublished(dirfd, fd, depth + 1)
 
 
 def _remove_own_stage(dirfd, tmp_name, fd):
