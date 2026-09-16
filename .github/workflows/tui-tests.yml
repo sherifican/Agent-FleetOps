@@ -7,7 +7,15 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 here too, for the same reason the ref-gate job gives below. The guard suite
+      # now contains arms that ask whether a commit hash cited in prose resolves in this
+      # repository's history. At the default depth of 1 those commits are simply not in the clone,
+      # so "does not resolve" means "was not fetched" — and the arms called every citation in the
+      # package dangling on the first run after publication. They skip on a shallow checkout now
+      # rather than lie, and this line is what keeps them from skipping forever: a guard that
+      # always stands down is the decoration this repository argues against.
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - name: Install

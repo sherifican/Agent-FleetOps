@@ -12953,14 +12953,42 @@ def scan_citations(files, read_text, resolves, retired):
     return sorted(set(dangling)), sorted(set(unreadable)), sorted(set(unclassified))
 
 
+def history_is_complete(repo):
+    """(can this checkout answer "is commit X in our history?", why not).
+
+    `.git` EXISTING IS NOT HISTORY EXISTING, and that was the bug. A depth-1 checkout — what
+    `actions/checkout` does by default — has a `.git`, so the arms below ran, and every cited hash
+    failed to resolve because the commit simply is not in the clone. The arms reported forty-odd
+    dangling citations on a repository whose citations are all fine (CI, first run after publish).
+
+    That is this repository's own stated failure mode read backwards. The ref-gate job carries the
+    forward version in a comment: at depth 1 it "would scan one commit and report clean, which is
+    the check-that-cannot-fail failure mode this repo exists to argue against." A truncated input
+    can make a check say clean OR say dirty; both are the check not knowing what it was handed.
+    """
+    if not (Path(repo) / ".git").exists():
+        return False, ("no git history here (an export, not a clone): a hash cannot be resolved, "
+                       "and an arm that cannot resolve one must not report that they all resolved")
+    asked = subprocess.run(["git", "-C", str(repo), "rev-parse", "--is-shallow-repository"],
+                           capture_output=True, text=True)
+    if asked.returncode != 0:
+        return False, ("git could not say whether this checkout is shallow, so the depth of the "
+                       "history behind these citations is unknown")
+    if asked.stdout.strip() == "true":
+        return False, ("SHALLOW checkout: the commits these citations name are not in this clone "
+                       "at all, so 'does not resolve' here means 'was not fetched', not 'does not "
+                       "exist'. A CI job that runs these arms needs fetch-depth: 0")
+    return True, ""
+
+
 def test_every_commit_hash_cited_in_prose_resolves_or_is_recorded() -> None:
     """REPAIRED: `guard/README.md` cited a commit on no branch, and the citation would have been
     published as a reference a reader cannot follow. Each cited hash must resolve here, or be named
     in the mapping table as one the pre-publication rewrite retired. A file that cannot be read is
     reported, not skipped."""
-    if not (REPO / ".git").exists():
-        pytest.skip("no git history here (an export, not a clone): a hash cannot be resolved, and "
-                    "an arm that cannot resolve one must not report that they all resolved")
+    complete, why_not = history_is_complete(REPO)
+    if not complete:
+        pytest.skip(why_not)
     files = citing_files()
     assert files, ("REPAIRED: the file list came back empty, so this arm would pass by reading "
                    "nothing at all.")
@@ -13034,8 +13062,9 @@ def test_the_mapping_table_sends_readers_somewhere_that_exists() -> None:
     nothing ever asked about the right column, which is the half a reader actually follows. A table
     whose destinations are wrong is worse than no table: it answers the question incorrectly
     instead of leaving it open."""
-    if not (REPO / ".git").exists():
-        pytest.skip("no git history here: a destination cannot be resolved")
+    complete, why_not = history_is_complete(REPO)
+    if not complete:
+        pytest.skip(why_not)
     rows = hash_mapping_rows((REPO / "STAGING_README.md").read_text(encoding="utf8"))
     assert rows, ("REPAIRED: the mapping table has no rows, and every retired citation is then "
                   "either dangling or excused by an empty set.")
@@ -13174,3 +13203,50 @@ def test_a_whitespace_named_prose_file_is_scanned_not_skipped() -> None:
     assert dangling and not unreadable and not unclassified, (
         "CONTROL: the planted citation came back as %r dangling, %r unreadable, %r unclassified."
         % (dangling, unreadable, unclassified))
+
+
+def test_a_shallow_checkout_is_recognised_as_unmeasurable(tmp_path: Path) -> None:
+    """CONTROL: the two citation arms above skip when the history cannot answer, and a skip that
+    never fires is the same as no skip at all. This builds a real repository with two commits and a
+    depth-1 clone of it, and requires the reader to tell them apart.
+
+    The depth-1 clone is exactly what CI produced: `.git` present, history absent, every cited hash
+    unresolvable, and the arms calling that a wall of dangling citations."""
+    import subprocess as sp
+
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    env = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+           "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+           "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+    def git(*args, cwd):
+        return sp.run(["git", *args], cwd=str(cwd), env=env, capture_output=True, text=True)
+    git("init", "-q", "-b", "main", ".", cwd=origin)
+    for n in ("one", "two"):
+        (origin / f"{n}.md").write_text(f"{n}\n", encoding="utf8")
+        git("add", "-A", cwd=origin)
+        git("-c", "commit.gpgsign=false", "commit", "-q", "-m", n, cwd=origin)
+    if git("rev-parse", "HEAD", cwd=origin).returncode != 0:
+        pytest.skip("could not build a fixture repository here")
+
+    deep_ok, deep_why = history_is_complete(origin)
+    assert deep_ok and deep_why == "", (
+        "CONTROL: a full clone was reported unmeasurable (%r), so both arms would skip forever and "
+        "the citation check would be decoration." % deep_why)
+
+    shallow = tmp_path / "shallow"
+    made = sp.run(["git", "clone", "-q", "--depth", "1", origin.as_uri(), str(shallow)],
+                  env=env, capture_output=True, text=True)
+    if made.returncode != 0 or not (shallow / ".git").exists():
+        pytest.skip("could not make a shallow clone here: %s" % made.stderr.strip()[:120])
+
+    shallow_ok, shallow_why = history_is_complete(shallow)
+    assert not shallow_ok, (
+        "CONTROL: a depth-1 clone was reported as complete history. That is the CI condition, and "
+        "under it the arms above call every citation dangling.")
+    assert "shallow" in shallow_why.lower() and "fetch-depth" in shallow_why, (
+        "CONTROL: the skip reason must name the condition and what fixes it; it said %r"
+        % shallow_why)
+    assert (shallow / ".git").exists(), (
+        "CONTROL: the fixture is only meaningful because `.git` EXISTS in a shallow clone — that "
+        "is why the old `.git`-existence test passed straight through it.")
