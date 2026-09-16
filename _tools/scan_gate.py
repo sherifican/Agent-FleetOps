@@ -751,8 +751,9 @@ def _link_held_inode(fd, candidate, dirfd):
     prove the link count is zero, and no caller relies on that. Callers answer it three ways:
     the copy-out keeps its stage and lets its cleanup re-ask the stage name before the close;
     quarantine re-asks the stage name at once and copies out only if it is gone; preservation,
-    whose link was a retry away, moves to the next reserved name and takes its rescue only once
-    every name has been tried.
+    whose link was a retry away, moves to the next reserved name on this answer and takes its
+    rescue when it LEAVES the link phase — which is not always after every name has been tried,
+    since an unconfirmed custody breaks out of the loop early (team review, gate 72).
 
     Returns True on success. Raises FileNotFoundError when no custody was taken — the kernel refused, or the check below did (the
     caller's rescue path); `_CustodyUnconfirmed` when the link was made and the check after it
@@ -869,8 +870,10 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
             # RETENTION IS THE DEFAULT FROM THE MOMENT A STAGE EXISTS. Round thirty set keep_stage only on
             # the error paths it thought of, and a KeyboardInterrupt between two writes took none of
             # them: the finally saw False and deleted three bytes of evidence. The flag now starts True
-            # and is cleared in exactly one place — after a confirmed publication — so cancellation,
-            # or any exit this code did not anticipate, keeps whatever reached the stage.
+            # and is cleared only where the stage holds nothing worth keeping — no byte reached it,
+            # or none can be read back — and after a confirmed reserved-name link, so cancellation,
+            # or any exit this code did not anticipate, keeps whatever reached the stage. It said
+            # "exactly one place" for four rounds while four sites cleared it (team review).
             try:
                 # THE ACQUISITION IS NESTED INSIDE THE BLOCK THAT OWNS THE DESCRIPTOR. It used to be a
                 # SIBLING of that block — its own try, whose handler closes and re-raises, immediately
@@ -999,8 +1002,9 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                     except OSError:
                         continue              # occupied or unusable — the next name
                     # THE LINK IS THE HELD INODE BY CONSTRUCTION: it was made through the descriptor
-                    # directory, which cannot attach anything else. This is the one place retention is
-                    # released — the bytes now have a reserved name.
+                    # directory, which cannot attach anything else. This is where retention is released
+                    # once the bytes HAVE a reserved name; the empty-stage arms above release it too,
+                    # for the opposite reason — there is nothing to keep (team review).
                     keep_stage = False
                     raise _Answer(True)
                 # EVERY RESERVED NAME WAS TAKEN — AND THE STAGE IS KEPT. A completed stage under the
@@ -1039,7 +1043,10 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                             # and the helper says whether a name still does afterwards
                             if not _remove_stage_if_another_name_remains(dirfd, stage_name, stage_fd, depth):
                                 _hollow.append(True)
-                        # AT DEPTH ONE THE STAGE IS KEPT, LINKED OR NOT. The rescue-of-a-rescue used to
+                        # AT DEPTH ONE A NON-EMPTY STAGE IS KEPT, LINKED OR NOT — an empty one is still
+                        # removed by identity a few lines above, with no depth test at all (team
+                        # review; the heading used to say "the stage", which covered both).
+                        # The rescue-of-a-rescue used to
                         # release its stage after its link, and a racer's second act on the reserved
                         # name then left the copy nameless with no further rescue (cold leg,
                         # 5b1a014). Kept, the module takes no last name of its own at that depth: a
@@ -1557,7 +1564,10 @@ def _stage_report(dirfd, body, evidence=False):
             # written (cold leg, 0c28c5e). Best effort here; the verified install still follows.
             _narrow_leftover(fd)
             if evidence:
-                # EVIDENCE IS NOT WRITTEN INTO A CONTAINER WHOSE ACCESS THIS SCANNER CANNOT ASSERT.
+                # EVIDENCE IS NOT WRITTEN INTO A CONTAINER THIS SCANNER READS AS TOO OPEN. The mode
+                # has to be READ for that: where the read itself fails the write still goes ahead,
+                # so this heading says what the check does, not what it would like to promise
+                # (two reviewers, gate 72).
                 # The narrowing above is best effort and was never verified here, so where it did
                 # not stick — a report directory carrying a default ACL, or one left at 0755 whose
                 # group read the hardening keeps — the findings went into a file group could open,
@@ -1706,8 +1716,8 @@ def _emit_unwritten_findings(hits, header=None):
 
     The exit status is the authorization and the report is the diagnostic — but when the report
     cannot be written at all, silence is the one outcome this module refuses everywhere else. The
-    same lines the successful run prints, on the error stream, bounded like that one, and every
-    failure to print swallowed: this runs while an exception is already on its way out and must
+    class, pattern, path and line the successful run prints, on the error stream, capped at forty
+    like that one but WITHOUT the surface field, and every failure to print swallowed: this runs while an exception is already on its way out and must
     not displace it.
     """
     try:
@@ -2417,7 +2427,8 @@ def _narrow_leftover(fd):
     leftover still claims nothing; it is simply as narrow as this code can make it. Neither call
     is verified afterwards: a leftover whose fchmod failed under a umask that masks owner read
     stays at 0200 — on disk, unreadable to the owner — and nothing else can be done for it here.
-    A leftover whose strip was DENIED keeps its inherited entries, masked to nothing at 0600 and
+    A leftover whose strip was DENIED keeps its inherited entries, masked to nothing AT 0600 IF THE
+    CHMOD ABOVE TOOK — which is not verified either, per the sentence before this one — and
     one chmod from live; that is why no reserved name is ever taken in that state, and why the
     leftover sits under the temporary prefix, which claims nothing (README limits).
     """
@@ -2777,7 +2788,9 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
     # report whose policy could not be installed (a denied strip; no xattr API at all) linked
     # the same inode into a fresh slot, and eight refusals of one report exhausted the capacity
     # the README calls finite (gate 38, measured: three refusals, three slots). A slot that
-    # already holds this inode is used as-is; a free name is taken only when none does.
+    # already holds this inode and CAN BE READ is used as-is; a free name is taken when none does —
+    # or when a slot that does could not be read, which is the exception this paragraph opens with
+    # and this sentence used to drop (team review).
     for candidate in _superseded_slot_names():
         try:
             kept = os.lstat(candidate, dir_fd=dirfd)
@@ -2881,8 +2894,10 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             held_fd, held_via_proc = _open_held_copy(dirfd, linked, previous)
             if held_fd is None:
                 # THE SLOT IS NO LONGER THE INODE THAT WAS LINKED INTO IT (by this call, or by the
-                # earlier one whose slot the pre-scan found). Something replaced that name
-                # between the link and this open. Everything downstream — the narrowing, the
+                # earlier one whose slot the pre-scan found). Either something replaced that name
+                # between the link and this open, or the open or the check itself failed — a None
+                # here does not distinguish them, and the sentence used to name only the first
+                # (two reviewers, gate 72). Everything downstream — the narrowing, the
                 # classification, the decision to release the slot — would be describing a file this
                 # scan never preserved, which is exactly the sequence three legs reproduced. Nothing
                 # is unlinked (the name is not ours to remove now, and round twenty-six is why that
@@ -3106,8 +3121,10 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         # two blocks that USE it — the narrowing and the classification — with plain statements
         # between them, and a cancellation at one of those bare conditions left it open: the last
         # reference once both names go, freed at process exit with nothing standing behind it
-        # (invariant leg, aca6e8a). Every path that closes it above clears the name, so this asks
-        # and closes only what is still held.
+        # (invariant leg, aca6e8a). Every path that closes it above LEAVES the name bound, so this
+        # asks the descriptor whether that number is still ours. The sentence here used to say the
+        # paths clear it — describing the shape that was REMOVED, six lines above the comment that
+        # says clearing was what defeated this handler (two reviewers, independently).
         if held_fd is not None:
             # ASKED OF THE DESCRIPTOR, NOT OF A NAME. Clearing a local name under a finally stops a
             # double close, but a cancellation delivered AT the rescue call — before the callee's
@@ -3123,7 +3140,9 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
 def _write_refusal_report(staging, refusal):
     """Best-effort: replace an EXISTING report with a single REFUSED line, so that a stale CLEAN
     does not survive beside an rc 2 wherever this function can reach it. A stale CLEAN is
-    replaced on every platform; a FINDINGS report is replaced only where its preserved copy's
+    replaced wherever this writer can install the refusal's access policy — with the xattr API but
+    no descriptor directory the strip raises ENOSYS, which is not in _ACL_ABSENT, and the stale CLEAN
+    is left standing; a FINDINGS report is replaced only where its preserved copy's
     access policy can be verified (POSIX ACL xattr API present) — elsewhere it is left standing,
     which is the safe direction and a stated limit.
 
