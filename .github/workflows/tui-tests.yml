@@ -14,9 +14,9 @@ jobs:
       # package dangling on the first run after publication. They skip on a shallow checkout now
       # rather than lie, and this line is what keeps them from skipping forever: a guard that
       # always stands down is the decoration this repository argues against.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: { python-version: "3.12" }
       - name: Install
         run: |
@@ -44,9 +44,9 @@ jobs:
       # fetch-depth: 0 is critical — the ref gate scans FULL reachable history.
       # At the default depth of 1 it would scan one commit and report "clean", which is
       # the check-that-cannot-fail failure mode this repo exists to argue against.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: { python-version: "3.12" }
       - name: Ref gate — mutation proof, then the real scan
         run: |

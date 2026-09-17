@@ -258,6 +258,34 @@ measurement corpus it **aborts before mutating anything** — a harness that can
 clean baseline refuses to certify mutations against it. That refusal is the integrity rule, not a
 missing feature. A synthetic public corpus is planned.
 
+## What is NOT checked, and why a guard for it was declined
+
+The four animations in `README.md` and the one in `specs/driver-lock-protocol.md` each sit beside
+their mermaid source, kept in a collapsed block. **Nothing verifies that an animation still matches
+the source printed next to it.** Edit the mermaid and not the gif, and the page shows a diagram that
+is no longer the one it documents. That gap is real and it is not guarded.
+
+A guard was proposed for it, modelled on `banner.stamp` — record the source digest and the gif
+digest, go red when they part. Three reviewers were asked to attack the proposal and all three said
+do not build it, for reasons that survived checking:
+
+- **Two hashes prove coexistence, not derivation.** A stamp says "these are the two files I
+  recorded". It cannot say the gif was rendered *from* that source. Change a node label, keep the
+  old gif, update only the recorded source digest, and both hashes agree with their files while the
+  picture is stale. No attacker is required — a convenient "refresh the hashes" step is the bypass.
+- **There is no renderer here to establish a baseline.** The banner works because `banner.svg` is a
+  standalone source with `render_banner.sh` beside it. No mermaid-to-animation pipeline is tracked in
+  this repository, so no baseline could be regenerated and reviewed; seeding one from today's files
+  would bless whatever is there.
+- **The output is not bit-reproducible anyway.** Rendering mermaid to an animation depends on
+  headless browser timing and font rasterization. Hashing the result would fail on ordinary edits
+  that changed nothing visible.
+
+So the honest statement is the one in this heading: the correspondence is unchecked, the mermaid
+block is the authority, and the animation beside it is illustration. Recording that is worth more
+than a guard whose green could not be trusted — a checker that cannot fail for the right reason is
+the failure this directory exists to argue against.
+
 ## Provenance note
 
 During export, this directory's own gates caught the exporter twice: a sanitization pass made the
