@@ -299,9 +299,14 @@ closed rather than documented: the refusal writer no longer unlinks the canonica
 a successful scan's sweep no longer removes a reserved file created after this run staged its own
 report. What remains needs a writer who is actively substituting names — and how many
 substitutions it takes is stated: the scanner copies a held inode out at most once and rescues
-that copy at most once more, so a writer who takes every name the scanner makes wins on the third
-one. Past that point every answer in the chain is False, the only descriptor left to retry from is
-the one `write_report` itself holds (its handler asks once more), and a preservation or stage
+that copy at most once more, so a writer who takes the staged name and both copy-stage names has
+defeated THAT CHAIN on the third. It does not follow that it has defeated the scanner: past that
+point every answer in the chain is False, but the descriptor `write_report` itself holds is still
+open, and its handler's ask reaches the copy-out again with the depth it started at rather than the
+bound the chain reached — so another copy may be attempted, subject to that copy-out's own
+preconditions (a descriptor directory, a readable source, a creatable name), none of which this
+count establishes either way. The sentence used to end "wins on the third one", which stated an
+outcome the depth checks do not support (two reviewers disagreed on the direction, gate 74), and a preservation or stage
 cleanup that reached the bound closes what it holds (cold leg, 2fb1625).
 
 Two more things were measured after that paragraph was written, and both belong here. First, the
