@@ -725,8 +725,10 @@ class _Answer(Exception):
 class _CustodyUnconfirmed(OSError):
     """The link succeeded and the confirmation after it did not: custody MAY have been taken.
 
-    Distinct from FileNotFoundError ("no custody was taken") and from the OSError a refused link
-    raises ("this name was never ours"), because callers react to those by moving to the next
+    Distinct from FileNotFoundError — which this helper raises BOTH where no custody was taken and,
+    after a link that returned normally, where the identity check found the name on a different
+    inode — and from the OSError a refused link raises ("this name was never ours"), because
+    callers react to those by moving to the next
     reserved name — and moving on after a successful link gives the same inode a second reserved
     name (cold leg, e1c1404). A caller that sees this stops linking and keeps its stage.
     """
@@ -1105,7 +1107,11 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
 def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
     """Keep a staged findings report the publish could not complete. Answer whether it was kept.
 
-    A False answer means THIS FUNCTION DID NOT TAKE CUSTODY of the staged file — nothing more.
+    A False answer means THIS FUNCTION DID NOT CONFIRM CUSTODY of the staged file — nothing more.
+    It is not proof that no reserved name attached: the `_CustodyUnconfirmed` arm below answers
+    False after a link that MAY have landed, and declines a second name for exactly that reason. The
+    heading used to read "DID NOT TAKE CUSTODY", which the arm beside it already contradicted
+    (two reviewers, gate 73).
     Custody is a reserved name that still reaches the inode after the stage is released, or a
     complete copy kept under the temporary prefix by the copy-out (the release helper's and
     the copy-out's answers are passed through unchanged). It
