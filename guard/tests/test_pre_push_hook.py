@@ -7,12 +7,17 @@ was outside the instrument; and it enumerated a new ref's range with a form that
 Planted values are built by concatenation at runtime, so this file's own bytes stay clean under the
 repo's scan gate — a test that plants a literal secret publishes one.
 """
+import hashlib
 import os
 import shutil
 import subprocess
 import sys
+import unicodedata
 
 import pytest
+
+# Assembled from fragments so the phrase this arm exists to catch is in no fixture.
+BANNED_FIXTURE_PHRASE = "prohibited" + "-" + "fixture" + "-" + "phrase"
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOK = os.path.join(REPO, "guard", "hooks", "pre-push")
@@ -42,6 +47,14 @@ def _fixture(tmp_path, approved=True):
     (repo / "_tools").mkdir(parents=True)
     shutil.copy(SCAN_GATE, repo / "_tools" / "scan_gate.py")
     (repo / "_tools" / "identity_terms.txt").write_text(IDENTITY_TERM + "\n")
+    # The OWNER_POLICY arm refuses a scan when its hash list is missing, exactly as the identity
+    # arm does, so every copy of the driver needs a list beside it or the scanner's own self-test
+    # refuses and the hook blocks before it has judged anything. Synthetic, like the terms file:
+    # this fixture states no real policy.
+    _banned = unicodedata.normalize("NFC", BANNED_FIXTURE_PHRASE).casefold()
+    (repo / "_tools" / "owner_banned.hashes").write_text(
+        "# synthetic fixture policy\n"
+        f"{hashlib.sha256(_banned.encode('utf-8')).hexdigest()} {len(_banned)}\n")
     if approved:
         (repo / "_tools" / "approved_identities.txt").write_text(APPROVED + "\n")
     (repo / "docs").mkdir()

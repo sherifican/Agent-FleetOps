@@ -30,6 +30,7 @@ Mutation proof (--self-test): a planted fake API key and a planted identity stri
 must each go red; a clean fixture must pass.
 """
 import sys, os, re, stat, errno, subprocess, tempfile, shutil
+import hashlib, unicodedata
 
 SECRET_PATTERNS = [
     ("anthropic-key",      re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
@@ -93,6 +94,136 @@ PERSONAL_SHAPES = [
 def personal_patterns():
     """The full personal set: the owner-identity term first, then the shapes. Compiled on call."""
     return [("owner-identity", _identity_terms())] + PERSONAL_SHAPES
+
+
+def _load_banned_windows():
+    """Owner-prohibited phrases, as hashes. A THIRD class: not a credential, not an identity.
+
+    The plaintext cannot live here — a public list would publish the very phrase it bans — and it
+    cannot live in a second gitignored file either: the adopter path is already
+    `identity_terms.example.txt` -> `identity_terms.txt`, and a second required private file means
+    the arm is simply absent on any machine that forgot it. A hash file is TRACKED, so the arm
+    travels with the clone. Residual, stated plainly: a short hyphenated English word is
+    rainbow-tableable from hash+length. That is not secrecy, and secrecy is not the rule being
+    enforced — the rule is "not in a published tree going forward".
+
+    REFUSES when missing or data-empty, exactly like the identity list. Compiling a never-match
+    here would be a check that cannot fail, which is the defect this whole file exists to avoid.
+    """
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "owner_banned.hashes")
+    if not os.path.isfile(p):
+        sys.stderr.write(
+            "scan_gate: _tools/owner_banned.hashes missing — refusing a scan with no phrase arm.\n")
+        raise ScanRefused("missing-owner-banned-hashes")
+    handle = _open_untrusted_text(p)
+    if handle is None:
+        raise ScanRefused("missing-owner-banned-hashes")
+    windows = {}
+    with handle:
+        for raw in handle:
+            row = raw.strip()
+            if not row or row.startswith("#"):
+                continue
+            parts = row.split()
+            if len(parts) != 2:
+                raise ScanRefused("malformed-owner-banned-hashes")
+            digest, width = parts[0].lower(), parts[1]
+            if len(digest) != 64 or not all(c in "0123456789abcdef" for c in digest):
+                raise ScanRefused("malformed-owner-banned-hashes")
+            if not re.fullmatch(r"[1-9][0-9]*", width):
+                # NOT `width.isdigit()`: that is True for the compatibility superscripts, which
+                # `int()` then rejects with ValueError — so a malformed row would CRASH where this
+                # loader's docstring promises a refusal. Failing closed is not the same as failing
+                # the way you said you would (team review, 2026-09-17).
+                raise ScanRefused("malformed-owner-banned-hashes")
+            windows.setdefault(int(width), set()).add(digest)
+    if not windows:
+        raise ScanRefused("empty-owner-banned-hashes")
+    return windows
+
+
+def _banned_norm(text):
+    """Fold what a SLOPPY EDITOR changes about a phrase; fold nothing an adversary would.
+
+    NFC composes characters. It does not strip format characters and it does not fold punctuation
+    dashes, so it is the wrong tool on its own for the two substitutions a word processor makes
+    silently: ZWSP/ZWNJ/SHY/BOM are category Cf, U+2010/U+2011/U+2013 are Pd, and U+2212 is Sm.
+    A phrase pasted back out of a rich-text editor is the same phrase to the reader who will see
+    it published, so it is the same phrase here.
+
+    Deliberately NOT folded: base64, percent-encoding, homoglyphs, and source-level string
+    concatenation. This arm exists because a COMMENT came back through a working gate, not because
+    someone is smuggling. Decoders here would buy nothing against that failure mode and would cost
+    the over-firing this file spends its length avoiding.
+    """
+    out = []
+    for ch in unicodedata.normalize("NFC", text):
+        cat = unicodedata.category(ch)
+        if cat == "Cf":
+            continue
+        out.append("-" if cat == "Pd" or ch == "\u2212" else ch)
+    return "".join(out).casefold()
+
+
+def _banned_windows(norm, windows):
+    """True when any fixed-width window of ALREADY-NORMALISED text hashes into the policy."""
+    for width, digests in windows.items():
+        if len(norm) < width:
+            continue
+        for start in range(len(norm) - width + 1):
+            if hashlib.sha256(norm[start:start + width].encode("utf-8")).hexdigest() in digests:
+                return True
+    return False
+
+
+def _banned_hit(text, windows):
+    """True when any fixed-width window of the normalised text hashes to a prohibited phrase."""
+    return _banned_windows(_banned_norm(text), windows)
+
+
+# What a wrap inserts INTO a phrase: the continuation line's own comment or quote marker.
+_WRAP_MARKER = re.compile(r"^[ \t]*(?:[#*>]+|//+|--+)[ \t]*")
+
+
+def _banned_straddle(prev, cur, windows):
+    """A phrase broken across a LINE BOUNDARY, which a per-line scan cannot see.
+
+    This is the shape the failure class actually takes. The two live recurrences sat on one line
+    each, so a per-line scan found them — but the thing that PUT them there was an editor reflowing
+    a comment, and the next reflow can land the break inside the phrase instead of beside it. A
+    guard that only catches the instances you already found is calibrated to the sample, not to the
+    class (team review, 2026-09-17).
+
+    Only windows that CROSS the join are tested: anything lying wholly inside either line was
+    already judged on that line. That keeps this O(width) per line rather than a second pass over
+    the file. (Cost is the weaker argument and did not drive the design: the reason a whole-file
+    newline-strip was rejected is that it does not WORK on the live class — joining `...load-` to
+    `# bearing` leaves the marker inside the window and the phrase is not there.)
+
+    RESIDUALS, stated rather than implied, because this arm is calibrated at a comment that came
+    back and NOT at someone hiding a phrase on purpose:
+      * Stripping `#`, `*`, `>`, `//`, `--` means those characters are treated as not part of the
+        phrase. So a markdown list item or blockquote whose first word happens to be the phrase's
+        tail, sitting under a line that happens to end with its head, is a FALSE POSITIVE. At the
+        shipped width that pairing is rare, and the gate fails closed, which is the owner's stated
+        preference. A dash-list (`- tail`) does not fire; `--` does.
+      * Splits this does NOT catch: an indented continuation with no marker, a marker outside the
+        set (`/*`, `<!--`, `%`, `;`), a blank comment line in between, a three-line split, and a
+        U+2028 line separator inside one `split("\n")` line. Each is a deliberate hiding shape, not
+        a reflow shape.
+      * ⚠ BOTH residuals WIDEN if a shorter row is ever added to the policy, because the window is
+        `max(windows) - 1`. Re-read this note before adding a row.
+    """
+    if not windows:
+        return False
+    span = max(windows) - 1
+    if span < 1:
+        return False
+    tail = _banned_norm(prev.rstrip())[-span:]
+    head = _banned_norm(_WRAP_MARKER.sub("", cur))[:span]
+    if not tail or not head:
+        return False
+    return _banned_windows(tail + head, windows)
 # RFC5737 documentation ranges are the sanctioned replacements — never flagged
 DOC_IP = re.compile(r"\b(192\.0\.2|198\.51\.100|203\.0\.113)\.\d{1,3}\b")
 
@@ -366,6 +497,7 @@ def _scan_into(staging: str, hits):
     entries = _publishable_files(staging, skip_dirs, _from_index)
     allow = _allowlist(staging, entries, _from_index)
     personal = personal_patterns()
+    banned = _load_banned_windows()
     for rel, oid in entries:
             # THE NAME ARM. A path is published bytes too: a file called after a private host or
             # carrying a key in its name leaks whatever its contents are. Line 0 means "the path,
@@ -375,6 +507,8 @@ def _scan_into(staging: str, hits):
             for name, pat in SECRET_PATTERNS:
                 if pat.search(name_probe):
                     hits.append((rel, 0, "SECRET", name, "name"))
+            if _banned_hit(name_probe, banned):
+                hits.append((rel, 0, "BANNED", "owner-phrase", "name"))
             for name, pat in personal:
                 if pat.search(name_probe):
                     if _allowed(allow, rel, name, "name"):
@@ -426,11 +560,25 @@ def _scan_into(staging: str, hits):
                 raise ScanRefused(f"unreadable-input {rel!r}") from None
             lines = ((i, ln) for view in _text_views(raw, rel)
                      for i, ln in enumerate(view.split("\n"), 1))
+            prev_ln = None
             for i, ln in lines:
+                if i == 1:
+                    # A new text view starts here, so nothing precedes its first line. Carrying the
+                    # previous view's tail across would join two decodings of the same bytes.
+                    prev_ln = None
                 probe = DOC_IP.sub("", ln)
                 for name, pat in SECRET_PATTERNS:
                     if pat.search(probe):
                         hits.append((rel, i, "SECRET", name, "content"))
+                if _banned_hit(probe, banned):
+                    # No scan_allow.tsv consultation: that file is for REVIEWED identity in
+                    # README/LICENSE. An exemption here would bless the leak it exists to stop.
+                    hits.append((rel, i, "BANNED", "owner-phrase", "content"))
+                elif prev_ln is not None and _banned_straddle(prev_ln, probe, banned):
+                    # Reported against the line the phrase FINISHES on, and only when that line is
+                    # clean by itself, so a wrap costs one hit and not two.
+                    hits.append((rel, i, "BANNED", "owner-phrase", "content"))
+                prev_ln = probe
                 for name, pat in personal:
                     if pat.search(probe):
                         if _allowed(allow, rel, name, "content"):
@@ -3456,6 +3604,7 @@ def _publish_refusal(dirfd, refusal):
 
 def self_test():
     tmp = tempfile.mkdtemp(prefix="scangate_selftest_")
+    m4 = None
     try:
         os.makedirs(os.path.join(tmp, "skills"))
         open(os.path.join(tmp, "skills", "clean.md"), "w").write(
@@ -3490,6 +3639,70 @@ def self_test():
         os.makedirs(os.path.join(tmp, "_tools"), exist_ok=True)
         open(os.path.join(tmp, "_tools", "scan_allow.tsv"), "w").write(
             f"{name_dirty}\towner-identity\tcontent\n")
+        # MUTATION 4: the OWNER_POLICY arm, exercised against a COPIED DRIVER carrying a SYNTHETIC
+        # policy. An earlier revision tried to plant out of the SHIPPED policy, the way MUTATION 2
+        # plants out of the identity list, and could not: there is no plaintext in a hash file to
+        # plant, and brute-forcing a preimage of the shipped width is 37**12 candidates. So it
+        # declared the arm UNEXERCISED on stderr and returned 0 anyway. That is this module's own
+        # defect wearing an honest label — the note was true, the EXIT CODE was not, and the exit
+        # code is the only bit the pre-push hook reads. MUTATION 2's lesson does not transfer here:
+        # the identity list is per-machine and gitignored, so a literal plant really would be "the
+        # author's", while this policy is TRACKED and byte-identical in every clone. A fixture
+        # phrase assembled below therefore needs no plaintext out of the policy and plants no decoy
+        # in a file that states real policy (team review, 2026-09-17).
+        # Its OWN temp root, NOT a subdirectory of `tmp`. `_publishable_files` walks `tmp`
+        # recursively (measured this date), so a driver copy and its planted files nested there
+        # become input to the very scan whose result `ok_red` judges. Nothing observed broke, which
+        # is exactly why it should not be left: the coupling is invisible until something does.
+        m4 = tempfile.mkdtemp(prefix="scangate_m4_")
+        m4_tools, m4_tree = os.path.join(m4, "_tools"), os.path.join(m4, "staging", "skills")
+        os.makedirs(m4_tools, exist_ok=True)
+        os.makedirs(m4_tree, exist_ok=True)
+        m4_driver = os.path.join(m4_tools, "scan_gate.py")
+        m4_policy = os.path.join(m4_tools, "owner_banned.hashes")
+        shutil.copy(os.path.abspath(__file__), m4_driver)
+        # Assembled from fragments, never written contiguously: this file is itself scanned inside
+        # every fixture repository that copies it, and a literal here collides with whatever term
+        # those fixtures happen to plant. The first attempt used one that did, and the scanner's
+        # own source started tripping the identity arm in eight of its own tests.
+        with open(os.path.join(m4_tools, "identity_terms.txt"), "w") as _h:
+            _h.write("selftest" + "policy" + "holder" + "\n")
+        _fixture = "prohibited" + "-" + "fixture" + "-" + "phrase"
+        _fx = _banned_norm(_fixture)
+        with open(m4_policy, "w") as _h:
+            _h.write(f"{hashlib.sha256(_fx.encode('utf-8')).hexdigest()} {len(_fx)}\n")
+        with open(os.path.join(m4_tree, "m4.md"), "w") as _h:
+            _h.write(f"contains {_fixture} inline\n")
+        # The second plant is the same phrase REFLOWED across a line break, with the continuation's
+        # comment marker landing inside it. A per-line scan cannot see this one, and it is the
+        # shape an editor actually produces.
+        with open(os.path.join(m4_tree, "m4-wrap.md"), "w") as _h:
+            _h.write(
+                f"a comment the editor reflowed {_fixture[:13]}\n# {_fixture[13:]} and continued\n")
+        # The NAME arm needs its own plant. Without it, deleting the `_banned_hit(name_probe, ...)`
+        # call site stays invisible to the only check the pre-push hook runs — the same hole the
+        # identity arm already closes with `ok_name`, left open for one class. Pytest covers it;
+        # pytest is not the hook (team review, 2026-09-17).
+        _m4_named = f"{_fixture}.md"
+        with open(os.path.join(m4_tree, _m4_named), "w") as _h:
+            _h.write("body deliberately clean: only the FILENAME carries the phrase\n")
+
+        def _m4_scan():
+            return subprocess.run([sys.executable, m4_driver, os.path.join(m4, "staging")],
+                                  capture_output=True, text=True)
+
+        _hit = _m4_scan()
+        _hit_out = _hit.stdout + _hit.stderr
+        ok_banned = (_hit.returncode == 1 and "owner-phrase" in _hit_out
+                     and "skills/m4.md" in _hit_out and "skills/m4-wrap.md" in _hit_out
+                     and f"skills/{_m4_named}" in _hit_out)
+        # Take the policy away and the arm must REFUSE. Without this, a loader that compiled to a
+        # never-match would leave every assertion above green — and a never-match is the one
+        # failure this file cannot afford, because it looks exactly like a clean tree.
+        os.unlink(m4_policy)
+        _refused = _m4_scan()
+        _ref_out = _refused.stdout + _refused.stderr
+        ok_banned_refuses = _refused.returncode == 2 and "owner-banned-hashes" in _ref_out
         hits = scan(tmp)
         classes = {(h[0], h[2]) for h in hits}
         surfaces = {(h[0], h[2], h[4]) for h in hits}
@@ -3497,15 +3710,18 @@ def self_test():
                  and not any(h[0] == "skills/clean.md" for h in hits)
         ok_name = (name_dirty, "PERSONAL", "name") in surfaces \
                   and not any(h[0] == "skills/clean-name.md" for h in hits)
-        ok = ok_clean and ok_red and ok_name
+        ok = ok_clean and ok_red and ok_name and ok_banned and ok_banned_refuses
         print("scan_gate self-test:",
               "PASS (control green; content, identity and NAME-arm mutations red, the last with a "
               "content allow row that must not silence it)" if ok else "FAIL")
         if not ok:
-            print(f"   control_clean={ok_clean} content_mutations={ok_red} name_arm={ok_name}")
+            print(f"   control_clean={ok_clean} content_mutations={ok_red} name_arm={ok_name} "
+                  f"banned_arm={ok_banned} banned_refuses={ok_banned_refuses}")
         return 0 if ok else 1
     finally:
         shutil.rmtree(tmp)
+        if m4:
+            shutil.rmtree(m4, ignore_errors=True)
 
 def main():
     if sys.argv[1:] == ["--self-test"]:

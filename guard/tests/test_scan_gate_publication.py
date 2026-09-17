@@ -42,6 +42,7 @@ import signal
 import shutil
 import stat
 import subprocess
+import unicodedata
 import sys
 from pathlib import Path
 
@@ -56,6 +57,10 @@ REPORT_REL = Path("_reports") / "scan_report.txt"
 # Synthetic values — assembled from fragments at RUN TIME, never contiguous in this file.
 # ---------------------------------------------------------------------------------------------
 IDENTITY_TERM = "synthetic" + "fixture" + "person"
+# Same convention, for the OWNER_POLICY arm: the fixture phrase is assembled so this tracked
+# source carries no contiguous banned literal, and it is SYNTHETIC — the real prohibited phrase
+# never appears here, in the hashes fixture, or in any test tree.
+BANNED_FIXTURE_PHRASE = "prohibited" + "-" + "fixture" + "-" + "phrase"
 ANT_PREFIX = "sk-" + "ant-"
 ANT_API03 = "api" + "03-"
 OPENAI_PREFIX = "sk-"
@@ -180,6 +185,13 @@ def make_tool(tmp_path: Path, source: str | None = None, name: str = "tool") -> 
     else:
         driver.write_text(source, encoding="utf8")
     (tool / "identity_terms.txt").write_text(IDENTITY_TERM + "\n", encoding="utf8")
+    # The OWNER_POLICY arm refuses a scan when its hash list is missing or data-empty, exactly as
+    # the identity arm does. Every driver copy therefore needs a synthetic list beside it, or the
+    # whole suite would refuse rather than scan.
+    _norm = unicodedata.normalize("NFC", BANNED_FIXTURE_PHRASE).casefold()
+    (tool / "owner_banned.hashes").write_text(
+        "# synthetic fixture policy\n"
+        f"{hashlib.sha256(_norm.encode('utf-8')).hexdigest()} {len(_norm)}\n", encoding="utf8")
     return driver
 
 
@@ -11363,7 +11375,7 @@ def test_zero_statements_between_is_accepted_and_the_lint_says_what_that_leaves_
     # still describes only the narrower question understates the instrument in the direction that
     # makes a later reader trust a pass less than it deserves — while a sentence that stopped
     # naming the syscall window would overstate it in the direction that matters more. Both halves
-    # are pinned here, because a disclosure is only load-bearing while it is accurate in both.
+    # are pinned here, because a disclosure is useful only while it is accurate in both.
     assert "cross-try" in module.COVERAGE_DISCLOSURE, (
         "the disclosure must say that a block boundary is covered now, not only a statement")
     assert "bytecodes" in module.COVERAGE_DISCLOSURE, (
@@ -11478,6 +11490,19 @@ def test_no_statement_stands_between_an_acquisition_and_its_owner() -> None:
                      if not s.ok and s.verdict != "cross-try")
     assert unowned == sorted([
         ("_allowlist", "_open_untrusted_text"),
+        # `_load_banned_windows` joined this list when the OWNER_POLICY arm landed. It is the same
+        # shape as the two loaders either side of it — a `with` on a helper's return, with a
+        # refusal between the acquisition and the `with` — so it is declined for the same reason,
+        # not a new kind of defect. Named here deliberately, because an unclassifiable site that
+        # appeared without this edit is exactly what this arm exists to fail on.
+        ("_load_banned_windows", "_open_untrusted_text"),
+        # MUTATION 4 once ADDED a seventh bare open here; rewriting it took that one away again and
+        # left six. This list counts DUPLICATES — it is a sorted list, not a set — so a bare open in
+        # the self-test is its own entry even though the (function, callee) pair already appears.
+        # That is deliberate: it makes an added acquisition visible rather than absorbed into an
+        # existing row, and it made the removal visible too. The four descriptors MUTATION 4 needs
+        # are held by `with` blocks and so are not here at all, which is the shape a new site should
+        # take — this list is for sites that cannot yet be written that way, not a parking space.
         ("_load_identity_terms", "_open_untrusted_text"),
         # `_makedirs_owner_only` came OFF this list in the sixty-fourth round: its child directory
         # descriptor is now handed over before the parent is released, so the finally names it from
@@ -12815,7 +12840,7 @@ def test_the_repaired_arms_still_call_their_checkers() -> None:
 #
 # Nine more stopped resolving on purpose when the publication gate forced the outgoing range to be
 # rewritten. Those are recorded in STAGING_README.md's mapping table, and THIS IS WHAT MAKES THAT
-# TABLE LOAD-BEARING: a cited hash must resolve, or appear in the table. A row removed from the
+# TABLE NECESSARY: a cited hash must resolve, or appear in the table. A row removed from the
 # table turns its citations red. A note nothing depends on is a note that rots.
 #
 # The first version hand-listed the files to read and left out the file carrying the most citations
@@ -12842,7 +12867,10 @@ _HASH = re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7}\b")
 # repository tracks five extensionless files today and all five are text; the limit is recorded
 # because it is a decision, not because it currently bites.
 _PROSE_SUFFIXES = {".md", ".py", ".sh", ".txt", ".tsv", ".csv", ".json", ".jsonl", ".yml",
-                   ".yaml", ".toml", ".cfg", ".ini", ".svg", ".template", ".example", ""}
+                   ".yaml", ".toml", ".cfg", ".ini", ".svg", ".template", ".example",
+                   # .hashes is the owner-phrase policy: hex digests and widths, read as text by
+                   # the scanner, so it is scanned as prose and not excluded as an opaque blob.
+                   ".hashes", ""}
 _BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".ico", ".woff", ".woff2",
                     ".zip", ".gz", ".tar", ".stamp"}
 

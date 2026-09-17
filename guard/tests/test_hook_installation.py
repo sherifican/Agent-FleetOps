@@ -40,8 +40,12 @@ import re
 import shutil
 import stat
 import subprocess
+import unicodedata
 
 import pytest
+
+# Assembled from fragments so the phrase this arm exists to catch is in no fixture.
+BANNED_FIXTURE_PHRASE = "prohibited" + "-" + "fixture" + "-" + "phrase"
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 INSTALLER_SRC = os.path.join(REPO, "guard", "hooks", "install.sh")
@@ -207,6 +211,14 @@ def make_fixture(tmp_path, name="repo", identity_terms=IDENTITY_TERM + "\n",
     for name in ("install.sh", "pre-push", "commit-msg"):
         os.chmod(repo / "guard" / "hooks" / name, 0o755)
     shutil.copy(SCAN_GATE_SRC, repo / "_tools" / "scan_gate.py")
+    # The OWNER_POLICY arm refuses a scan when its hash list is missing, exactly as the identity
+    # arm does, so every copy of the driver needs a list beside it or the scanner's own self-test
+    # refuses and the hook blocks before it has judged anything. Synthetic, like the terms file:
+    # this fixture states no real policy.
+    _banned = unicodedata.normalize("NFC", BANNED_FIXTURE_PHRASE).casefold()
+    (repo / "_tools" / "owner_banned.hashes").write_text(
+        "# synthetic fixture policy\n"
+        f"{hashlib.sha256(_banned.encode('utf-8')).hexdigest()} {len(_banned)}\n")
     (repo / "README.md").write_text("fixture repository; nothing private here\n")
     # The real ignore rules plus the two private inputs, so "publishable" means what it means
     # in the shipping repository even on a parent that lacks the C4 row.

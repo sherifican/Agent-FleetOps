@@ -1,0 +1,11 @@
+# Owner publication policy: phrases that must never appear in a published tree.
+# Format: <sha256 of the NORMALISED phrase> <length in CHARACTERS of that normalised form>
+# Normalised means `_banned_norm` in scan_gate.py, NOT plain NFC+casefold: NFC, then drop
+# every category-Cf character, then map category-Pd and U+2212 onto ASCII '-', then casefold.
+# On a plain-ASCII phrase the two agree, which is why this line used to say the simpler thing
+# and nobody noticed. A future row authored with NFC+casefold and containing a dash variant
+# or a zero-width character would hash to something the scanner never looks for — a row that
+# is present, well-formed, and cannot fire.
+# The plaintext is deliberately NOT in this repo. Standing rule: commit 39265f0.
+# A missing or data-empty file REFUSES the scan; it never compiles to a never-match.
+ae53fbb31ca36bdcab70bec9d53c1c796bda1acd53fcc519c240b7c096610aec 12
