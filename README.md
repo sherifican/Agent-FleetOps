@@ -4,7 +4,7 @@
 
 # Agent-FleetOps
 
-Custom multi-agent orchestration built from scratch (no CrewAI, LangGraph, or any framework). Counters off-the-shelf failure modes — error cascades, argument loops, unverified agent trust — with mutation-proven drift guards, deterministic apply, driver-lock serialization, and verifier-first review panels. Routing decisions are made against real measured throughput per hardware tier, via a multi-box telemetry pipeline whose data is in the repo — not vendor benchmarks. **1042 hermetic unit gates** prove every guard can fail. Validated in production via [ParaKit](https://github.com/sherifican/ParaKit-Open_Source)
+Custom multi-agent orchestration built from scratch (no CrewAI, LangGraph, or any framework). Counters off-the-shelf failure modes — error cascades, argument loops, unverified agent trust — with mutation-proven drift guards, deterministic apply, driver-lock serialization, and verifier-first review panels. Routing decisions are made against real measured throughput per hardware tier, via a multi-box telemetry pipeline whose data is in the repo — not vendor benchmarks. **1042 tests in `guard/tests/`** prove every guard can fail, none of them needing a live fleet, a network or a credential. Validated in production via [ParaKit](https://github.com/sherifican/ParaKit-Open_Source)
 
 ---
 >**So you wanna run an AI Fleet without it turning into a hallucination circus? I've put together a generalized version of my collection of skills and tools, please use as you see fit. This is not prompt engineering, more like automatic babysitting. I hope it helps, if you like what I've put together, throw me a star and I'll keep updating as I improve on the design, thanks!**
@@ -60,11 +60,11 @@ another machine). The commit history tells that story.
 
 | Dir | Contents |
 |---|---|
-| `tui/` | **fleet-tui** — a Textual terminal monitor for a local/cloud model fleet. 27 headless source modules (excluding `__init__.py`) behind a 386-test hermetic suite; strict one-way pipeline (pure readers → pure formatters → app), frozen dataclass contracts, safe-default degradation. CI runs the full suite on every push. |
+| `tui/` | **fleet-tui** — a Textual terminal monitor for a local/cloud model fleet. 27 headless source modules (excluding `__init__.py`) behind a 386-test hermetic suite; strict one-way pipeline (pure readers → pure formatters → app), frozen dataclass contracts, safe-default degradation. CI runs the full suite on pushes to `main` and on pull requests targeting it. |
 | `skills/` | **Generalized agent-discipline procedures** — evaluation integrity, model routing (the living-table method), the local-lane build loop, multi-agent code workflow, research dispatch/verification, memory ops, brain bookkeeping, protected-function guards, blocked-page retrieval, the [should-we](skills/should-we/SKILL.md) directive check (interrogate the premise before executing an imperative), and more. Each encodes failure stories from real operation. The portable start-list is in [`adopt/20_skills.md`](adopt/20_skills.md); you are not expected to install them all. |
 | `templates/` | Copyable dispatch, honesty, pinned-environment, and research-artifact patterns. Templates are adoption patterns, not automatic enforcement. |
-| `_tools/` | The export pipeline's own gates — provenance wall-checker, secrets/personal-data scanner, and a **ref gate**, all mutation-proven (`--self-test`). The first two ask "is this tree safe to publish?"; the third asks the question they structurally cannot: **"what would a push actually publish?"** A history rewrite is only true of the branch you rewrote — this repo's own rewrite left a clean `main` beside two leftover refs still carrying the trailers and build artifacts the rewrite removed, one `push --all` away from being republished. Content gates scan a worktree; pushes carry refs. |
-| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 1042 hermetic unit gates, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
+| `_tools/` | The export pipeline's own gates — provenance wall-checker, secrets/personal-data scanner, and a **ref gate**, all mutation-proven (`--self-test`). The first two ask "is this tree safe to publish?"; the third asks the question they structurally cannot: **"what would a push actually publish?"** A history rewrite is only true of the branch you rewrote — this repo's own rewrite left a clean `main` beside two leftover refs that still carried the trailers and build artifacts the rewrite removed, one `push --all` away from being republished. That is history, not current state; what the gate reports today is what it finds on the clone it is pointed at: refs outside the publishable allow-list, never-publish objects still reachable, and AI-attribution trailers. Content gates scan a worktree; pushes carry refs. |
+| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 1042 tests in `guard/tests/`, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
 | `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, the verified-system-map pattern, and the [research-team](specs/research-team-protocol.md), [rigor-spectrum](specs/rigor-spectrum.md), and [honesty-stop-gate](specs/honesty-stop-gate.md) guides. |
 | `bench/` | **The two-box throughput operating log** — 67 measurements over 22 model tags, with sample sizes and device labels attached. See below. |
 
@@ -485,7 +485,7 @@ flowchart LR
     S([run_guards.sh]) --> T1["1. teeth_prover <br/>plant defects, expect red"]
     T1 -->|HAS_TEETH| T2["2. surface agreement <br/>one vocabulary, counts match the suite"]
     T1 -->|VACUOUS / OVERBROAD| X1["STOP - a guard that cannot fail <br/>certifies nothing below it"]
-    T2 --> T3["3. unit gates <br/>hermetic; count emitted by the runner"]
+    T2 --> T3["3. unit gates <br/>no live fleet needed; count emitted by the runner"]
     T3 --> T4["4. guard self-tests"]
     T4 --> T5["5. negative control"]
     T5 --> T6["6. public-byte scrub"]
@@ -504,13 +504,53 @@ flowchart LR
 The ladder above proves *artifacts* can fail visibly. One guard turns the same law on the agent's own
 claims: a [**Stop hook**](specs/honesty-stop-gate.md) that refuses to end a turn asserting live state
 ("the job is running", "all three legs completed") the turn never measured. It reads the current turn,
-finds live-state claims in the prose and verification commands in the tool calls, and blocks when a
-claim has no same-turn, same-subject check — because reporting an *intention* as an *observation* feels
+finds configured live-state phrasings in the prose and verification commands in the tool calls, and
+blocks when such a claim has no same-turn record naming its subject — because reporting an *intention* as an *observation* feels
 identical from the inside and no advisory rule catches it. It carries its own teeth (`--self-test`
 proves it still blocks an unbacked claim and passes a backed one), and adapting it to another stack is
 a guided step, not a copy-paste: [`skills/honesty-stop-gate`](skills/honesty-stop-gate/SKILL.md) forces
 the adopting AI to confirm every verification command actually exists on the target box — a check
 pointed at a missing command is a stair to nowhere that reads as coverage and delivers none.
+
+![The honesty stop gate refusing to end a turn: it names the unverified claim, quotes the clause that carried it, and lists the three ways out. Two lines of the block message are covered by a solid redaction bar.](docs/stop-gate-blocking-a-turn.png)
+
+Above is the gate refusing to end a turn. Two lines of internal guidance were covered with a solid
+bar after the capture; everything else is the blocking message as emitted. It names the claim, quotes
+the clause that carried it, and gives three exits: measure it now, delete it, or label
+it plainly unchecked. The lines underneath are the agent taking the first exit — re-running the check,
+then splitting a claim that held for one machine and had never been checked on the other.
+
+It is not decoration, and it is not a single staged example. Here is the same gate firing again a
+couple of turns later, on two different claims, during the very turn that was preparing the screenshot
+above:
+
+![The same gate firing on a later turn, catching a status line written before the command that would establish it, and a second claim with no same-turn probe of its subject](docs/stop-gate-second-firing.png)
+
+The second is the more instructive one. `"Now running"` was a **preamble** — a status written on the
+way *in* to the command that would establish it. `"Both legs confirmed"` rested on a measurement from
+an earlier turn. Both were blocked; the closing lines are the restatement that followed, each fact
+tied to a check run in the turn that asserted it.
+
+**Read it for what it is.** This is a lexical first-stop check, not a proof. It matches configured
+claim phrasings against tool records earlier in the same turn that name the claimed subject — and that
+is the whole of it. It does not read what a probe returned. It does not expire one that has already
+landed, so a check from early in a long turn still vouches for a sentence written much later. It
+matches subjects by prefix, so sibling names sharing one are not told apart. And a claim it has no
+pattern for is a claim it cannot see. A pass means *no unbacked claim was recognised*; it never means
+the sentence is true. What it removes is the common, silent case where no check was even
+attempted — which, on the evidence of these two captures, keeps occurring.
+
+That is the organizing idea applied to prose instead of artifacts, with a deliberately weaker binding.
+A guard binds a *check* to a live target that can go red; this binds a *sentence* to the presence of a
+same-turn record naming its subject. This hook does not adjudicate what `pgrep` printed. But both fail
+the same way when they are not bound at all: silently, in the direction that looks like success.
+
+Both screenshots are **this fleet's own configured instance**, not the shipped defaults. The gate is
+config-driven: the claim patterns, the commands that count as verification, and the suggestion line
+all come from a config file. The verification command the message offers in these captures
+(`leg-status`) is my own wrapper; an adopter's line names theirs. `--check-config` flags any verification command whose binary does not resolve on the
+box it is run on — so run it on the target box; it has no notion of a remote host. That is the
+stair-to-nowhere check described above.
 
 ### Same teeth, different rung count
 
