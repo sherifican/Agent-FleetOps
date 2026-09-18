@@ -65,9 +65,13 @@ equivalent Stop hook and found the payload field naming the transcript absent on
 hook that ran, exited 0, and had never once read a word. Every early `return 0` in a hook is
 byte-identical, from the outside, to "checked and found nothing wrong". So this gate logs the *stage* it
 reached on every invocation, append-only, beside the hook. Over 2026-08-27 to 2026-09-18 that log holds
-2067 invocations: 1726 that actually read a transcript, 327 correct skips on re-entry, **13 that ran and
-inspected nothing**, and 1 that received no parsable payload. The parts sum to the total on purpose —
-"1726 good and no failures" would have been true, and would have hidden the 13.
+2074 invocations when I read it at 2026-09-18 14:48: 1728 that actually read a transcript, 329 correct
+skips on re-entry, **13 that ran and inspected nothing**, and 4 that received no parsable payload — of
+which 3 I produced myself that afternoon, testing the gate while writing this section. The parts sum to
+the total on purpose: "1728 good and no failures" would have been true, and would have hidden the 13.
+The log is append-only and still growing, so those counts move — which is why the reading is stamped,
+and why the one number that carries the finding, the 13, is also the one that has not moved since
+2026-08-30.
 
 **A self-test that passed on a file with no self-test in it.** While preparing this section I ran
 `--self-test` against an operational copy of the hook, got exit 0, and wrote that it passed. It has no
