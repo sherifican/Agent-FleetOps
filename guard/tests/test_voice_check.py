@@ -79,7 +79,11 @@ def test_the_shipping_entry_point_reads_the_newly_scoped_files():
                          cwd=REPO, capture_output=True, text=True, timeout=120)
     assert run.returncode == 0, run.stdout + run.stderr
     # Nested guard and TUI specifications are front-facing too.
-    assert "scanned 45 text file(s)" in run.stdout, (
+    # 45 -> 44 on 2026-09-19: tui/specs/spec_arm_s_strict_add_precision.md was removed as
+    # off-topic, so the front-facing set is one file smaller. The number tracks that set; if
+    # it moves without a file being added or removed, the scan's reach changed and THAT is
+    # the thing to investigate.
+    assert "scanned 44 text file(s)" in run.stdout, (
         "the front-facing files did not join the scanned set: " + run.stdout)
     assert "1 declared exemption(s)" in run.stdout, (
         "the addendum's exemption is not being counted: " + run.stdout)
