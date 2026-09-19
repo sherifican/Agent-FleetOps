@@ -127,7 +127,12 @@ Structured markdown:
 
 If `auto_fix_tier_1` config enabled, auto-execute Tier 1 fixes:
 - Add missing MEMORY.md index entries (append at logical position)
-- cp single-direction dual-path drift between the canonical and secondary memory paths (sync toward whichever copy is newer — but only when the secondary path is confirmed to be a mirror, not a curated subset; otherwise leave for owner)
+- ⛔ **NOT auto-fixable: content drift between the canonical and secondary memory paths.** An earlier
+  version of this list allowed copying "toward whichever copy is newer" when the secondary path was
+  confirmed to be a mirror. That contradicted Pitfall 1 below and the Tier 2 definition above, and it
+  is unsafe on its own terms: confirming a path is a *mirror* establishes nothing about which copy is
+  *authoritative*, and the newer file can easily be the wrong one. Recency is not authority.
+  Surface it as Tier 2 and let the owner pick the winner.
 - Backfill obvious version-sequence stubs (only if the source-of-truth file is identifiable)
 
 ALWAYS log auto-fixes to `<project-root>/audits/brain_audit_autofixes_<date>.md` for owner review.

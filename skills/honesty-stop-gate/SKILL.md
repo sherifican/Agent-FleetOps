@@ -51,7 +51,13 @@ The hook's contract is Claude-Code-shaped: the harness must (a) invoke `Stop` ho
 ### 6. Prove it can fail END-TO-END, on this box, with the user's own config
 Two acceptance checks, both required:
 
-1. `--check-config` is green (step 3) and `HONESTY_GATE_CONFIG=… --self-test` prints `SELF-TEST PASS` (the mechanism is intact under this config).
+1. `--check-config` is green **under the user's config** (step 3), and `--self-test` prints
+   `SELF-TEST PASS` (the mechanism itself is intact). These two check *different things* and you
+   need both: `--check-config` validates the operator's vocabulary and probes, while `--self-test`
+   runs built-in fixtures with their own hard-coded subjects (`deploy`, `build`, `pgrep -af
+   deploy`) against the **built-in** config. Do not read a self-test result as evidence about the
+   user's config — it is not, and earlier versions that ran the fixtures under a narrowed config
+   printed `SELF-TEST FAIL` for a perfectly legal one while `--check-config` printed `OK`.
 2. **A real trigger with a real subject.** The `--self-test` uses generic strings and only exercises `scan_turn` directly — it does *not* prove the harness fires the hook or that your subjects/commands work. So drive the hook the way the harness does: build a tiny transcript file naming one of the *user's* subjects with an unbacked claim, and feed it in —
 
    ```

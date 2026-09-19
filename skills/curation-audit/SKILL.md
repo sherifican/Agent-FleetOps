@@ -44,6 +44,16 @@ A spawned sub-agent does **not** automatically see the live conversation. So the
 ## After you return
 The orchestrator gates each proposal (approve / revise / reject), logs rejects to the rejects-review file (calibration loop), applies approved ones, commits to version control (reversibility), records the pass in the ledger, and announces. You do none of the writing — you propose.
 
+⚠ **The orchestrator's gate is only half the gate — do not read the paragraph above as the whole
+procedure.** `specs/curation-loop-architecture.md` requires that a change to rules or skills pass a
+panel of **INDEPENDENT** models before it is accepted, that whatever verifier or dry-run exists runs
+**BEFORE** the vote, and that panel disagreement go to the operator with the dissent preserved. One
+model's approval is not acceptance — including the orchestrator's own. `guard/curation_gate.py`
+enforces this on the pass record and **rejects** a one-model approval, a vote taken before
+verification, or a disagreement with no operator verdict, so a pass produced by following only the
+paragraph above will be refused by the shipped gate. Applying an auditor's fixes changes the batch
+and sends it back for re-review; only a clean verdict clears.
+
 ## ★ RELAY CHECK — a corrected claim can have already left the building
 **Whenever a pass CORRECTS or RETRACTS an assertion, ask: was that assertion ever RELAYED, and to whom?**
 Fixing the local record while a peer keeps acting on the old version is the sent-then-diverged

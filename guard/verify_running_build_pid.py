@@ -95,9 +95,44 @@ def process_start_time_ns(identity):
     return _BOOT_EPOCH_NS + identity["start_ticks"] * 1_000_000_000 // _CLOCK_TICKS
 
 
+# Interpreter options that mean "the entry point is NOT a path in argv". With any of these
+# present, every remaining argv item is program ARGUMENTS, and picking the first one that
+# happens to exist on disk identifies a file the process never loaded.
+#
+# Measured 2026-09-19: `python3 -B -c "exec(open('real_server.py').read())" decoy.py` made this
+# function return decoy.py, and bind_check then returned **bound** for decoy.py with its own real
+# hash -- a file the process never executed. No forged timestamp was needed; decoy.py only had to
+# be an ordinary already-deployed file older than process start. Control: the same call with a
+# wrong hash returned not-bound, so the check was live. That is a guard failing in the direction
+# that looks like success, which is the exact class this module exists to catch.
+#
+# Precision about the word "argv", added 2026-09-19 after a peer challenged the `-m` half:
+# this module reads /proc/<pid>/cmdline, which is the EXEC-time argv and keeps the literal
+# `-m pkg.worker`. It is not the in-process sys.argv, which cpython rewrites for `-m` so that
+# sys.argv[0] becomes the module's full file path once the module has been located. Both are
+# called "argv" and only one of them is visible from outside the process. Measured here:
+# `python3 -m pkg.worker` gave cmdline ['python3', '-m', 'pkg.worker'], and 'pkg.worker' is a
+# dotted module name that resolves to no file, so the pre-fix code fell through to
+# /proc/<pid>/exe and would have hashed the INTERPRETER as the loaded file.
+# So the claim this constant encodes is the narrow, checkable one -- from outside the process,
+# for these two modes, cmdline carries no path to the entry point -- and not the broader
+# "python cannot tell you which module ran", which is false.
+_NO_SCRIPT_IN_ARGV = ("-c", "-m")
+
+
 def resolve_loaded_file(identity):
-    """Resolve the process-derived script path, or the executable when no script resolves."""
+    """Resolve the process-derived script path.
+
+    Returns None when the launch mode means no argv item is the entry point; the caller must
+    treat that as CANNOT-PROVE rather than guessing at a path.
+    """
     for arg in identity["cmdline"][1:]:
+        if arg in _NO_SCRIPT_IN_ARGV:
+            return None
+        # a clustered short-option group such as -Bc also selects one of those modes
+        if arg.startswith("-") and not arg.startswith("--") and len(arg) > 1:
+            if any(ch in arg[1:] for ch in ("c", "m")):
+                return None
         if arg.startswith("-"):
             continue
         cand = arg if os.path.isabs(arg) else os.path.join(identity["cwd"], arg)
@@ -113,6 +148,12 @@ def bind_check(pid, deployed_path, expected_sha256):
         return {"status": "cannot-check", "resolved": None, "resolved_sha256": None,
                 "reason": "Linux /proc identity unavailable for pid %s; cannot check" % pid}
     resolved = resolve_loaded_file(identity)
+    if resolved is None:
+        return {"status": "cannot-prove", "resolved": None, "resolved_sha256": None,
+                "reason": "pid %d was launched in a mode whose entry point is not a path in "
+                          "/proc/<pid>/cmdline (-c / -m); no cmdline item may be treated as the "
+                          "loaded file. "
+                          "Identify the served source another way." % pid}
     deployed = os.path.realpath(deployed_path)
     if deployed != resolved:
         return {"status": "not-bound", "resolved": resolved, "resolved_sha256": None,

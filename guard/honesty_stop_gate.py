@@ -79,7 +79,8 @@ DEFAULT_CONFIG = {
     "non_subjects": ["the", "a", "an", "both", "it", "nothing", "none", "neither",
                      "everything", "this", "that", "they", "these", "those"],
     "verify_hint": "the command that observes this subject's real state "
-                   "(e.g. `pgrep -af <name>`, `systemctl status <svc>`, read the log/artifact)",
+                   "(e.g. `pgrep -af <name>`, `systemctl status <svc>`); a log or artifact read is "
+                   "NOT credited by default — add it to verification_commands first if you want it to count",
 }
 
 
@@ -272,7 +273,9 @@ def block_message(bad, verify_hint):
         "Do ONE of these before finishing:",
         f"  1. RUN THE CHECK NOW — {verify_hint} — and restate the fact from what it returned.",
         "  2. DELETE the claim.",
-        "  3. LABEL it plainly as unchecked (\"I have not verified X\").",
+        "  3. REPLACE it with a plain statement that you have not verified it",
+        "     (\"I have not verified X\"). The claim phrase itself must go — appending a",
+        "     label leaves the assertion in place and this gate will still block it.",
         "",
         "Launching is not evidence. An unconditional command (`echo done`, a bare `&`) cannot",
         "fail, so its output confirms nothing. A check from earlier in this turn is stale —",
@@ -311,7 +314,13 @@ def check_config():
 
 
 def self_test():
-    cfg = load_config()
+    # The fixtures below hard-code their own vocabulary ("deploy", "build", `pgrep -af deploy`), so
+    # this must run against the BUILT-IN config, not the operator's. Using load_config() here made a
+    # perfectly legal narrowing -- e.g. subjects: ["celery[\\w-]*"] with a systemctl probe -- print
+    # SELF-TEST FAIL while --check-config printed OK, so the two acceptance commands the skill asks
+    # for disagreed and a correctly-configured adopter was told the gate was broken. This checks that
+    # the MECHANISM is intact; --check-config is what validates the operator's own config.
+    cfg = dict(DEFAULT_CONFIG)
     claim_re, completion_re, measurement_re, subj_re, non_subjects = compile_config(cfg)
 
     def scan(turn):
@@ -356,7 +365,7 @@ def self_test():
             ok = False
     if ok:
         print(f"SELF-TEST PASS: {len(cases)}/{len(cases)} cases "
-              "(blocks unbacked/cross-subject/subjectless-running/adjectival; passes backed/prose/quoted)")
+              "(blocks unbacked/cross-subject/subjectless-running/non-probe; passes backed/prose/quoted/adjectival)")
     return 0 if ok else 1
 
 

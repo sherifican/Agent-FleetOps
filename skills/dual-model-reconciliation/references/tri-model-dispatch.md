@@ -21,9 +21,15 @@ Per-backbone legs write to:
 ## Weighting of unvalidated backbones
 A run may include a backbone not yet stress-tested as a researcher. Rule: weight the proven
 backbones higher until the new one proves out; the run doubles as its audit.
-- Proven backbones AGREE + the new one dissents → majority is default-ACT (log the dissent).
+- Proven backbones AGREE + the new one dissents → **MAJORITY 🔶, pending an independent lookup** —
+  not ACT. Preserve the dissent and name the dissenter. Promote to 🟢 only once the disagreement is
+  resolved and the shared premises are verified. **Track record is not evidence:** a backbone being
+  newer does not make its dissent wrong, and two established models agreeing can be correlated error
+  on a premise neither checked — which is the failure this whole reference exists to catch.
 - New backbone's unique finding → SINGLE / 🟡 PROVISIONAL until independently corroborated.
-- All agree → 🟢 UNANIMOUS. Document the weighting at the top of the FINAL.
+- All agree → 🟢 UNANIMOUS **as an agreement label only.** ACT additionally requires independent
+  sources and every shared premise verified, per the parent skill's confidence map. Document the
+  weighting at the top of the FINAL, and do not let the weighting override the evidence.
 
 ## Per-backbone reliability log
 Running scorecard at `research/_backbone_reliability_log.md`. Log:

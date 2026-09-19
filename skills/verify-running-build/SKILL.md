@@ -79,7 +79,17 @@ serving PID:
 
 1. **Path identity:** does the path resolved from the process's own identity equal the deployed
    path? For an interpreter, derive the script path from that PID's command line and working
-   directory rather than trusting a caller-supplied service path.
+   directory rather than trusting a caller-supplied service path — **but only when the launch mode
+   actually puts an entry point in the cmdline you can read from outside it.** A `-c` or `-m` launch
+   puts none in `/proc/<pid>/cmdline`: every remaining item there is a program argument, and picking
+   the first one that happens to exist on disk names a
+   file the process never loaded. Measured 2026-09-19: with
+   `python3 -B -c "exec(open('real_server.py').read())" decoy.py`, the resolver returned `decoy.py`
+   and the bind check returned **bound** for it, using decoy.py's own real hash — no forged
+   timestamp required, only an ordinary deployed file older than process start. (Control: the same
+   call with a wrong hash returned `not-bound`, so the check was live.) Treat `-c`, `-m`, option
+   operands, wrappers and any unrecognized launch form as **CANNOT-PROVE**; the shipped resolver now
+   does, rather than guessing.
 2. **Ordering:** does the file's modification time predate the process start by more than a small
    uncertainty margin? Derive the boot-time reference once per guard run. A file modified after
    process start, or timestamped within the margin, is CANNOT-PROVE rather than bound.
