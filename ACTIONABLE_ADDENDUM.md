@@ -55,6 +55,16 @@ five buckets — and legs were flagged for the entirely reasonable act of using 
 ### Action — a CLOSED vocabulary. Exactly one of these seven strings:
 `GET` · `ADOPT` · `ADAPT` · `VET` · `EXPLORE` · `WATCH` · `REJECT`
 
+Each verb needs a rule, or the choice is made by feel and the guard can only check your spelling:
+
+- `GET` — acquire it; near-zero cost and nothing to decide.
+- `ADOPT` — put it into production as-is. Carries the evidence bar below.
+- `ADAPT` — usable in principle, but it has to be reshaped for this stack before it can run here.
+- `VET` — promising, and it needs a real test before anyone relies on it.
+- `EXPLORE` — worth a timeboxed look; you cannot yet say whether it applies.
+- `WATCH` — worth tracking, no action now. Say what would change that.
+- `REJECT` — actively not wanted. State the reason, so the next pass does not re-propose it.
+
 **Rejected synonyms — do NOT invent verbs. These have been emitted before and are contract violations:**
 - ~~`TRY`~~ → use **`VET`** (needs a real test first) or **`EXPLORE`** (worth a timeboxed look)
 - ~~`MONITOR`~~ → use **`WATCH`**

@@ -1,11 +1,17 @@
 # SPEC — Solo-Rich Reports (the contract)
 
+> **Status: contract only.** `solo_rich_report.py` is **not shipped in this export** — this directory
+> contains the specification alone, and `README.md` records the renderers as *"Not supplied yet
+> (follow-up)"*. Every sentence below describing what "the renderer" does is a requirement on an
+> implementation you still have to write, not a description of code you can run.
+
 A **Solo-Rich Report** is a standalone, richly-presented artifact for a research finding that earned
 one. It is NOT a prettier FINAL — it is a different tier with a higher evidentiary bar.
 
 Two halves, and they must stay separate in the mind:
 - **THIS FILE = the CONTRACT** — what earns one, what it must contain, what disqualifies it.
-- `solo_rich_report.py` = the RENDERER — deterministic markdown+assets → one self-contained HTML page.
+- `solo_rich_report.py` = the RENDERER, **to be written** — deterministic markdown+assets → one
+  self-contained HTML page.
 
 The renderer is deterministic on purpose. The model emits structured markdown; the renderer makes the
 page. Style therefore cannot drift per-model, and presentation stops being something a model can get

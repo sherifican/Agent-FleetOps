@@ -37,6 +37,11 @@ Covers these paths relative to project root:
 ## Preconditions
 1. Python 3.10+ available in environment.
 2. `scripts/brain_inventory.py` exists alongside this SKILL.md.
+   ⚠ **NOT shipped in this export.** This directory contains only `SKILL.md`. The procedure below
+   calls **three** scripts that are not here — `scripts/brain_inventory.py`,
+   `scripts/staleness_detector.py` and `scripts/duplication_detector.py` — and you must supply all
+   three before any of it runs. Each step documents the JSON its script has to produce, and that
+   output shape is the contract to write against.
 3. Agent has read access to all memory paths.
 
 ## Procedure

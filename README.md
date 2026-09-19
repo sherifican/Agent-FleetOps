@@ -32,7 +32,7 @@ Start with `eval-integrity`, `generate-review-fix-loop`, and `model-routing-tabl
 
 ```mermaid
 flowchart TD
-    W["Fleet activity <br/>local + cloud model legs"] --> T["fleet-tui <br/>OBSERVE - read-only monitor <br/>no model calls, no autonomous actions"]
+    W["Fleet activity <br/>local + cloud model legs"] --> T["fleet-tui <br/>OBSERVE - refresh loop is read-only <br/>owner-triggered controls, nothing autonomous"]
     L["driver lock <br/>SERIALIZE - one writer per tree <br/>(specs/driver-lock-protocol)"] -->|gates writes| W
     W --> G["guard/ <br/>VERIFY - drift guards"]
     TP["teeth_prover <br/>can every guard actually fail?"] -->|proves| G
@@ -347,9 +347,14 @@ reading cannot silently reuse the first device. Each bar states its sample size.
 
 `bench/device_split_bench.py` is the written-down method for those eight cells — the originals came from an ad-hoc command on the second box, and this file is that protocol recorded so the comparison can be
 re-run rather than taken on trust. It drives one model onto each GPU through `options.main_gpu`,
-discards a warm-up so model-load time is not counted as decode rate, and **unloads between devices** —
-without that, the second request quietly reuses the copy already resident on the first device and the
-run reports that device twice, which is the exact failure the benchmark exists to detect.
+discards a warm-up so model-load time is not counted as decode rate, and **asks the runtime to unload
+between devices** — without that, the second request quietly reuses the copy already resident on the
+first device and the run reports that device twice, which is the exact failure the benchmark exists to
+detect. ⚠ **That unload is requested, not verified:** `unload()` runs `ollama stop` with
+`capture_output=True` and never inspects its return code, and `one_rep()` asks for `options.main_gpu`
+without observing where the model actually ended up. If a stop fails silently, both bars can measure
+the same device — the failure this method is meant to prevent. Check the unload, or confirm residency
+per device, before trusting a fresh run.
 
 `bench/make_charts.py` regenerates all six images from the two CSVs, and **fails closed** before rendering:
 exit 1 on chart/data disagreement or invalid power-study data, exit 2 when either source CSV is absent — unverifiable is not the same as clean.
@@ -516,8 +521,11 @@ pointed at a missing command is a stair to nowhere that reads as coverage and de
 
 Above is the gate refusing to end a turn. Two lines of internal guidance were covered with a solid
 bar after the capture; everything else is the blocking message as emitted. It names the claim, quotes
-the clause that carried it, and gives three exits: measure it now, delete it, or label
-it plainly unchecked. The lines underneath are the agent taking the first exit — re-running the check,
+the clause that carried it, and gives three exits: measure it now, delete it, or replace the
+sentence with a plain statement that I have not verified it. The live-state phrase itself has to go —
+appending a label leaves the assertion standing and the gate still blocks. (The capture above predates
+that wording: it shows the third exit as *"LABEL it plainly as unchecked"*, which read as though a
+label were enough. It was not, and the shipped message now says the claim phrase must go.) The lines underneath are the agent taking the first exit — re-running the check,
 then splitting a claim that held for one machine and had never been checked on the other.
 
 It is not decoration, and it is not a single staged example. Here is the same gate firing again a

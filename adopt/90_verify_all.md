@@ -2,6 +2,16 @@
 
 Run this only after the earlier documents have produced their artifacts. Read the actual output, fill the table, and show it to the human. `UNMEASURED`, a missing artifact, a failed command, or an unperformed manual check is not a clean result.
 
+⚠ **This record is a SAMPLE, not full coverage — do not read a clean run as "everything adopted".**
+The assertions below deliberately check a few cheap landmarks. They do **not** verify, among others:
+`adopt-scratch/plan.md` (written in `00_inventory.md`); the `proposals` and `rejects` directories
+alongside `triggers` (`40_protocols.md`); that skills were actually copied into your agent platform's
+directory or that you authored a routing table in your own durable rule location (`20_skills.md`
+steps 2-3 — the check here only proves the file exists in the cloned repo); a *configured*
+`~/.fleet_tui/boxes.json` (only the absent-file fallback is exercised); or the publication hook being
+installed (`30_guards.md` — run `bash guard/hooks/install.sh --check-pre-push-config` yourself).
+Verify those by hand, or extend this file.
+
 ## Ordered acceptance run
 
 **ADOPTER COMMAND:**

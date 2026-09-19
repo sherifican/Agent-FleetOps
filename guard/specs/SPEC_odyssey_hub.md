@@ -111,8 +111,11 @@ source calls it **"warm terracotta"**, and a vision cross-check read it as coppe
 
 ## Verification
 
-Gate: `../guard/tests/test_odyssey_hub.py` — do NOT edit it.
+Gate: `guard/tests/test_odyssey_hub.py` — **not shipped in this repository.** Neither the renderer
+nor its test gate is present here; this file is the specification alone. Write the gate first, from
+this spec, then the implementation, and do not edit the gate afterwards:
 
-    cd .. && python3 -m pytest guard/tests/test_odyssey_hub.py -q
+    # from the repository root, once the gate exists:
+    python3 -m pytest guard/tests/test_odyssey_hub.py -q
 
 Must be fully green. Do not finish on red.

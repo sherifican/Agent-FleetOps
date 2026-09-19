@@ -17,12 +17,20 @@ identical.** ~20 lines of real logic that permanently kills an incident class.
 
 ## The four surfaces
 
+    import os
+    _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     SURFACES = [
-      ("validator", "./check_leg_contract.py"),      # the declared OWNER
-      ("addendum",  "./ACTIONABLE_ADDENDUM.md"),     # what the legs read
-      ("rollup",    "./actionable_rollup.py"),       # the harvester
-      ("preamble",  "./stage_video_research.py"),    # the live prescription
+      ("validator", os.path.join(_ROOT, "check_leg_contract.py")),   # the declared OWNER
+      ("addendum",  os.path.join(_ROOT, "ACTIONABLE_ADDENDUM.md")),  # what the legs read
+      ("rollup",    os.path.join(_ROOT, "actionable_rollup.py")),    # the harvester
+      ("preamble",  os.path.join(_ROOT, "stage_video_research.py")), # the live prescription
     ]
+
+**These must be ABSOLUTE.** A cwd-relative surface silently reads the wrong file when the checker is
+invoked from elsewhere. A sanitization pass once rewrote them to `"./"`-relative and this very gate
+caught it; `guard/tests/test_contract_agreement.py` now asserts `os.path.isabs(path)` for every
+surface, so an implementation copied from an older version of this spec fails the repository's own
+test suite.
 
 Make this list a module constant so it can be overridden in tests.
 

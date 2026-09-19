@@ -6,6 +6,11 @@ It READS state files the fleet already produces + one control semaphore (`watche
 an orchestrator, NOT a code editor, NOT an intervention gateway.
 Full plan: kept in the origin fleet's private notes; this file is self-contained.
 
+⚠ **This file is not auto-ingested by every agent CLI.** An agent follows it when it is asked to read
+it, or when a particular CLI is documented to load nested `AGENTS.md` files. Dropping it in `tui/` is
+not on its own sufficient to make a coding agent obey it — check your CLI's behaviour rather than
+assuming presence is enough.
+
 ## HARD contracts (never violate)
 1. **Never crash on a missing/malformed state file.** A source returns `[]`/`unavailable`; the widget
    shows a muted "n/a" cell. Degrade panel-by-panel, never die. (This is the #1 trust requirement.)
@@ -16,7 +21,8 @@ Full plan: kept in the origin fleet's private notes; this file is self-contained
    deterministic status reads (files, `/api/ps`, `systemctl`) — never an LLM. Controls = the focus
    semaphore (MVP) + (v2) one-key approve that runs the EXISTING gated path.
 4. **Light:** `textual` only; `max_lines` cap on scroll logs; async `@work` for every shell-out;
-   ANSI-strip all log text; refresh timer ≥ 3 s, health shell-out cached ≥ 5 s (`fleet-doctor` ≥ 30 s).
+   ANSI-strip all log text; the data refresh timer is **1 s** (`app.py:1263`) and every heavy probe is
+   cached behind it — meminfo ~4 s, `/api/ps` 5 s, network ~20 s, `fleet-doctor` ≥ 30 s.
    Target < 50 MB RSS. Read cached state; never hammer `:11434` in a tight loop.
 5. `models.py` is a **FROZEN interface** — do not change a field without updating every source AND
    widget that uses it (both sides compile against it).
@@ -27,14 +33,21 @@ Full plan: kept in the origin fleet's private notes; this file is self-contained
 - `fleet_tui/widgets/`    — Textual renderers (dumb; render records only)
 - `fleet_tui/app.py`      — the App: layout, refresh timer, key bindings, focus-toggle write
 - `fleet_tui/fleet_cli/`  — the `fleet` control-plane CLI (reuses `sources/*`; run via `~/.local/bin/fleet`).
-  Verbs: status/targets/tail/route/feedback/preflight/summarize/digest. Spec: `../FLEET_CONTROL_BUILD_PLAN.md`.
+  Verbs: status, targets, tail, route, feedback, preflight, summarize, digest, context, mode,
+  presets, research, log, postmortem.
   Same HARD contract: never crash on bad state; every verb degrades to stderr + exit(2).
 - `tests/fixtures/`       — deterministic state inputs; the crontab and job roster are synthetic
-- `tests/test_*.py`       — one per source, headless (`pytest`)
-- `TUI_OPERATOR_NOTES.md` — how to operate + troubleshoot; each builder writes its module's section
+- `tests/test_*.py`       — hermetic gates for the sources (`pytest`). **Not one file per source**:
+                            50 test files cover 28 source modules, several sources share a file, and
+                            a handful of UI modules need Textual installed to collect at all.
+(Operating and troubleshooting notes live in `README.md` and `CHANGELOG.md`; there is no separate
+operator-notes or build-plan file in this export.)
 
-## State contracts (frozen 2026-07-02 — build against these, do NOT re-guess paths)
-See BUILD_PLAN §2. Summary:
+## State contracts — SHAPES are stable, PATHS are not
+**Do not hardcode the paths below.** `fleet_tui/paths.py` resolves each key from `FLEET_TUI_<KEY>`
+and then XDG JSON; copy `paths.example.json` and edit it. The list that follows is the *authors'*
+instance, kept because it shows the shape each reader expects — never as a contract to code against.
+Summary:
 - **jobs**: `~/.hermes/cron/jobs.json` + `crontab -l` + `~/.hermes/cron/output/<name>/` + logs
 - **inbox**: `curation_dir/.dep_update_trigger` · `.trigger` · `.github_action_alert` ·
   `curation_dir/HF_WATCH_DIGEST.md` · `curation_dir/CURATION_REJECTS_REVIEW.md`

@@ -210,10 +210,11 @@
   254 tests green; modals + hand-off pilot-verified.
 
 ## v3.25 — 2026-07-07 — Ops keyboard navigation (finishes roadmap wave 6c)
-- **[feat]** The Ops master-detail is now fully keyboard-drivable: **`j`/`k`** (or **↑/↓**) move the
-  selection through the visible task list, **Enter** drills into the selected item (dispatch → output
-  modal, job/cron → detail modal). All three are no-ops off the Ops tab, so the keys stay free elsewhere
-  and never steal Enter from buttons/inputs. Nav respects the active `F` category + `/` text filters.
+- **[feat]** Ops master-detail selection, driven by the on-screen Run/Output buttons.
+  ⚠ **NOT IN THIS EXPORT:** the `j`/`k`/`↑`/`↓`/`Enter` keyboard navigation described in the original
+  entry is *specified but unshipped here* — `fleet_tui/app.py` carries the `# Ops-tab keyboard
+  navigation` comment with no `Binding` entries after it, and `tests/test_ops_keynav.py` is not
+  present. Implement both before relying on the keys.
 - **[infra]** Gated in `tests/test_ops_keynav.py` (nav clamps, filter-aware, tab-scoped, Enter drill);
   live keypress-verified. 246 tests green. This closes the last deferred TUI roadmap item — **all
   8 waves + 6a/6b/6c shipped.**

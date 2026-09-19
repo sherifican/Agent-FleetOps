@@ -202,8 +202,11 @@ else. **Precondition: the staging tree and its ancestors must not be writable by
 defending against.** Hardening `_reports/` to 0700 does nothing about a 0777 directory above it,
 and this tool does not modify ancestors it was not asked to create.
 
-**Findings are protected from a REFUSAL, not from a later clean scan.** A refusal never replaces a
-findings report without preserving it first. But a SUCCESSFUL scan ends the generation: it
+**Findings are protected from a REFUSAL, not from a later clean scan.** A refusal does not replace a
+findings report without preserving it first — with one reproduced exception: where a concurrent
+process running as the same user substitutes the canonical name between the preservation and the
+replace, the refusal can replace a report it never preserved. That schedule is documented under the
+concurrency limit below, where review reproduced five of them. But a SUCCESSFUL scan ends the generation: it
 publishes its own result and sweeps the reserved names, including preserved findings from an
 earlier run. Running the scanner again on a cleaned tree therefore discards the previous run's
 evidence, deliberately — a report directory describes one scan, not a history. If you need the
@@ -232,9 +235,10 @@ ARM fired. **A PATH, though, is printed in full — on that stream, on the stand
 report body — and the name arm matches secrets and identities in paths.** So a finding whose surface
 IS the filename prints the matched value as part of its own location, and withholding a separate
 value field buys nothing there. This document and the module header both used to say values are
-never printed, flat, and that sentence was false in exactly that case. No matched text is carried anywhere by either stream, because none is captured: every hit
-this module builds fills that field with the literal "content" or "name", and values are never
-printed. This document used to describe the successful run as printing the matched material and the
+never printed, flat, and that sentence was false in exactly that case. No separate VALUE FIELD is carried by either stream, because none is captured: every hit this
+module builds fills that field with the literal "content" or "name". A matched value can still reach
+the output as part of a printed path, exactly as described above — that is the one case, and
+withholding the value field does not cover it. This document used to describe the successful run as printing the matched material and the
 error stream as withholding it, and neither half was true; this one is reached by failing, an adversary decides when it is
 reached by making a report impossible to write, and the error stream is a descriptor this scanner
 did not choose, cannot inspect, cannot narrow and cannot name. What and where stops a publication

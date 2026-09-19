@@ -87,6 +87,9 @@ DO NOT use this skill when:
 
 1. Python 3.10+ available in the environment.
 2. `scripts/read_window.py` exists alongside this SKILL.md.
+   ⚠ **It is NOT shipped in this export** — this directory contains only `SKILL.md`. You must
+   supply the windowing script yourself; the `WINDOW_META` envelope documented below is the
+   contract it has to emit, so write against that.
 3. Your agent environment's file read limit is set sanely (~200,000 chars).
    The default window (1500 lines ≈ ~80K chars) stays well under that and
    under the context window.
