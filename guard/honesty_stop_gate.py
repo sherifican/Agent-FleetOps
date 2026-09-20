@@ -255,7 +255,9 @@ def scan_turn(turn, claim_re, completion_re, measurement_re, subj_re, non_subjec
                     continue
                 result_id = c.get("tool_use_id")
                 index = next((i for i, item in enumerate(pending)
-                              if result_id and item[0] == result_id), 0)
+                              if result_id and item[0] == result_id), None)
+                if index is None:
+                    continue
                 _, measured = pending.pop(index)
                 verified |= measured
     return bad
