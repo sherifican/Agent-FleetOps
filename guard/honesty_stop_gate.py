@@ -184,14 +184,121 @@ def claim_clause(txt, start, end, subj_re, non_subjects):
     return clause
 
 
+_FILTER_HEAD = re.compile(r"^\s*(?:/\S*/)?(?:grep|egrep|fgrep|rgrep|rg|awk|gawk|sed)\b")
+_NON_OBSERVING = {"--help", "--version", "-V"}
+
+
+def split_shell(cmd, statements=True):
+    """Split a shell command on UNQUOTED operators. Total: never raises.
+
+    statements=True  cuts at the list operators  ;  &  &&  ||  newline
+    statements=False cuts at the pipeline operators  |  |&
+    Single and double quotes, backslash escapes and # comments are tracked, so a
+    separator inside quotes does not split and a comment cannot name a subject.
+    `2>&1`, `>&2`, `&>f`, `<&0` are redirections, not list operators.
+    NOT modelled: heredoc bodies, $(...) and (...) subshells — a separator inside
+    them still splits. That can only LOSE a credit (false-block), never grant one.
+    An unclosed quote runs to the end of the string; nothing is raised."""
+    parts, buf = [], []
+    quote = None
+    word_start = True
+    i, n = 0, len(cmd)
+    while i < n:
+        ch = cmd[i]
+        if quote == "'":
+            buf.append(ch)
+            if ch == "'":
+                quote = None
+            i += 1
+            continue
+        if quote == '"':
+            if ch == "\\" and i + 1 < n:
+                buf.append(ch); buf.append(cmd[i + 1]); i += 2
+                continue
+            buf.append(ch)
+            if ch == '"':
+                quote = None
+            i += 1
+            continue
+        if ch == "\\":
+            buf.append(ch)
+            if i + 1 < n:
+                buf.append(cmd[i + 1])
+            i += 2
+            word_start = False
+            continue
+        if ch in "'\"":
+            quote = ch; buf.append(ch); i += 1; word_start = False
+            continue
+        if ch == "#" and word_start:
+            j = cmd.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        two = cmd[i:i + 2]
+        if statements:
+            if two in ("&&", "||"):
+                parts.append("".join(buf)); buf = []; i += 2; word_start = True
+                continue
+            if ch in ";\n":
+                parts.append("".join(buf)); buf = []; i += 1; word_start = True
+                continue
+            if ch == "&":
+                prev = cmd[i - 1] if i else ""
+                nxt = cmd[i + 1] if i + 1 < n else ""
+                if prev in "<>" or nxt == ">":
+                    buf.append(ch); i += 1; word_start = False
+                    continue
+                parts.append("".join(buf)); buf = []; i += 1; word_start = True
+                continue
+        else:
+            if two == "||":
+                buf.append(two); i += 2; word_start = False
+                continue
+            if two == "|&":
+                parts.append("".join(buf)); buf = []; i += 2; word_start = True
+                continue
+            if ch == "|":
+                parts.append("".join(buf)); buf = []; i += 1; word_start = True
+                continue
+        buf.append(ch)
+        word_start = ch.isspace()
+        i += 1
+    parts.append("".join(buf))
+    return [p for p in (x.strip() for x in parts) if p]
+
+
 def measurement_subjects(tool_input, measurement_re, subj_re):
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    if not isinstance(command, str) or not measurement_re.search(command):
+    """Subjects credited by this tool call, or None if it is not a measurement.
+
+    Unit of observation: a pipeline STAGE that starts with a verification command,
+    plus the grep/rg/awk/sed filter stages that follow it — that is where the subject
+    of `ps aux | grep deploy` lives. Every statement in the command is examined, so
+    `cd /x && pgrep deploy` and `pgrep a; pgrep b` both credit; `pgrep a; echo b`,
+    `pgrep a | tee b.log` and `pgrep a # b` do not. A stage carrying --help/--version
+    observes nothing and is not a measurement. Any exception credits nothing: a
+    Stop hook that raises is fail-open, so this function must be total."""
+    try:
+        command = tool_input.get("command") if isinstance(tool_input, dict) else None
+        if not isinstance(command, str):
+            return None
+        credited, found = set(), False
+        for stmt in split_shell(command, statements=True):
+            stages = split_shell(stmt, statements=False)
+            i = 0
+            while i < len(stages):
+                stage = stages[i]
+                i += 1
+                if not measurement_re.search(stage) or _NON_OBSERVING & set(stage.split()):
+                    continue
+                found = True
+                credited |= subjects(stage, subj_re)
+                while i < len(stages) and _FILTER_HEAD.search(stages[i]):
+                    credited |= subjects(stages[i], subj_re)
+                    i += 1
+        return credited if found else None
+    except Exception:
         return None
-    # Bind subjects only from the OBSERVING statement (the first one, where the probe
-    # runs), not from a trailing `; echo other` — a probe of A must not vouch for B.
-    head = re.split(r"\s*(?:;|&&|\|\||\|)\s*", command, maxsplit=1)[0]
-    return subjects(head, subj_re)
+
 
 
 def current_turn(path):
@@ -357,6 +464,28 @@ def self_test():
          [txt("The build is complete garbage and the deploy is done wrong.")], False),
         ("a non-probe command (echo) is not verification — claim still blocks",
          cmd("echo the deploy is running") + [txt("The deploy is still running.")], True),
+        # ── unit of observation: statements and pipeline stages (2026-09-21) ──
+        # Each arm below was RED on the previous splitter (single `|` split, first statement only,
+        # whole-command `^`, no `&`/`#`/newline) — the control that proves these can fail.
+        ("D2: the subject of `ps aux | grep deploy` lives on the filter stage — PASS",
+         cmd("ps aux | grep deploy") + [txt("The deploy is still running.")], False),
+        ("D3: a trailing `; echo deploy` after a probe of build must not vouch — BLOCK",
+         cmd("pgrep -af build; echo deploy") + [txt("The deploy is still running.")], True),
+        ("D3 twin: `&&` list", cmd("pgrep -af build && echo deploy") + [txt("The deploy is still running.")], True),
+        ("D3 twin: single `&` is a list operator too", cmd("pgrep -af build & echo deploy") + [txt("The deploy is still running.")], True),
+        ("D3 twin: newline", cmd("pgrep -af build\necho deploy") + [txt("The deploy is still running.")], True),
+        ("D3 twin: `# deploy` in a comment cannot vouch", cmd("pgrep -af build # deploy") + [txt("The deploy is still running.")], True),
+        ("D3 twin: `| echo deploy` after a probe is not a filter", cmd("pgrep -af build | echo deploy") + [txt("The deploy is still running.")], True),
+        ("D3 twin: `| tee build.log` is not a filter", cmd("pgrep -af deploy | tee build.log") + [txt("The build is still running.")], True),
+        ("D3 twin: a $(...) body does not vouch", cmd("echo $(pgrep -af build; echo deploy)") + [txt("The deploy is still running.")], True),
+        ("a probe after `cd /x &&` is still a probe — PASS", cmd("cd /tmp && pgrep -af deploy") + [txt("The deploy is still running.")], False),
+        ("a probe on a downstream pipe stage — PASS", cmd("echo dummy | pgrep -af deploy") + [txt("The deploy is still running.")], False),
+        ("two probes in one call both credit — PASS",
+         cmd("pgrep -af deploy && pgrep -af build") + [txt("Both deploy and build are still running.")], False),
+        ("`2>&1` is a redirect, not a list operator — PASS", cmd("pgrep -af deploy 2>&1 | grep -v grep") + [txt("The deploy is still running.")], False),
+        ("an unclosed quote does not raise (a raising Stop hook is fail-open) — PASS",
+         cmd('ps aux | grep deploy "unclosed') + [txt("The deploy is still running.")], False),
+        ("`pgrep --help deploy` observes nothing — BLOCK", cmd("pgrep --help deploy") + [txt("The deploy is still running.")], True),
     ]
     ok = True
     for name, turn, must_block in cases:
@@ -367,7 +496,8 @@ def self_test():
             ok = False
     if ok:
         print(f"SELF-TEST PASS: {len(cases)}/{len(cases)} cases "
-              "(blocks unbacked/cross-subject/subjectless-running/non-probe; passes backed/prose/quoted/adjectival)")
+              "(blocks unbacked/cross-subject/subjectless-running/non-probe/trailing-statement vouch; "
+              "passes backed/prose/quoted/adjectival/pipe-filter/later-statement probes)")
     return 0 if ok else 1
 
 
