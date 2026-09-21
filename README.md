@@ -504,6 +504,24 @@ flowchart LR
 
 </details>
 
+Guards in this ladder run on artifacts after the fact. Two more run *inline*, on the agent itself: one
+before a dispatch starts, one before a turn ends. Here is the first of them refusing to launch a
+sub-agent:
+
+![A PreToolUse hook refusing an Agent launch: "FINDINGS DISPATCH WITH NO OUTPUT FILE refused (4298 chars, findings-type)". The message explains that a sub-agent's result arriving only as text leaves no durable artifact, cites a real loss (a box lost the citations behind two of its three strongest research claims that way), tells the caller to name a file the agent owns, lists what the check does NOT see and says its silence is not evidence, and names the override token, which is counted. Below it the agent adds an output file and relaunches.](docs/findings-dispatch-guard-refusal.png)
+
+The brief asked a sub-agent for findings and named no file for them. The hook read the prompt, saw a
+findings-shaped request over a size threshold with no owned output path, and refused the launch — a
+result that arrives only as text in the caller's context is gone the moment that context is
+summarised, and the message cites the time that happened. Three things in that block are the
+point of this whole section. It says what it cannot see (a short request, a promised path never
+written, findings asked for under a different verb), so its silence is not read as coverage. It has an
+override, and the override is greppable and counted, so routing around it leaves a trace. And the
+fix it demands is mechanical — name a file — so the cost of complying is lower than the cost of
+arguing. The hook itself is part of my private harness and is not in this export; the pattern is
+what travels: a guard on the agent's *inputs* that refuses work whose result would have nowhere to
+land.
+
 ### The honesty stop gate — a guard that watches the agent's words
 
 The ladder above proves *artifacts* can fail visibly. One guard turns the same law on the agent's own
@@ -538,6 +556,22 @@ The second is the more instructive one. `"Now running"` was a **preamble** — a
 way *in* to the command that would establish it. `"Both legs confirmed"` rested on a measurement from
 an earlier turn. Both were blocked; the closing lines are the restatement that followed, each fact
 tied to a check run in the turn that asserted it.
+
+And here it is doing the thing it was built for, on the turn that shipped its own fix:
+
+![The gate blocking four claims in one turn — "still working", "Now running", "legs are running", "still running" — three of them tagged with the subject it could not verify. Below the block, the agent re-measures each leg by name and finds all three NOT RUNNING, then separates the three stale-state catches from one announcement false positive, and closes with a final-state list in which every line is tied to a commit or a file.](docs/stop-gate-four-claims-one-turn.png)
+
+Four claims in one turn, and the split matters. Three were **stale state**: true when the sentences
+were written, false by the time the turn ended, because the legs had finished in between. That is
+exactly the failure the rule exists for — a present-tense "running" is a claim about *now*, and now
+had moved. The fourth, *"Now running the independent gate…"*, was an announcement of a command about
+to run, read as an assertion about one already running; that is a known limitation of a lexical
+matcher and it is logged as one, not excused. The lines underneath are the recovery: every leg
+re-measured by name, the four claims sorted into the two classes, and a final-state list where each
+line names the commit or the file it rests on — that list is the turn's own closing report, a vendor
+evaluation verdict included, left as captured so the recovery reads in its real context. One detail worth noticing: the change that made a
+subjectless "all three legs are running" blockable had landed less than an hour before it blocked
+the agent that wrote it.
 
 **Read it for what it is.** This is a lexical first-stop check, not a proof. It matches configured
 claim phrasings against tool records earlier in the same turn that name the claimed subject — and that

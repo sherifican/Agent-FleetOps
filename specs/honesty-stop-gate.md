@@ -128,6 +128,10 @@ out to be true" is not a defence, and a block is not a claim that you lied.
 
 *The same gate on a later turn. It caught two different shapes at once — a preamble written ahead of its own command, and a two-subject claim with no probe of either — and it fired in the very turn that was publishing a screenshot of it firing.*
 
+![A third firing: four claims in one turn — "still working", "Now running", "legs are running", "still running" — three tagged with the subject the gate could not verify. Below the block the agent re-measures every leg by name (all three NOT RUNNING), sorts three stale-state catches from one announcement false positive, and ends with a final-state list where each line names a commit or a file.](../docs/stop-gate-four-claims-one-turn.png)
+
+*Four claims, two classes. Three were true when written and false when the turn ended — the legs finished in between — which is the case the gate exists for. The fourth ("Now running the independent gate…") was an announcement read as an assertion: the announcement/preamble class is a known false positive of a lexical matcher and is recorded as one below. The subjectless-claim change that made "all three legs are running" blockable had shipped less than an hour before it blocked its author.*
+
 **Configured is not used.** A set of tool servers sat correctly configured and reachable for months.
 Across 659 stored transcripts and 61,342 recorded tool calls, the number of times any of them was
 actually called was zero — not rare, zero. An entry in a config file reads as a capability and delivers
