@@ -106,7 +106,8 @@ DEFAULT_CONFIG = {
 
 _WRITE_CAP_FLOOR = 32768        # write_max_bytes cannot be configured below this
 _WRITE_CAP_CEILING = 1048576    # nor above this: a body that large is a CANNOT CHECK, not a scan
-_REPORT_SUFFIXES = {".md", ".txt", ".rst", ".log", ".html", ".htm", ".json", ".csv"}  # never skippable
+_REPORT_SUFFIXES = {".md", ".markdown", ".mdx", ".adoc", ".txt", ".rst", ".log", ".html", ".htm",
+                    ".json", ".csv"}  # never skippable
 
 
 def _skip_pattern_ok(pat):
@@ -124,7 +125,8 @@ def _skip_pattern_ok(pat):
     literal = glob.sub("", last)
     if re.search(r"[A-Za-z0-9]", literal) and not (literal.startswith(".") and last != literal):
         return True
-    return any(re.search(r"[A-Za-z0-9]", glob.sub("", seg)) for seg in segs[:-1])
+    # `skills/honesty-stop-gate/*` names a place; `/home/*` and `tmp/*` name a whole tree.
+    return sum(1 for seg in segs[:-1] if re.search(r"[A-Za-z0-9]", glob.sub("", seg))) >= 2
 
 
 def load_config():
@@ -152,9 +154,10 @@ def load_config():
                     if k == "write_skip_suffixes":
                         if not isinstance(v, list):
                             continue
-                        bad = [x for x in v if str(x).lower() in _REPORT_SUFFIXES]
-                        refused += [f"write_skip_suffixes: {x!r} is a report format — dropped" for x in bad]
-                        v = [x for x in v if str(x).lower() not in _REPORT_SUFFIXES]
+                        bad = [x for x in v if not isinstance(x, str) or not x.startswith(".") or len(x) < 2
+                               or x.lower() in _REPORT_SUFFIXES]
+                        refused += [f"write_skip_suffixes: {x!r} is a report format or not a suffix — dropped" for x in bad]
+                        v = [x for x in v if x not in bad]
                     if k in ("write_max_bytes", "write_max_total_bytes"):
                         if isinstance(v, bool) or not isinstance(v, int):
                             refused.append(f"{k}: {v!r} is not an integer — default kept")
@@ -163,6 +166,10 @@ def load_config():
                         if clamped != v:
                             refused.append(f"{k}: {v} clamped to {clamped}")
                         v = clamped
+                    if k == "write_tools" and isinstance(v, dict) and v:
+                        badt = [t for t, f in v.items() if not isinstance(f, list) or not f or not all(isinstance(x, str) and x for x in f)]
+                        refused += [f"write_tools: {t!r} has no body field list — dropped" for t in badt]
+                        v = {t: f for t, f in v.items() if t not in badt}
                     if k == "write_tools" and (not isinstance(v, dict) or not v):
                         refused.append("write_tools: empty or not an object — default kept (an empty one turns the file scan off)")
                         continue
@@ -260,8 +267,9 @@ _NON_OBSERVING = {"--help", "--version", "-V"}
 
 
 def _group_end(cmd, i):
-    """Index just past the `$( … )`, `( … )` or backtick group starting at i — nesting and
-    quotes respected; an unclosed group runs to the end (total, never raises)."""
+    """Index just past the `$( … )`, `( … )`, `<( … )`, `a=( … )` or backtick group starting at i —
+    nesting, quotes and a `case` arm's `)` respected; an unclosed group runs to the end (total,
+    never raises)."""
     n = len(cmd)
     if cmd[i] == "`":
         j = i + 1
@@ -275,6 +283,8 @@ def _group_end(cmd, i):
         return n
     depth = 0
     quote = None
+    case_depth = 0   # inside `case … esac` a pattern's `)` closes nothing
+    cpar = 0         # parens opened inside that case body
     j = i
     while j < n:
         ch = cmd[j]
@@ -292,11 +302,24 @@ def _group_end(cmd, i):
         if ch in "'\"":
             quote = ch
         elif ch == "(":
-            depth += 1
+            if case_depth:
+                cpar += 1
+            else:
+                depth += 1
         elif ch == ")":
-            depth -= 1
-            if depth == 0:
-                return j + 1
+            if case_depth:
+                if cpar:
+                    cpar -= 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    return j + 1
+        elif ch in "ce" and (j == 0 or cmd[j - 1] in " \t\n;|&("):
+            word, after = cmd[j:j + 4], cmd[j + 4:j + 5]
+            if word == "case" and after in (" ", "\t", "\n"):
+                case_depth += 1
+            elif word == "esac" and case_depth and after in ("", " ", "\t", "\n", ";", ")", "&", "|"):
+                case_depth -= 1
         j += 1
     return n
 
@@ -353,7 +376,7 @@ def split_shell(cmd, statements=True):
             j = cmd.find("\n", i)
             i = n if j < 0 else j
             continue
-        if statements and (cmd.startswith("$(", i) or (ch == "(" and word_start) or ch == "`"):
+        if cmd.startswith("$(", i) or (ch == "(" and (word_start or cmd[i - 1] in "<>=")) or ch == "`":
             # A command substitution, a subshell or a backtick group is ONE word to the outer
             # list: `echo $(true; pgrep x)` must not yield a statement that starts with `pgrep`.
             # Nothing inside is credited (the spec says so); the group is copied verbatim.
@@ -405,6 +428,49 @@ def _non_observing(stage):
     return bool(_NON_OBSERVING & {_unquote(w) for w in _WORD_RE.findall(stage)})
 
 
+def _blank_groups(text):
+    """`$( … )`, `( … )` and backtick groups replaced by a placeholder, quotes respected — so
+    `x=$(true; pgrep a)` cannot read as an assignment followed by a probe, and nothing inside a
+    group is ever credited."""
+    out = []
+    quote = None
+    word_start = True
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if quote:
+            if quote == '"' and ch == "\\" and i + 1 < n:
+                out.append(text[i:i + 2])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "\\":
+            out.append(text[i:i + 2])
+            i += 2
+            word_start = False
+            continue
+        if ch in "'\"":
+            quote = ch
+            out.append(ch)
+            i += 1
+            word_start = False
+            continue
+        if text.startswith("$(", i) or (ch == "(" and (word_start or text[i - 1] in "<>=")) or ch == "`":
+            j = _group_end(text, i)
+            out.append("_GROUP_")
+            i = j
+            word_start = False
+            continue
+        out.append(ch)
+        word_start = ch.isspace() or ch in ";&|"
+        i += 1
+    return "".join(out)
+
+
 def measurement_subjects(tool_input, measurement_re, subj_re):
     """Subjects credited by this tool call, or None if it is not a measurement.
 
@@ -426,25 +492,23 @@ def measurement_subjects(tool_input, measurement_re, subj_re):
             stages = split_shell(stmt, statements=False)
             i = 0
             while i < len(stages):
-                stage = stages[i]
+                stage = _blank_groups(stages[i])
                 i += 1
                 if not measurement_re.search(stage) or _non_observing(stage):
                     continue
                 found = True
                 credited |= subjects(stage, subj_re)
                 while i < len(stages) and _FILTER_HEAD.search(stages[i]) and not _non_observing(stages[i]):
-                    credited |= subjects(stages[i], subj_re)
+                    credited |= subjects(_blank_groups(stages[i]), subj_re)
                     i += 1
         return credited if found else None
     except Exception:
         return None
 
 
-
-
-
 def _file_skipped(path, cfg):
-    if os.path.splitext(path)[1].lower() in set(cfg.get("write_skip_suffixes") or []):
+    if os.path.splitext(path)[1].lower() in {x.lower() for x in (cfg.get("write_skip_suffixes") or [])
+                                             if isinstance(x, str) and x.startswith(".") and len(x) > 1}:
         return True
     norm = path.replace("\\", "/")
     if norm.startswith("/dev/") or norm in ("-", "/dev/stdout"):
@@ -474,8 +538,7 @@ def _heredoc_openers(line):
     unquoted `#`, not a here-string (`<<<`), not the shift inside `$(( ))`/`(( ))`/`let` — as
     [(strip_tabs, tag)]. Tags: `<<'EOF'`, `<<"END TAG"`, `<<\EOF`, `<<-EOF`, `<<0`, `<<.EOF`."""
     out = []
-    if re.match(r"^\s*let\b", line):
-        return out
+    in_let = bool(re.match(r"^\s*let\b", line))   # `let x=1<<n` — a shift, until the statement ends
     quote = None
     word_start = True
     i, n = 0, len(line)
@@ -509,7 +572,9 @@ def _heredoc_openers(line):
             i += 3
             word_start = False
             continue
-        if line.startswith("<<", i):
+        if in_let and ch in ";&|":
+            in_let = False
+        if line.startswith("<<", i) and not in_let:
             m = _HEREDOC_OPEN.match(line, i)
             if m:
                 out.append((m.group(1) == "-", m.group(3) or m.group(4)))
@@ -739,6 +804,8 @@ def file_bodies(name, tool_input, cfg):
 
 
 _MAX_FINDINGS = 8   # per body; measured: 64 KiB of "is running " took 102 s unbounded
+_MAX_CLAIMS = 64    # claim phrases examined per body; backed claims cost as much as unbacked ones
+                    # (64 KiB of backed padding around 7 unbacked claims: 64 s with only the finding bound)
 
 
 def scan_body(text, verified, claim_re, completion_re, subj_re, non_subjects, where=None):
@@ -746,7 +813,11 @@ def scan_body(text, verified, claim_re, completion_re, subj_re, non_subjects, wh
     unbacked claims as (claim, missing, ctx, where) — `where` is None for prose."""
     bad = []
     txt = strip_quoted(text)
-    for m in claim_re.finditer(txt):
+    for n_claim, m in enumerate(claim_re.finditer(txt)):
+        if n_claim >= _MAX_CLAIMS:
+            bad.append(("CANNOT CHECK", [], f"more than {_MAX_CLAIMS} claim phrases in one body — "
+                        "split the write, or keep the claims in prose", where))
+            break
         ctx = claim_clause(txt, m.start(), m.end(), subj_re, non_subjects)
         cs = claim_subjects(ctx, subj_re, non_subjects)
         completion = bool(completion_re.fullmatch(m.group(0).strip()))
@@ -840,8 +911,11 @@ def scan_turn(turn, claim_re, completion_re, measurement_re, subj_re, non_subjec
                                           " in this same call had not returned yet — write the file AFTER its result", w)
                                          if set(m) & measured else (c, m, ctx, w) for c, m, ctx, w in found]
                             bad.extend(found)
-                        except Exception:
-                            pass  # never let a body take the hook down (fail-open otherwise)
+                        except Exception as e:
+                            # never let a body take the hook down (that is fail-open) — but an
+                            # unscanned body is not a clean one either
+                            bad.append(("CANNOT CHECK", [], f"the body scan raised {type(e).__name__} — "
+                                        "unscanned, not clean", where))
                 elif c.get("type") == "text":
                     bad.extend(scan_body(c.get("text", ""), verified, claim_re, completion_re,
                                          subj_re, non_subjects))
@@ -894,6 +968,20 @@ def block_message(bad, verify_hint):
     return "\n".join(lines)
 
 
+def config_notices(cfg):
+    """Things --check-config cannot verify but the adopter must: a write_tools / write_path_keys
+    map that differs from the defaults is only right if the names match the harness — a wrong
+    field name turns the file scan off silently. The end-to-end test in the skill (a Write
+    carrying a claim must block) is the check."""
+    out = []
+    for k in ("write_tools", "write_path_keys"):
+        if cfg.get(k) != DEFAULT_CONFIG[k]:
+            out.append(f"{k} differs from the default ({cfg.get(k)!r}) — the names must match the harness's tool "
+                       f"input exactly or the file scan is silently off; prove it end-to-end: a Write carrying "
+                       f"a claim must block")
+    return out
+
+
 def check_config():
     """Validate the active config for stairs to nowhere: every verification command's
     binary must resolve on THIS box, and no required list may be empty. Exit 0 clean,
@@ -913,6 +1001,8 @@ def check_config():
             problems.append(f"verification command '{name}' does not resolve on this box "
                             f"(stair to nowhere — it would read as coverage and verify nothing)")
     problems += cfg.get("_refused", [])
+    for note in config_notices(cfg):
+        print(f"check-config: NOTICE — {note}")
     print(f"check-config: file scan — tools {sorted(cfg['write_tools'])} (path keys {cfg['write_path_keys']}), "
           f"sinks {cfg['heredoc_sinks']} + {cfg['arg_sinks']}, {len(cfg['write_skip_paths'])} skip path(s), "
           f"{len(cfg['write_skip_suffixes'])} skip suffix(es), cap {cfg['write_max_bytes']} B/body")
@@ -1076,6 +1166,35 @@ def self_test():
         ("P-2c: a backtick group likewise — BLOCK", cmd("echo `true; pgrep -af deploy`") + [txt(D)], True),
         ("P-2d: a probe AFTER a closed group still credits — PASS", cmd("echo $(date); pgrep -af deploy") + [txt(D)], False),
         ("P-2e: an unclosed `$(` does not raise — BLOCK", cmd("echo $(true; pgrep -af deploy") + [txt(D)], True),
+        ("P-3 (publish gate, Fable): `echo $(true | pgrep -af deploy)` — a `|` inside a group is not a stage break — BLOCK",
+         cmd("echo $(true | pgrep -af deploy)") + [txt(D)], True),
+        ("P-3b: `x=$(true; pgrep -af deploy)` — an assignment holding a group is not a probe — BLOCK",
+         cmd("x=$(true; pgrep -af deploy)") + [txt(D)], True),
+        ("P-3c: `A=1 B=$(true; pgrep -af deploy)` likewise — BLOCK", cmd("A=1 B=$(true; pgrep -af deploy)") + [txt(D)], True),
+        ("P-3d: `X=$(date) pgrep -af deploy` — the probe outside the group still credits — PASS",
+         cmd("X=$(date) pgrep -af deploy") + [txt(D)], False),
+        ("P-4 (Fable): 64 KiB of BACKED padding around 7 unbacked claims blocks in under 2 s (was 64 s)",
+         None, (lambda t0: bool(scan(cmd("pgrep -af build") + write("/x/r.md", ("The build is still running. " * 2200)[:64000] + (" " + D) * 7)))
+                and time.perf_counter() - t0 < 2.0)(time.perf_counter())),
+        ("P-4b: more than 64 claim phrases in one body is a CANNOT CHECK block",
+         None, any(b[0] == "CANNOT CHECK" for b in scan(cmd("pgrep -af build") + write("/x/r.md", "The build is still running. " * 100)))),
+        ("P-5 (Fable): `let x=1; cat > f <<EOF` on one line is still a heredoc — BLOCK",
+         cmd("let x=1; cat > /x/f.md <<EOF\n" + D + "\nEOF"), True),
+        ("P-6 (Fable): skip patterns naming a whole tree (`/home/*`, `tmp/*`) are refused; a place is accepted",
+         None, not _skip_pattern_ok("/home/*") and not _skip_pattern_ok("tmp/*") and _skip_pattern_ok("skills/honesty-stop-gate/*")),
+        ("P-7 (grok re-check): process substitution `<(true; pgrep -af deploy)` is a group — BLOCK",
+         cmd("echo <(true; pgrep -af deploy)") + [txt(D)], True),
+        ("P-7b: `tee >(true; pgrep -af deploy)` likewise — BLOCK", cmd("echo y | tee >(true; pgrep -af deploy)") + [txt(D)], True),
+        ("P-7c: `<(true | pgrep -af deploy)` — a `|` inside it is not a stage — BLOCK", cmd("cat <(true | pgrep -af deploy)") + [txt(D)], True),
+        ("P-7d: a probe after a closed `<( )` still credits — PASS", cmd("cat <(true); pgrep -af deploy") + [txt(D)], False),
+        ("P-8 (grok re-check): a `case` arm's `)` does not close the enclosing `$( )` — BLOCK",
+         cmd("echo $(case x in a) true; pgrep -af deploy;; esac)") + [txt(D)], True),
+        ("P-8b: the same with `|` — BLOCK", cmd("$(case x in a) true | pgrep -af deploy;; esac)") + [txt(D)], True),
+        ("P-8c: `case … esac; pgrep` outside any group still credits — PASS", cmd("case x in a) echo hi;; esac; pgrep -af deploy") + [txt(D)], False),
+        ("P-9 (grok re-check): an array value `arr=(true; pgrep -af deploy)` is a group (bash rejects it; nothing ran) — BLOCK",
+         cmd("arr=(true; pgrep -af deploy)") + [txt(D)], True),
+        ("P-10 (grok re-check): a group with `|` on a heredoc opener line — BLOCK",
+         cmd("cat <<EOF $(true | pgrep -af deploy)\nbody\nEOF") + [txt(D)], True),
         ("P-1 (publish gate): the SECOND heredoc on a line is stripped too, so a probe quoted in it does not credit — BLOCK",
          cmd("cat <<A; cat <<B\nline_a\nA\npgrep -af deploy\nB") + [txt(D)], True),
         ("G-E1e: a here-string into a sink `cat <<< 'claim' > f` — BLOCK", cmd("cat <<< '" + D + "' > /x/status.md"), True),
