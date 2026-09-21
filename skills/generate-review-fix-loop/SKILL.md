@@ -10,8 +10,8 @@ For non-trivial implementation work, use three distinct stages: a coding model d
 
 ## Procedure
 1. Give the generator the full task contract, relevant code, constraints, and expected verification.
-2. Give a different reviewer the task contract and generated diff. Ask for concrete defects, missing cases, and unsupported assumptions.
-3. Give the generator the review and require a revised final result. Preserve the review and final output.
+2. Give a different reviewer the task contract and generated diff. Ask for concrete defects, missing cases, and unsupported assumptions. For each finding, state what must be true on that path after the repair, not only the symptom. Mark each finding `CONFIRMED` only if the reviewer executed the case and recorded observed values, otherwise `SUSPECTED` (reasoned only, including could-not-execute). Keep suspected findings in the review; do not apply them as repairs until confirmed or shown red by a test. See [`specs/the-silent-clear-problem.md`](../../specs/the-silent-clear-problem.md).
+3. Give the generator the review and require a revised final result. Preserve the review and final output. Repair only concrete defects, missing cases, and unsupported assumptions. Record and leave unapplied findings that are only style or idiom. A same-file fact the change alters remains in scope.
 4. Functionally test the final result in the repository before reporting it as verified.
 
 ## Role selection
@@ -32,3 +32,4 @@ For non-trivial implementation work, use three distinct stages: a coding model d
 - [ ] Generator and reviewer were separate roles.
 - [ ] The repair addressed the review rather than merely restating it.
 - [ ] The final revision, not an earlier draft, was tested.
+- [ ] Every finding carried its `CONFIRMED`/`SUSPECTED` label, and each unapplied finding was recorded as either style or idiom only, or `SUSPECTED` and not yet confirmed or shown red by a test.
