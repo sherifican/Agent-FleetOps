@@ -1,7 +1,7 @@
 """Runnable teeth proof for guard/honesty_stop_gate.py, in the shape the mutation harness runs.
 
 The harness executes a guard as `python3 <path>` with no arguments, so the module's `--self-test`
-flag is not reachable from there. This wrapper is that entry point; the nine pinned cases live in
+flag is not reachable from there. This wrapper is that entry point; the pinned cases live in
 the module, where the runner also reaches them.
 """
 import os

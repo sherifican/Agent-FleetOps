@@ -84,8 +84,9 @@ DEFAULT_CONFIG = {
     # ── file-written claims (2026-09-21) ──
     # A claim written INTO A FILE outlives the turn: the reader of the report never sees the
     # transcript. Bodies of these tool calls are scanned exactly like prose, against what had been
-    # verified at the moment of the write. Measured on this fleet before the change: heredoc
-    # `.md` writes outnumbered Write+Edit 1,998 to 728, so the shell channel is covered too.
+    # verified at the moment of the write. Measured over the private transcript corpus this was
+    # built against (not published): heredoc `.md` writes outnumbered Write+Edit 1,998 to 728,
+    # so the shell channel is covered too.
     "write_tools": {"Write": ["content"], "Edit": ["new_string"], "NotebookEdit": ["new_source"]},
     "write_path_keys": ["file_path", "notebook_path"],
     "heredoc_sinks": ["cat", "tee", "dd", "sponge"],   # commands whose stdin lands in a file
@@ -103,7 +104,7 @@ DEFAULT_CONFIG = {
     "write_max_total_bytes": 262144,   # per turn, all bodies
 }
 
-_SKIP_PATH_FLOOR = 32768        # write_max_bytes cannot be configured below this
+_WRITE_CAP_FLOOR = 32768        # write_max_bytes cannot be configured below this
 _WRITE_CAP_CEILING = 1048576    # nor above this: a body that large is a CANNOT CHECK, not a scan
 _REPORT_SUFFIXES = {".md", ".txt", ".rst", ".log", ".html", ".htm", ".json", ".csv"}  # never skippable
 
@@ -158,7 +159,7 @@ def load_config():
                         if isinstance(v, bool) or not isinstance(v, int):
                             refused.append(f"{k}: {v!r} is not an integer — default kept")
                             continue
-                        clamped = min(max(v, _SKIP_PATH_FLOOR), _WRITE_CAP_CEILING)
+                        clamped = min(max(v, _WRITE_CAP_FLOOR), _WRITE_CAP_CEILING)
                         if clamped != v:
                             refused.append(f"{k}: {v} clamped to {clamped}")
                         v = clamped
@@ -258,6 +259,48 @@ _FILTER_HEAD = re.compile(r"^\s*(?:/\S*/)?(?:grep|egrep|fgrep|rgrep|rg|awk|gawk|
 _NON_OBSERVING = {"--help", "--version", "-V"}
 
 
+def _group_end(cmd, i):
+    """Index just past the `$( … )`, `( … )` or backtick group starting at i — nesting and
+    quotes respected; an unclosed group runs to the end (total, never raises)."""
+    n = len(cmd)
+    if cmd[i] == "`":
+        j = i + 1
+        while j < n:
+            if cmd[j] == "\\":
+                j += 2
+                continue
+            if cmd[j] == "`":
+                return j + 1
+            j += 1
+        return n
+    depth = 0
+    quote = None
+    j = i
+    while j < n:
+        ch = cmd[j]
+        if quote:
+            if ch == "\\" and quote == '"':
+                j += 2
+                continue
+            if ch == quote:
+                quote = None
+            j += 1
+            continue
+        if ch == "\\":
+            j += 2
+            continue
+        if ch in "'\"":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return n
+
+
 def split_shell(cmd, statements=True):
     """Split a shell command on UNQUOTED operators. Total: never raises.
 
@@ -266,8 +309,12 @@ def split_shell(cmd, statements=True):
     Single and double quotes, backslash escapes and # comments are tracked, so a
     separator inside quotes does not split and a comment cannot name a subject.
     `2>&1`, `>&2`, `&>f`, `<&0` are redirections, not list operators.
-    NOT modelled: heredoc bodies, $(...) and (...) subshells — a separator inside
-    them still splits. That can only LOSE a credit (false-block), never grant one.
+    A `$( … )` command substitution, a `( … )` subshell and a backtick group are copied
+    verbatim as part of the statement they sit in — a `;` inside one never starts a
+    statement, so `echo $(true; pgrep x)` cannot credit `x` (it used to). Nothing inside
+    such a group is credited: a probe run that way blocks, and the fix is to run it
+    plainly. Heredoc bodies are not split here either: callers remove them first
+    (`without_heredoc_bodies`), because a body left in place CAN grant a credit.
     An unclosed quote runs to the end of the string; nothing is raised."""
     if not isinstance(cmd, str):
         return []
@@ -305,6 +352,15 @@ def split_shell(cmd, statements=True):
         if ch == "#" and word_start:
             j = cmd.find("\n", i)
             i = n if j < 0 else j
+            continue
+        if statements and (cmd.startswith("$(", i) or (ch == "(" and word_start) or ch == "`"):
+            # A command substitution, a subshell or a backtick group is ONE word to the outer
+            # list: `echo $(true; pgrep x)` must not yield a statement that starts with `pgrep`.
+            # Nothing inside is credited (the spec says so); the group is copied verbatim.
+            j = _group_end(cmd, i)
+            buf.append(cmd[i:j])
+            i = j
+            word_start = False
             continue
         two = cmd[i:i + 2]
         if statements:
@@ -466,7 +522,8 @@ def _heredoc_openers(line):
 
 
 def _heredoc_blocks(command):
-    """Every heredoc as (opener_line_index, opener_line, body_lines, terminated, ordinal). The
+    """Every heredoc as (opener_line_index, opener_line, body_lines, terminated, ordinal,
+    body_start_line). The
     closing tag must be the whole line, exactly — an indented `  EOF` is body, as in the shell —
     except under `<<-`, where leading tabs are stripped. An UNTERMINATED body runs to the end of
     the command: the shell warns and still feeds it to the command, so the file is written.
@@ -482,6 +539,7 @@ def _heredoc_blocks(command):
         j = i + 1
         for ordinal, (strip_tabs, tag) in enumerate(opens):
             body = []
+            start = j
             while j < len(lines):
                 line = lines[j].lstrip("\t") if strip_tabs else lines[j]
                 if line == tag:
@@ -489,7 +547,7 @@ def _heredoc_blocks(command):
                 body.append(line)
                 j += 1
             terminated = j < len(lines)
-            out.append((i, lines[i], body, terminated, ordinal))
+            out.append((i, lines[i], body, terminated, ordinal, start))
             if not terminated:
                 break
             j += 1
@@ -597,7 +655,7 @@ def _heredoc_bodies(command, sinks):
     out = []
     if not sinks:
         return out
-    for _, opener, body, _terminated, ordinal in _heredoc_blocks(command):
+    for _, opener, body, _terminated, ordinal, _start in _heredoc_blocks(command):
         slots = []
         for stmt in split_shell(opener, statements=True):
             stages = split_shell(stmt, statements=False)
@@ -648,8 +706,8 @@ def without_heredoc_bodies(command):
         return command
     lines = command.split("\n")
     drop = set()
-    for i, _, body, _t, _o in blocks:
-        drop.update(range(i + 1, i + 1 + len(body)))
+    for _i, _, body, _t, _o, start in blocks:
+        drop.update(range(start, start + len(body)))
     return "\n".join(l for k, l in enumerate(lines) if k not in drop)
 
 
@@ -698,7 +756,7 @@ def scan_body(text, verified, claim_re, completion_re, subj_re, non_subjects, wh
         elif completion and where is None:
             # In-turn prose naming no background subject ("the edits are finished"); its
             # output is already in the transcript. A file does not carry the transcript with
-            # it, so the same words WRITTEN TO A FILE are an unbacked claim (arm W12).
+            # it, so the same words WRITTEN TO A FILE are an unbacked claim (arm W12b).
             ok, missing = True, set()
         else:
             # A subjectless RUNNING claim ("both are still running") has no subject that
@@ -744,7 +802,7 @@ def scan_turn(turn, claim_re, completion_re, measurement_re, subj_re, non_subjec
     def _cap(key):
         v = cfg.get(key)
         v = v if isinstance(v, int) and not isinstance(v, bool) else DEFAULT_CONFIG[key]
-        return min(max(v, _SKIP_PATH_FLOOR), _WRITE_CAP_CEILING)
+        return min(max(v, _WRITE_CAP_FLOOR), _WRITE_CAP_CEILING)
     cap, total_cap = _cap("write_max_bytes"), _cap("write_max_total_bytes")
     verified, pending, bad, total = set(), [], [], 0
     for d in turn:
@@ -1004,10 +1062,22 @@ def self_test():
          [{"type": "assistant", "message": {"content": D}}], True),
         ("A-C2: `message: null` does not raise — PASS", [{"type": "assistant", "message": None}, txt("nothing claimed")], False),
         ("A-E6/F3: skip patterns — `[!.]*` and `[!]*.md` refused, `.env` accepted",
-         [], not _skip_pattern_ok("[!.]*") and not _skip_pattern_ok("[!]*.md") and _skip_pattern_ok(".env")),
+         None, not _skip_pattern_ok("[!.]*") and not _skip_pattern_ok("[!]*.md") and _skip_pattern_ok(".env")),
         # ── refutation round 2 (grok + Fable gate, 2026-09-21) ──
         ("G-E1: `echo 'claim' > f` — the arguments land in the file — BLOCK", cmd("echo '" + D + "' > /x/status.md"), True),
         ("G-E1c: `echo 'claim' | tee f` — BLOCK", cmd("echo '" + D + "' | tee /x/status.md"), True),
+        ("G-E1b: `printf '%s\\n' 'claim' >> f` — BLOCK", cmd("printf '%s\\n' '" + D + "' >> /x/status.md"), True),
+        ("W12b: a SUBJECTLESS completion claim in a file has no transcript behind it — BLOCK",
+         write("/x/handoff.md", "The work was completed."), True),
+        ("W12c: the same subjectless completion in PROSE is in-turn work — PASS", [txt("The work was completed.")], False),
+        ("P-2 (publish gate, grok): `echo $(true; pgrep -af deploy)` — a `;` inside $( ) is not a statement break — BLOCK",
+         cmd("echo $(true; pgrep -af deploy)") + [txt(D)], True),
+        ("P-2b: a `( … )` subshell likewise — BLOCK", cmd("(true; pgrep -af deploy)") + [txt(D)], True),
+        ("P-2c: a backtick group likewise — BLOCK", cmd("echo `true; pgrep -af deploy`") + [txt(D)], True),
+        ("P-2d: a probe AFTER a closed group still credits — PASS", cmd("echo $(date); pgrep -af deploy") + [txt(D)], False),
+        ("P-2e: an unclosed `$(` does not raise — BLOCK", cmd("echo $(true; pgrep -af deploy") + [txt(D)], True),
+        ("P-1 (publish gate): the SECOND heredoc on a line is stripped too, so a probe quoted in it does not credit — BLOCK",
+         cmd("cat <<A; cat <<B\nline_a\nA\npgrep -af deploy\nB") + [txt(D)], True),
         ("G-E1e: a here-string into a sink `cat <<< 'claim' > f` — BLOCK", cmd("cat <<< '" + D + "' > /x/status.md"), True),
         ("G-E1h: `echo 'claim'` with no file is prose already in the transcript — PASS", cmd("echo '" + D + "'"), False),
         ("G-E3: `if …; then cat > f <<EOF` — BLOCK", cmd("if true; then cat > /x/s.md <<EOF\n" + D + "\nEOF\nfi"), True),
@@ -1023,15 +1093,20 @@ def self_test():
         ("G-F1: `> -` is stdout, not a file — PASS", cmd("cat > - <<EOF\n" + D + "\nEOF"), False),
         ("G-F3: `tee >(proc)` is not a path — PASS", cmd("tee >(true) <<EOF\n" + D + "\nEOF"), False),
         ("G-F4: `.tsx` is source — PASS", write("/x/App.tsx", "// " + D), False),
-        ("F-1: timing — 64 KiB of unpunctuated claims scans in under 2 s (was 102 s)",
-         [], (lambda: (lambda t0: (bool(scan(write("/x/r.md", ("is running " * 8000)[:65536]))), time.perf_counter() - t0 < 2.0)[1])(time.perf_counter()))()),
-        ("skip pattern `*.md` is refused (would silently disable the file scan)",
-         [], not _skip_pattern_ok("*.md") and _skip_pattern_ok("skills/honesty-stop-gate/*")
+        ("F-1: timing — 64 KiB of unpunctuated claims is SCANNED (blocks) in under 2 s (was 102 s)",
+         None, (lambda t0: bool(scan(write("/x/r.md", ("is running " * 8000)[:65536]))) and time.perf_counter() - t0 < 2.0)(time.perf_counter())),
+        ("A-S1: skip pattern `*.md` is refused (would silently disable the file scan)",
+         None, not _skip_pattern_ok("*.md") and _skip_pattern_ok("skills/honesty-stop-gate/*")
              and _skip_pattern_ok("CHANGELOG*") and not _skip_pattern_ok("**/*") and not _skip_pattern_ok("*")),
     ]
     ok = True
     for name, turn, must_block in cases:
-        blocked = bool(scan(turn)) if turn else True   # an empty turn carries a precomputed predicate
+        if turn is None:            # a predicate arm: must_block IS the verdict of a check that can fail
+            if must_block is not True:
+                print(f"SELF-TEST FAIL: {name} — predicate false")
+                ok = False
+            continue
+        blocked = bool(scan(turn))
         if blocked != must_block:
             print(f"SELF-TEST FAIL: {name} — expected {'BLOCK' if must_block else 'PASS'}, "
                   f"got {'BLOCK' if blocked else 'PASS'}")
