@@ -31,5 +31,21 @@
   "non_subjects": ["the", "a", "an", "both", "it", "nothing", "none", "neither", "everything", "this", "that", "they", "these", "those"],
 
   "//verify_hint": "One line shown in the block message naming how to verify on your stack.",
-  "verify_hint": "the command that observes this subject's real state (e.g. `pgrep -af <name>`, `systemctl status <svc>`, read the log/artifact)"
+  "verify_hint": "the command that observes this subject's real state (e.g. `pgrep -af <name>`, `systemctl status <svc>`, read the log/artifact)",
+
+  "//write_tools": "FILE-WRITTEN CLAIMS. A claim written into a report/handoff outlives the turn — its reader never sees the transcript — so the bodies of these tool calls are scanned exactly like prose, against what had been verified at the moment of the write. Map tool name -> the input fields that carry the body (Edit's old_string is the text being REMOVED and is not scanned). An empty map is refused (it would turn the file scan off). Shell writes are scanned too: a heredoc into a sink (`cat > f <<EOF`, `sudo tee f <<EOF`, `cat <<EOF | tee f`, `dd of=f <<EOF`, unterminated ones included — the shell still writes them) and the argument forms (`echo 'claim' > f`, `printf … >> f`, `echo … | tee f`, `cat <<< 'claim' > f`). An interpreter's stdin heredoc and `git commit -m` are not file writes.",
+  "write_tools": {"Write": ["content"], "Edit": ["new_string"], "NotebookEdit": ["new_source"]},
+  "write_path_keys": ["file_path", "notebook_path"],
+  "heredoc_sinks": ["cat", "tee", "dd", "sponge"],
+  "arg_sinks": ["echo", "printf"],
+
+  "//write_skip_suffixes": "Source files carry claim phrases in comments and strings that are not reports — skipped by suffix. The report formats (.md .txt .rst .log .html .htm .json .csv) are REFUSED here: a status document in one of them is exactly what the scan is for.",
+  "write_skip_suffixes": [".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".go", ".rs", ".c", ".cc", ".cpp", ".h", ".hpp", ".java", ".rb", ".sh", ".css", ".yml", ".yaml", ".toml"],
+
+  "//write_skip_paths": "Files that legitimately QUOTE claim phrases: this gate, its spec and skill, changelogs. Exact names or narrow globs ONLY (a dotfile name like `.env` counts). A pattern with no literal name (`*`, `*.md`, `**/*`, `*/*`, `[!.]*`) is REFUSED at load and dropped, and `--check-config` names each refusal — a narrowing must never read as configured. Prefer quoting over skipping: a record that must carry another party's claim puts it in double quotes, backticks or a blockquote, and quoted text is not scanned.",
+  "write_skip_paths": ["honesty_stop_gate.py", "honesty-stop-gate.md", "skills/honesty-stop-gate/*", "CHANGELOG", "CHANGELOG.*", "HISTORY", "HISTORY.*"],
+
+  "//write_max_bytes": "A single body above this is NOT scanned as a prefix (a prefix scan reads as coverage of the whole file) — the turn blocks with CANNOT CHECK naming the path. Clamped to 32768–1048576; the turn-total cap likewise. A body scan stops after eight findings (the verdict is already a block), which bounds the per-claim cost.",
+  "write_max_bytes": 65536,
+  "write_max_total_bytes": 262144
 }
