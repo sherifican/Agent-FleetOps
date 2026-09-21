@@ -225,7 +225,7 @@ def subjects(t, subj_re):
     out = {m.group(1).lower().split("-")[0] for m in subj_re.finditer(t)}
     # A log/artifact FILENAME names its subject too: `tail worker3_run.log` verifies the
     # worker, but \bworker\b cannot match inside "worker3_run" (underscore is a word char).
-    for m in re.finditer(r"([\w.-]+)\.(?:log|json|txt|out)\b", t):
+    for m in re.finditer(r"(?<![\w.-])([\w.-]{1,200})\.(?:log|json|txt|out)\b", t):
         out.add(m.group(1).lower().split("_")[0].split("-")[0])
     return out
 
@@ -264,6 +264,30 @@ def claim_clause(txt, start, end, subj_re, non_subjects):
 
 _FILTER_HEAD = re.compile(r"^\s*(?:/\S*/)?(?:grep|egrep|fgrep|rgrep|rg|awk|gawk|sed)\b")
 _NON_OBSERVING = {"--help", "--version", "-V"}
+
+
+_CMD_KEYWORDS = {"then", "do", "else", "elif", "if", "while", "until", "time"}
+
+
+def _cmd_pos(cmd, j, start):
+    """True when index j begins a command word: the group's first word, or the first word after
+    `;`, `|`, `&`, `(`, a newline or a backtick — `echo case x` is an argument, not a `case`."""
+    k = j - 1
+    while k >= start and cmd[k] in " \t":
+        k -= 1
+    if k < start or cmd[k] in ";|&(\n`{!":
+        return True
+    w = k
+    while w >= start and (cmd[w].isalnum() or cmd[w] == "_"):
+        w -= 1
+    # `then case …`, `do case …`, `time case …` — but only a keyword that is itself a command word
+    # (`echo then case x` is three arguments)
+    return cmd[w + 1:k + 1] in _CMD_KEYWORDS and _cmd_pos(cmd, w + 1, start)
+
+
+def _array_open(cmd, i):
+    """`name=(` / `name+=(` / `name[k]=(` opens an array value; `${x:=(}` does not."""
+    return cmd[i - 1] == "=" and re.search(r"(?:^|[\s;|&(])[A-Za-z_]\w*(?:\[[^\]\n]*\])?\+?=$", cmd[max(0, i - 200):i]) is not None
 
 
 def _group_end(cmd, i):
@@ -314,7 +338,12 @@ def _group_end(cmd, i):
                 depth -= 1
                 if depth == 0:
                     return j + 1
-        elif ch in "ce" and (j == 0 or cmd[j - 1] in " \t\n;|&("):
+        elif ch == "#" and cmd[j - 1] in " \t\n;|&(":   # a comment starts at a word start
+            j = cmd.find("\n", j)   # a comment runs to the end of its line; `)` inside it closes nothing
+            if j < 0:
+                return n
+            continue
+        elif ch in "ce" and _cmd_pos(cmd, j, i + 1):
             word, after = cmd[j:j + 4], cmd[j + 4:j + 5]
             if word == "case" and after in (" ", "\t", "\n"):
                 case_depth += 1
@@ -376,7 +405,7 @@ def split_shell(cmd, statements=True):
             j = cmd.find("\n", i)
             i = n if j < 0 else j
             continue
-        if cmd.startswith("$(", i) or (ch == "(" and (word_start or cmd[i - 1] in "<>=")) or ch == "`":
+        if cmd.startswith("$(", i) or (ch == "(" and (word_start or cmd[i - 1] in "<>" or _array_open(cmd, i))) or ch == "`":
             # A command substitution, a subshell or a backtick group is ONE word to the outer
             # list: `echo $(true; pgrep x)` must not yield a statement that starts with `pgrep`.
             # Nothing inside is credited (the spec says so); the group is copied verbatim.
@@ -459,7 +488,7 @@ def _blank_groups(text):
             i += 1
             word_start = False
             continue
-        if text.startswith("$(", i) or (ch == "(" and (word_start or text[i - 1] in "<>=")) or ch == "`":
+        if text.startswith("$(", i) or (ch == "(" and (word_start or text[i - 1] in "<>" or _array_open(text, i))) or ch == "`":
             j = _group_end(text, i)
             out.append("_GROUP_")
             i = j
@@ -804,7 +833,7 @@ def file_bodies(name, tool_input, cfg):
 
 
 _MAX_FINDINGS = 8   # per body; measured: 64 KiB of "is running " took 102 s unbounded
-_MAX_CLAIMS = 64    # claim phrases examined per body; backed claims cost as much as unbacked ones
+_MAX_CLAIMS = 64    # claim phrases examined per FILE body (prose is not capped); backed claims cost as much as unbacked ones
                     # (64 KiB of backed padding around 7 unbacked claims: 64 s with only the finding bound)
 
 
@@ -814,7 +843,7 @@ def scan_body(text, verified, claim_re, completion_re, subj_re, non_subjects, wh
     bad = []
     txt = strip_quoted(text)
     for n_claim, m in enumerate(claim_re.finditer(txt)):
-        if n_claim >= _MAX_CLAIMS:
+        if where is not None and n_claim >= _MAX_CLAIMS:
             bad.append(("CANNOT CHECK", [], f"more than {_MAX_CLAIMS} claim phrases in one body — "
                         "split the write, or keep the claims in prose", where))
             break
@@ -1195,6 +1224,26 @@ def self_test():
          cmd("arr=(true; pgrep -af deploy)") + [txt(D)], True),
         ("P-10 (grok re-check): a group with `|` on a heredoc opener line — BLOCK",
          cmd("cat <<EOF $(true | pgrep -af deploy)\nbody\nEOF") + [txt(D)], True),
+        ("P-11 (Fable rev 3): a `#` comment inside `$( )` — the `)` in it closes nothing, the probe on the next line is inside the group — BLOCK",
+         cmd("echo $(true # )\npgrep -af deploy)") + [txt(D)], True),
+        ("P-11b: the group closes on the next line; a probe after it credits — PASS",
+         cmd("echo $(true # )\n); pgrep -af deploy") + [txt(D)], False),
+        ("P-12 (Fable rev 3): 70 verified prose claims after 70 probes — prose is not claim-capped — PASS",
+         sum((cmd(f"pgrep -af job{n}", f"t{n}") for n in range(70)), []) + [txt("\n".join(f"job{n} is running." for n in range(70)))], False),
+        ("P-13 (Fable rev 3): `$(echo case x); pgrep -af deploy` — `case` as an argument opens nothing — PASS",
+         cmd("$(echo case x); pgrep -af deploy") + [txt(D)], False),
+        ("P-13b: `${x:=(}; pgrep -af deploy` — not an array value — PASS", cmd("${x:=(}; pgrep -af deploy") + [txt(D)], False),
+        ("P-14 (Fable rev 3): a 60 KB unbroken token in a claim clause is scanned in under 1 s",
+         None, (lambda t0: scan(cmd("pgrep -af deploy") + [txt("The " + "x" * 60000 + " deploy is still running.")]) is not None
+                and time.perf_counter() - t0 < 1.0)(time.perf_counter())),
+        ("P-15: a bash keyword before `case` inside a group (`then case`, `do case`, `{ case`, `time case`) — the arm's `)` closes nothing — BLOCK",
+         cmd("$(if true; then case x in a) true; pgrep -af deploy;; esac; fi)") + [txt(D)], True),
+        ("P-15b: `$(for x in 1; do case $x in a) true; pgrep -af deploy;; esac; done)` — BLOCK",
+         cmd("$(for x in 1; do case $x in a) true; pgrep -af deploy;; esac; done)") + [txt(D)], True),
+        ("P-15c: `$({ case x in a) true; pgrep -af deploy;; esac; })` — BLOCK",
+         cmd("$({ case x in a) true; pgrep -af deploy;; esac; })") + [txt(D)], True),
+        ("P-15d: the same group closed, probe after it — PASS",
+         cmd("$(if true; then case x in a) echo;; esac; fi); pgrep -af deploy") + [txt(D)], False),
         ("P-1 (publish gate): the SECOND heredoc on a line is stripped too, so a probe quoted in it does not credit — BLOCK",
          cmd("cat <<A; cat <<B\nline_a\nA\npgrep -af deploy\nB") + [txt(D)], True),
         ("G-E1e: a here-string into a sink `cat <<< 'claim' > f` — BLOCK", cmd("cat <<< '" + D + "' > /x/status.md"), True),
