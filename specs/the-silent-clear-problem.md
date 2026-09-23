@@ -18,7 +18,7 @@ Three machines, each with a distinct role, and two AI agents that work as peers 
 
 The two agents coordinate by dropping files into a shared folder over SSH — notes, patches, review reports. No message bus, no shared database. **Every exchange is a file, so every exchange is diffable and revertible.**
 
-Each agent also dispatches cloud legs for independent review: a search-capable leg, a reasoning leg, and a metered analysis pair. Legs are one-shot — they receive a brief and return an artifact. A standing rule governs them: **judge the artifact on disk, never the exit code**, because a leg can report success while writing an error message as its deliverable.
+Each agent also dispatches cloud legs for independent review: a search-capable leg, a reasoning leg, and a metered analysis pair. Legs are one-shot — they receive a brief and return an artifact. Their acceptance rule — **judge the artifact on disk, never the exit code** — is owned by [research-team protocol, failure handling](research-team-protocol.md#failure-handling); in this incident a leg could report success while writing an error message as its deliverable.
 
 ## Object — the service under construction
 
@@ -68,7 +68,7 @@ Nobody noticed because nobody looked. Every participant reasoned about the sourc
 
 **What caught it, and what would not have:** not a version string — those were correct and meaningless. What caught it was counting marker symbols in the deployed files and comparing to the tree. A field absent from the live health response is unfakeable; a version label in a covering note would have been believed by everyone.
 
-The deploy that followed set the pattern for later ones: back up first so rollback is one command, copy, restart, then verify by marker-diff and fail closed — any missing marker triggers automatic rollback. The verification gate was itself tested against a known-stale tree first, to prove it could go red.
+The deploy that followed backed up, copied, restarted, and checked a marker diff with rollback on a missing marker. Its gate was tested against a known-stale tree first, to prove it could go red. The reusable procedure is owned by [verify-running-build](../skills/verify-running-build/SKILL.md#fail-closed-and-roll-back-automatically); this account records that incident, not a substitute deployment checklist.
 
 ## Doctrine — the disciplines that came out of it
 
@@ -81,6 +81,19 @@ These are the durable outputs — more valuable than the scheduler itself, becau
 5. **Design shared things together; build the specified thing in parallel.** Two failure modes look similar and are opposites. *Unilateral design* — one party invents a shared mechanism and the other inherits it — is drift: the peer gets decisions they never made, and by the time they see it, disagreeing costs discarding working code. *Convergent verification* — both parties independently build the same already-specified thing and compare — is a strength. It happened twice in this project and both times the implementations landed byte-identical, which was strong evidence the fix was right. The test is whether the design space was already settled.
 6. **Check the shared pool before building; reconcile back into it.** Both agents rebuilt mechanisms that already existed in a shared repository neither had consulted. The rule that followed: check first, record what you searched and what you found so the next reader can tell "checked, genuine gap" from "never looked" — and push new lessons back rather than keeping a private variant.
 7. **Escalate precisely.** Both agents drifted into routing engineering decisions to the human — decisions they were better placed to make, on a codebase he had the least context on. Peers should settle what is theirs and escalate only what genuinely needs the owner: things that are public-facing, irreversible, or a matter of intent rather than correctness.
+
+## Producer and consumer vocabulary
+
+The producer is the instrument that decides what counts as an observation (a probe, a hook); a consumer is any policy, watcher or report that classifies by the producer's words.
+
+A downstream policy must change with the instrument that gives its words meaning. Hardening a probe
+can leave a consumer crediting the retired query as a "measurement"; blocking a turn can leave a
+consumer calling text already in the transcript "not delivered". Version the producer's behavior and
+the consumer's vocabulary together, and state any deferred consumer change as a coverage gap. A
+stable word is not evidence that its meaning survived the upstream change.
+
+One concrete adoption is step 3 of [honesty-stop-gate](../skills/honesty-stop-gate/SKILL.md#3-discover-and-verify-the-users-verification-commands--the-critical-step);
+the block's transcript boundary is documented in [the gate spec's *Blocked, not unsent* paragraph](honesty-stop-gate.md).
 
 ## Topology — watching without routing
 

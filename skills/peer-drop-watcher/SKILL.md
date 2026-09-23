@@ -91,6 +91,7 @@ That is a check that cannot pass, which is the mirror image of a check that cann
 
 **The fix:** have the watcher write a PID file on start and remove it on exit; check liveness by testing
 that PID directly. Verify your liveness check on the actual target platform before shipping it.
+Apply the [Instrument self-defeat controls](../guard-target-correctness/SKILL.md#instance-3--instrument-self-defeat).
 
 ## Verification before you call it done
 

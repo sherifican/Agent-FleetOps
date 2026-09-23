@@ -19,6 +19,8 @@ A daily synthetic dispatch per leg converts "silently dead" into "loudly dead wi
 
 > **Judge the artifact, never the exit code.**
 
+This rule is owned by [research-team protocol, failure handling](../../specs/research-team-protocol.md#failure-handling).
+
 A leg can exit 0 having written nothing, and can exit non-zero having produced a perfectly good answer.
 Both have happened here: kimi's quota cap presents as rc=1 with empty stdout AND empty stderr, and a
 queue reported rc=0 for all 25 items while processing 13. So `probe()` decides ALIVE **only** by finding

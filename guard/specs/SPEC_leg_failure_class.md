@@ -42,7 +42,8 @@ Pure: no I/O, no clock, no network. `classify` takes measurements, returns a ver
 ## The rules, in evaluation order
 
 1. **OK** — `artifact_bytes >= min_artifact_bytes`. A good artifact ends the question regardless of
-   rc. *Judge the artifact, never the exit code* — grok exits `rc=2` on healthy runs.
+   rc. *Judge the artifact, never the exit code* — see [research-team protocol, failure handling](../../specs/research-team-protocol.md#failure-handling);
+   the observed instance here was grok exiting `rc=2` on healthy runs.
    signature `"ok"`.
 
 2. **TERMINAL / `"quota-cap"`** — `rc != 0` AND `stdout_bytes == 0` AND `stderr_bytes == 0` AND

@@ -60,6 +60,22 @@ gated the "this job is genuinely running" confirmation — so a variant-tagged j
 its lease would not be protected, and it became eligible for eviction mid-task. The predicate (byte
 equality) was narrower than the concept (same model), and a correctness guarantee rested on the gap.
 
+### Instance 3 — Instrument self-defeat
+
+In the reference setup, a process-table scan excluded any command line beginning `python3 -`
+to drop its own shell. The test runner it was checking (`python3 -m pytest …`) shared that prefix,
+so the scan returned zero while the suite ran and a live run was read as finished.
+
+A liveness query can defeat itself in either direction. A command-line search may find its own
+shell or filter and report a process that is absent. Conversely, excluding every command line
+containing the search text can discard the intended process too, so a live subject produces zero.
+
+Before accepting a liveness zero, run the exact query and exclusions against a known-live subject
+in the same observation environment and require its identity to survive. Pair that with a known-absent
+subject to expose self-matches. Record the query, subject identity, search scope and both results;
+an unreadable process table is CANNOT CHECK, not absence.
+For platform-specific watcher wiring, see [peer-drop-watcher](../peer-drop-watcher/SKILL.md#process-liveness-check--beware-the-platform-trap).
+
 ## The other direction — a guard that is too WIDE
 
 Everything above is the predicate that is too narrow. The mirror failure is the guard that flags
@@ -72,7 +88,8 @@ live corpus it will police and read flagged/scanned before the guard ships. Pin 
 manifest first, so the denominator cannot drift under the measurement; a predicate flagging more
 than a configured share of that pinned corpus (default: half) fails its own review. And breadth
 alone is not a pass — the review also names the labelled positives it checked, because a guard can
-be narrow and still wrong.
+be narrow and still wrong. "N of N flagged are true positives" measures precision; name the labelled
+positives the guard missed as well, so the review checks recall.
 
 Arm: `guard/population_arm.py` runs a candidate checker over a pinned corpus manifest, records
 flagged/scanned, and fails the review when the share exceeds the ceiling or a labelled positive is
@@ -92,6 +109,8 @@ For each guard, in writing:
 1. **State the concept in one sentence.** Not the code — the thing you actually mean. "No caller may act
    without a unique identity." "A job that is really running must be confirmed."
 2. **Write down the predicate as implemented.** The literal comparison. `x is None`. `a != b`. `count > 0`.
+   A narrow early-return predicate can leave the branch below unexercised. Prove that branch ran
+   with a test that reaches it; a mutation that forces the early return must turn that test red.
 3. **Enumerate the equivalence class the concept covers.** Adversarially, and specifically include:
    - **falsy siblings** — `""`, `0`, `[]`, `{}`, `false`, whitespace-only
    - **aliases and normalizations** — case, suffixes, prefixes, tags, trailing separators, unicode forms
@@ -99,6 +118,11 @@ For each guard, in writing:
    - **the value that is equal to itself but should not be** — two callers legitimately sending the same
      placeholder, and whether your identity check can tell them apart
    - **the type you did not expect** — a string where a number was assumed, and vice versa
+   - **coincident ends of a swap or replacement** — replacing every element equal to the old value
+     also rewrites a second argument holding the same string: a `--bind SRC DST` pair where SRC
+     equals DST. Select the argument by its position after the flag AND by the value you intend to
+     replace: `==` alone also rewrites the other end, and position alone rewrites every bind's
+     source. Test the case where both ends are equal.
 4. **For each member, decide: should the guard trip? Does it?** Any row where those two disagree is a
    finding. This is a table, not a feeling.
 5. **Check what the guard does on a trip.** Counting an invalid value is not rejecting it. If the concept

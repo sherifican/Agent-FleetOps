@@ -15,6 +15,8 @@ The rule this module enforces:
 > **Every guard ships with a mutation that makes it go red. If you cannot write a mutation that makes
 > your check fail, you have not written a check.**
 
+For the doctrine, see [rigor spectrum §1, invariant suite and mutation needles](../../specs/rigor-spectrum.md#1-invariant-suite--mutation-needles).
+
 Note what it does NOT do: it never proves a guard is *correct*. It proves a guard is *reachable*. Those
 are different claims and the output must not blur them.
 

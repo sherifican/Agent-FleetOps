@@ -30,9 +30,18 @@ For each way the user's agent could observe live state, find the actual command.
 
 - Is there a process supervisor? `systemctl status` / `systemctl is-active` / `supervisorctl status` / `pm2 list`.
 - Containers/orchestration? `docker ps` / `kubectl get`.
-- Process table? `pgrep` / `ps`.
+- Process table? `pgrep` / `ps`; validate the query via [Instrument self-defeat](../guard-target-correctness/SKILL.md#instance-3--instrument-self-defeat).
 - A job runner, task queue, or the agent harness's own status command? The exact binary/subcommand, and it must *observe* state (be able to return "not running"), not always succeed.
 - Health endpoints? `curl .../health` — only if the endpoint is real.
+
+When you replace or harden a probe (for example, stop using `pgrep -f` because it matches its own
+command line), update `verification_commands` in the same commit; follow the
+[producer/consumer vocabulary rule](../../specs/the-silent-clear-problem.md#producer-and-consumer-vocabulary).
+Do not add a generic reader such as `cat` or `python3`: it credits unrelated reads. A `/proc` reader
+that names its subject is an option only after it passes the
+[Instance 3 controls](../guard-target-correctness/SKILL.md#instance-3--instrument-self-defeat);
+neither `guard/honesty_gate.config.example.json` nor `guard/honesty_gate.config.minimal.example.json`
+includes one.
 
 Write your candidate list into `honesty_gate.config.json`, then run:
 

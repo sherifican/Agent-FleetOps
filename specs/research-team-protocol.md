@@ -35,7 +35,7 @@ renames them.
 
 ## Failure handling
 
-Classify a failed leg from its retained artifact rather than its exit code alone. A missing artifact may
+**Judge the artifact, never the exit code.** Classify a failed leg from its retained artifact rather than its exit code alone. A missing artifact may
 be retried under a bounded policy; a partial artifact needs verification; an invalid artifact stops the
 lane; a capacity or premise failure requires a changed brief or route, not blind repetition. If the
 verifier cannot establish a claim, record HOLD or an equivalent project status rather than publishing

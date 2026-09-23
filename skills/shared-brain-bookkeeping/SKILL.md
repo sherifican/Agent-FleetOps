@@ -61,6 +61,10 @@ This produces a JSON file with:
 ### Step 2 — Staleness detection
 Run `python3 scripts/staleness_detector.py --inventory brain_inventory.json --days 30 --output stale_report.json`.
 
+Before proposing an archive from the stale report, check frontmatter `re-triage:`. A valid date in the future
+is scheduled, not stale: exclude that record from archive proposals until its re-triage date.
+When the date arrives, reassess against the criteria; the date alone is not an archive decision.
+
 Flag criteria:
 - `cross_reference_count == 0` → STALE (no other inventoried file references this file's basename in its body)
 - File frontmatter declares itself deprecated (`name` ends in `_SUPERSEDED_<date>`, OR `deprecated: true`, OR `superseded_by: <slug>`) → STALE

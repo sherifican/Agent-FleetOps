@@ -74,9 +74,14 @@ below is the mechanism, generalized; numbers are from the reference deployment.
    produced fabricated text that a downstream audit rated as matching. And a rebuilt instruction file
    is checked against the approved bytes before it is applied; where it differs, or where the match
    cannot be shown, it is re-audited rather than inheriting the proposal's approval.
+   Machine-read fields are the fields of an approved edit that the applier reads: the target locator
+   and the operation (including literal edit bytes). Keep rationale in the ledger or review notes
+   that the applier never reads.
 
 7. **A second model audits the diff.** Intent vs. applied change, MATCH/MISMATCH, from a model that
    didn't write either. Cheap, and it catches the apply layer's mistakes rather than trusting them.
+   The MATCH/MISMATCH audit should also check that no rationale, review instruction or other
+   non-operation text landed in the target.
 
 8. **Rejects are a calibration dataset.** Rejected proposals go to a review file, not the void. If
    the proposer keeps proposing the same rejected thing, that's signal about the proposer; if a

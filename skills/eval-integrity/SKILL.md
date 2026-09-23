@@ -210,11 +210,33 @@ it fails. Three instances from one day on the reference setup:
   is what makes it a gate rather than a ritual. The RED run also surfaced an unclaimed property: on the
   *upstream* pattern a legitimate `--dry-run` invocation was **wrongly blocked**, so the token-boundary fix
   repaired a false POSITIVE too.
+
+Further checks worth running on a secret-shape detector:
+
+- Prefer a family prefix to length alone: a hex hash can share a token's length.
+- Match the prefix at a token boundary so a prefix inside a longer word is not reported.
+- Check regex FLAGS as well as classes: a case-insensitive flag makes `[A-Z]` match lowercase.
+  Prove the intended case behaviour with a matching and a non-matching example.
+- Set each family's minimum LENGTH against a real token body with the prefix counted separately,
+  and plant representative bodies with separators plus a nearby non-key control.
+
+For changes to the instrument or its harness:
+
+- **A widened extractor needs a new proof.** When extraction broadens to new syntax or surfaces,
+  re-prove the negative verdict through the widened path with a known-positive there and a benign
+  control. Earlier evidence covers the earlier extractor, not the added input class.
+- **A harness-composition zero.** Zero detections through a wrapper, filter or aggregation can mean
+  that the harness dropped the signal. Carry a known-positive through the entire composition and
+  require the intended finding to survive; a detector tested in isolation cannot validate that zero.
+- **An exemption re-check.** A scanner's refusal re-checked after exempting a harmless class
+  (identifier-shaped strings, say) is sound only if a real secret still fails the re-check with
+  the exemption applied; carry a known secret through it.
+
 **How to apply:** for any detector, ship the known-positive with it and run both directions — the negative case is
 what establishes the instrument exists at all. Never report "clean" / "no leaks" / "no regressions" from a pattern,
 query or gate whose failure path you have not observed **this session**. Prefer the fixture live IN the repo so the
 validation re-runs. **Mechanised form:** pair every guard with a MUTATION that must turn it red, promoted to a
-build step where the guard count justifies it — and treat an empty *or ambiguous* search needle in any checker as
+build step where the guard count justifies it (see [rigor spectrum, invariant suite and mutation needles](../../specs/rigor-spectrum.md#1-invariant-suite--mutation-needles)) — and treat an empty *or ambiguous* search needle in any checker as
 a hard failure, never a vacuous pass. First full run of the mechanised form (reference setup): 46 mutations vs 6
 guards → **12 SURVIVED**, including a guard that never IMPORTS the module it protects (it tested a local MIRROR of
 the logic) and a check comparing two outputs of the same call.

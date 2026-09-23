@@ -22,6 +22,7 @@ A spawned sub-agent does **not** automatically see the live conversation. So the
    - **Guardrail (inferred-from-behavior):** these are OBSERVED, not stated — phrase the memory as a **default the operator can override**, and do NOT over-fit to a single instance. One occurrence = a weak signal; note the confidence (e.g. "moderate — one explicit endorsement") and strengthen it as the pattern recurs.
 2. **Map each to an action**, following the existing disciplines:
    - **Memory** (one fact per file): correct type frontmatter (e.g. `user|feedback|project|reference`) + **lifecycle metadata** (`updated:<date>` + `status:` — e.g. `current`/`superseded` for reference/feedback/user, `active`/`done`/`parked`/`superseded` for project; add `superseded_by:<slug>` / `re-triage:<date>` when applicable). **Type-specific required schema:** `feedback` gets **Why:** + **How to apply:**; `project` gets **Goal / Current state / Next trigger / Why** (How-to-apply optional, for projects that ship a reusable artifact). If you have a hygiene linter for the memory store, it should flag missing schema fields. Link related entries, and add the one-line entry to the correct index — reserve any always-loaded hot index for guardrails/nav/pre-flight only. UPDATE an existing file if one covers the topic; don't duplicate. **★ ON ANY MATERIAL BODY EDIT: bump `updated` AND re-check the file's index hook + frontmatter `description` still match the body** — a corrected body under a stale hook is the #1 drift source.
+   - For records whose frontmatter carries a future `re-triage:` date, follow [shared-brain-bookkeeping Step 2](../shared-brain-bookkeeping/SKILL.md#step-2--staleness-detection).
    - **Single-owner rule:** current policy / routing / a reusable procedure has ONE canonical owner (a skill or the one canonical memory); every OTHER mention is a POINTER + a dated-evidence marker, never a copy — copies diverge into "which page is right?".
    - **Skill**: create/update a `SKILL.md` only for a reusable *procedure*; don't make a skill out of a one-off fact (that's a memory).
 3. **Dedup hard** against the ledger + existing skills/memories. If it's already captured (e.g. this session already wrote it), DROP it. Cite what it matches.
@@ -44,15 +45,9 @@ A spawned sub-agent does **not** automatically see the live conversation. So the
 ## After you return
 The orchestrator gates each proposal (approve / revise / reject), logs rejects to the rejects-review file (calibration loop), applies approved ones, commits to version control (reversibility), records the pass in the ledger, and announces. You do none of the writing — you propose.
 
-⚠ **The orchestrator's gate is only half the gate — do not read the paragraph above as the whole
-procedure.** `specs/curation-loop-architecture.md` requires that a change to rules or skills pass a
-panel of **INDEPENDENT** models before it is accepted, that whatever verifier or dry-run exists runs
-**BEFORE** the vote, and that panel disagreement go to the operator with the dissent preserved. One
-model's approval is not acceptance — including the orchestrator's own. `guard/curation_gate.py`
-enforces this on the pass record and **rejects** a one-model approval, a vote taken before
-verification, or a disagreement with no operator verdict, so a pass produced by following only the
-paragraph above will be refused by the shipped gate. Applying an auditor's fixes changes the batch
-and sends it back for re-review; only a clean verdict clears.
+The orchestrator's approval is only half the gate: a change to rules or skills also needs an independent panel, and `guard/curation_gate.py` refuses a one-model approval (including the orchestrator's own), a vote taken before verification, and a disagreement with no operator verdict.
+Follow the acceptance procedure in [curation-loop architecture, rule 12 under *Design rules that carry the weight*](../../specs/curation-loop-architecture.md#design-rules-that-carry-the-weight).
+Return the exact proposed batch for that review; applying an auditor's fixes changes the batch and requires re-review.
 
 ## ★ RELAY CHECK — a corrected claim can have already left the building
 **Whenever a pass CORRECTS or RETRACTS an assertion, ask: was that assertion ever RELAYED, and to whom?**
