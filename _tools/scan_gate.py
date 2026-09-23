@@ -34,7 +34,14 @@ import hashlib, unicodedata
 
 SECRET_PATTERNS = [
     ("anthropic-key",      re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
-    ("openai-style-key",   re.compile(r"sk-[A-Za-z0-9]{20,}")),
+    # The original flat arm catches 20+ alphanumerics, even after concatenated letters.
+    # The segmented arm requires a word, a hyphen, and a 20+ character body containing a digit;
+    # it skips a prefix with a letter or digit directly before it and leaves ant- to its arm.
+    # The arms are case-exact: sk-Ant- is reported by the segmented arm, not the Anthropic arm.
+    # A kebab identifier starting with sk- and containing a digit (sk-learn-v2-...) can still
+    # fire. Reword that text: SECRET hits cannot be allow-listed.
+    ("openai-style-key",     re.compile(r"sk-[A-Za-z0-9]{20,}")),
+    ("openai-segmented-key", re.compile(r"(?<![A-Za-z0-9])sk-(?!ant-)[A-Za-z0-9]+-(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{20,}")),
     ("github-token",       re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}")),
     # the closing-quote option matters: JSON-style {"api_key": "..."} has a quote between the
     # name and the colon — the first version of this pattern missed exactly that, and the
@@ -3608,12 +3615,18 @@ def self_test():
     try:
         os.makedirs(os.path.join(tmp, "skills"))
         open(os.path.join(tmp, "skills", "clean.md"), "w").write(
-            "a generic doc. doc ip 203.0.113.7 is fine. path /home/<user>/x is fine.\n")
+            "a generic doc. doc ip 203.0.113.7 is fine. path /home/<user>/x is fine.\n"
+            # Control: a prefix inside a longer word must stay clean.
+            "This document describes task-dependency-sequencing.\n")
         hits = scan(tmp)
         ok_clean = not hits
         # MUTATION 1: planted secret
         open(os.path.join(tmp, "skills", "m1.md"), "w").write(
             'cfg = {"api_' + 'key": "abcDEF123456789xyzKLMNO"}\n')
+        # Bare hyphenated keys must trip their own arm, without an assignment as a backstop.
+        for family in ("proj", "prod"):
+            with open(os.path.join(tmp, "skills", f"m1-{family}.md"), "w") as _h:
+                _h.write("sk-" + family + "-" + "abcDEF123456789xyzKLMNO" + "\n")
         # MUTATION 2: planted identity — drawn FROM the loaded terms file, never hardcoded,
         # so the self-test stays red-capable for any user's terms (a fresh-clone run with a
         # different terms file exposed the hardcoded version as unable to fail)
@@ -3708,6 +3721,9 @@ def self_test():
         surfaces = {(h[0], h[2], h[4]) for h in hits}
         ok_red = ("skills/m1.md", "SECRET") in classes and ("skills/m2.md", "PERSONAL") in classes \
                  and not any(h[0] == "skills/clean.md" for h in hits)
+        ok_red = ok_red and all(
+            any(h[0] == f"skills/m1-{family}.md" and h[2:5] == ("SECRET", "openai-segmented-key", "content")
+                for h in hits) for family in ("proj", "prod"))
         ok_name = (name_dirty, "PERSONAL", "name") in surfaces \
                   and not any(h[0] == "skills/clean-name.md" for h in hits)
         ok = ok_clean and ok_red and ok_name and ok_banned and ok_banned_refuses
