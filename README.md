@@ -72,7 +72,7 @@ another machine). The commit history tells that story.
 
 ![fleet-tui monitoring a two-box fleet](docs/fleet_tui_screenshot.png)
 
-*Authors' instance capture, including its roster names and box labels.*
+*Captured live from my personal box, shows active models, session state, and more. critical for monitoring your fleet and verifying that what your model asserts about the current state is true.*
 
 A live two-box fleet in one screen, in resizable collapsible cards. The left column is this box:
 service and stability health beside CPU, disk and per-GPU readings; a model kanban splitting in-flight
