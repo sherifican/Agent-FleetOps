@@ -13,7 +13,7 @@ pins the installer's contract (design §8) as behaviour, not syntax:
   --replace                  with --pre-push-config: a differing pre-existing hook is backed up
                              (bytes + mode) to a path printed as `backup: <abs path>` and only then
                              replaced; without it the differing hook is preserved and the run refuses.
-  no arguments               the legacy all-hooks route, preserved.
+  no arguments               the legacy all-hooks route; differing existing hooks are refused.
   anything else              usage error, exit 2, nothing written.
 
 Exit codes pinned here: 0 success · 1 every designed refusal · 2 usage. A refusal never prints a
@@ -238,7 +238,7 @@ def make_fixture(tmp_path, name="repo", identity_terms=IDENTITY_TERM + "\n",
 
 def plant_preexisting_sentinel(fx):
     """A hook Git would run that is NOT the tracked pre-push: the pre-push-only route must leave it
-    byte-for-byte alone (the legacy route may overwrite it, by design)."""
+    byte-for-byte alone (the legacy route must refuse it)."""
     hooks_dir = os.path.dirname(fx.effective_hook())
     os.makedirs(hooks_dir, exist_ok=True)
     p = os.path.join(hooks_dir, "commit-msg")
@@ -334,14 +334,46 @@ def force_unreadable(fx, path):
 # 1. install only pre-push, byte-equal, executable, parity-checked
 # ================================================================================================
 
+def test_legacy_later_conflict_preserves_earlier_destinations(tmp_path):
+    """A conflict after the first hook must refuse before installing any earlier hook.
+
+    RED on a single-pass check-then-copy installer; the existing first-conflict and
+    identical-rerun case remains a separate control.
+    """
+    fx = make_fixture(tmp_path)
+    order = subprocess.run(
+        ["bash", "-c", 'for h in guard/hooks/*; do '
+         'n=${h##*/}; [ "$n" = install.sh ] || printf "%s\n" "$n"; done'],
+        cwd=fx.repo, env=fx.env(), capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    assert len(order) >= 2, "fixture needs a later non-installer glob entry"
+    hooks_dir = os.path.dirname(fx.effective_hook())
+    conflict = os.path.join(hooks_dir, order[-1])
+    with open(conflict, "w") as out:
+        out.write(OLD_HOOK)
+    conflict_hash = sha256(conflict)
+    earlier = [os.path.join(hooks_dir, name) for name in order[:-1]]
+    assert all(not os.path.lexists(path) for path in earlier), earlier
+    before = fx.snapshot()
+
+    r = fx.installer()
+    assert sha256(conflict) == conflict_hash, "later conflicting hook must survive refusal"
+    for path in earlier:
+        assert not os.path.lexists(path), "legacy later conflict installed an earlier hook: " + path
+    assert_refused(r, "legacy mode preserves it")
+    assert conflict in r.stderr, r.stderr
+    assert fx.snapshot() == before, "legacy later conflict must preserve all installer destinations"
+
+
 @pytest.mark.parametrize("case", ["legacy-no-args", "fresh", "reinstall-identical",
                                   "fresh-corrupt-copy", "symlink-destination", "unknown-argument"])
 def test_install_pre_push_and_parity(tmp_path, case):
     """Guards against an installer that ignores its arguments and installs EVERY hook, that trusts
     its own copy without a checked parity, that replaces a symlink, or that accepts unknown flags.
 
-    Preservation control (GREEN on the old installer): `legacy-no-args` — no arguments still
-    installs all tracked hooks, executable, with an `installed` line.
+    Legacy control: `legacy-no-args` — a differing user hook is refused and preserved by hash,
+    before any hook is copied (RED on the old installer). With identical existing content,
+    no arguments still installs all tracked hooks and an identical rerun exits 0.
     Repaired behaviour (RED on the old installer, on exact behaviour): `fresh` and
     `reinstall-identical` — the pre-existing commit-msg sentinel is left byte-identical and only
     pre-push is added; `fresh-corrupt-copy` — a copy that lands corrupted is REFUSED (nonzero,
@@ -359,6 +391,14 @@ def test_install_pre_push_and_parity(tmp_path, case):
     tracked_hash = sha256(fx.tracked_hook())
 
     if case == "legacy-no-args":
+        before = fx.snapshot()
+        sentinel_hash = sha256(sentinel)
+        r = fx.installer()
+        assert_refused(r, "legacy mode preserves it")
+        assert sentinel in r.stderr and "--pre-push-config --replace" in r.stderr, r.stderr
+        assert sha256(sentinel) == sentinel_hash, "the user's hook bytes must survive refusal"
+        assert fx.snapshot() == before, "legacy conflict must be found before copying any hook"
+        shutil.copyfile(fx.repo / "guard" / "hooks" / "commit-msg", sentinel)
         r = fx.installer()
         assert r.returncode == EXIT_OK, combined(r)
         for name in ("pre-push", "commit-msg"):
@@ -367,6 +407,10 @@ def test_install_pre_push_and_parity(tmp_path, case):
             assert sha256(p) == sha256(str(fx.repo / "guard" / "hooks" / name)), name
         assert "installed" in r.stdout, r.stdout
         assert "install.sh" not in os.listdir(hooks_dir), "the installer must not install itself"
+        installed = fx.snapshot()
+        rerun = fx.installer()
+        assert rerun.returncode == EXIT_OK, combined(rerun)
+        assert fx.snapshot() == installed, "identical legacy rerun must preserve installed bytes/modes"
         return
 
     if case == "unknown-argument":

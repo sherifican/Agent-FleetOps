@@ -6,7 +6,7 @@ license: MIT
 
 # Honesty Stop Gate — adaptation skill
 
-You are wiring `guard/honesty_stop_gate.py` into the user's agent so it blocks the agent from ending a turn on a live-state claim it never measured. The mechanism is fixed and correct; your whole job is the three config parameters — and the danger in that job is **building a stair to nowhere**: a check that reads as coverage and verifies nothing, because it points at a command the user's system does not have, or one that cannot fail. Read [`specs/honesty-stop-gate.md`](../../specs/honesty-stop-gate.md) first — including *"What it enforces, precisely"* (the gate confirms a probe RAN and named the subject; it does not read the probe's output). Do not reimplement the mechanism.
+You are wiring `guard/honesty_stop_gate.py` into the user's agent so it blocks the agent from ending a turn on a live-state claim it never measured. Adapt the shipped configuration and verify its behavior on the adopting harness. The danger is **building a stair to nowhere**: a check that reads as coverage and verifies nothing, because it points at a command the user's system does not have, or one that cannot fail. Read [`specs/honesty-stop-gate.md`](../../specs/honesty-stop-gate.md) first — including *"What it enforces, precisely"* (the gate confirms a probe RAN and named the subject; it does not read the probe's output). Do not reimplement the mechanism.
 
 ## The contract you operate under
 
@@ -49,7 +49,13 @@ Write your candidate list into `honesty_gate.config.json`, then run:
 HONESTY_GATE_CONFIG=guard/honesty_gate.config.json python3 guard/honesty_stop_gate.py --check-config
 ```
 
-It fails on any command whose binary does not resolve on this box (a stair to nowhere) and on any empty required list. **A candidate it flags is dropped, and you tell the user it was dropped and why** — silent omission reads as "covered everything." If, after dropping unresolved commands, `verification_commands` would be empty, STOP and tell the user: the gate cannot function without at least one real probe — surface the gap rather than shipping a gate that can never verify. Do not proceed past a red `--check-config`.
+It refuses unresolved command binaries and malformed selected configuration. It also refuses invalid overrides of the three required regex lists, `completion_pattern`, `non_subjects`, `write_path_keys`, `heredoc_sinks`, and `arg_sinks`, including invalid regexes in the expressions the hook actually compiles. The required lists and three file-scan lists must be nonempty lists of nonblank strings; `completion_pattern` must be a nonblank string; `non_subjects` must be a list of strings and may be empty.
+
+Omitted keys inherit defaults. A rejected field keeps **only that field's default** at runtime, preserving other valid choices, but `--check-config` still exits 1 and names the refusal. A malformed, nonobject or unreadable selected JSON document retains the full defaults and is refused; an explicitly selected missing/nonfile path is also refused. An absent ordinary default config is permitted. Fix every refusal before accepting the configuration: fallback protects the hook from these malformed inputs; it does not establish that the defaults suit the user's stack.
+
+**Tell the user which overrides were refused and why** — silent omission reads as "covered everything." If, after dropping unresolved commands, `verification_commands` would be empty, STOP and tell the user: the gate cannot function without at least one real probe — surface the gap rather than shipping a gate that can never verify. Do not proceed past a red `--check-config`.
+
+A successful check establishes these bounded shape, regex and executable-presence checks only. A valid regex can match nothing, a well-typed tool/path key can name the wrong harness field, and an existing command can observe nothing useful. The end-to-end controls in step 6 remain required; this check is not a blanket validator for every optional configuration field.
 
 ### 4. Write the CLAIMS' regexes conservatively
 `claim_patterns` should cover how *this* agent phrases live-state claims (keep both running-type and completion-type families from the example). When unsure whether a phrase is a claim, leave it in — a false block is recoverable (run the check, delete, or label); a missed claim is the silent failure the gate exists to prevent. But do not add a pattern so broad it matches ordinary prose every turn — an always-firing gate gets disabled, which is the same as no gate.

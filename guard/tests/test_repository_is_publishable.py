@@ -2,14 +2,14 @@
 
 WHY THIS FILE EXISTS. ``_tools/scan_gate.py`` decides whether this repository may be published,
 and ``guard/hooks/pre-push`` runs it over the archived tree of every commit in a push range.
-Nothing ran it against THIS repository. It was red for eight rounds -- six key-shaped literals
+Nothing ran it against THIS repository. It was red across earlier revisions -- six key-shaped literals
 inside the scanner's own test file, a literal that file's own header already forbids -- and the
 release cycle did not notice, because the release cycle runs the suite and the suite never ran the
-gate. Every round measured the scanner against synthetic trees; none measured it against the tree
+gate. Earlier checks measured the scanner against synthetic trees; none measured it against the tree
 it would ship.
 
 That is this package's own defect class: a guard nobody runs is not a guard. The repair is not to
-remember to run it. It is to put it where the thing that already runs every round will run it.
+remember to run it. It is to put it where the thing that already runs every revision will run it.
 
 WHAT THIS FILE DOES NOT ESTABLISH.
   * IT IS NOT THE HOOK'S MEASUREMENT. The hook extracts an ARCHIVE of each commit and scans that.
@@ -17,8 +17,7 @@ WHAT THIS FILE DOES NOT ESTABLISH.
     checkout, since the scanner judges the index when it finds one, and filesystem bytes otherwise.
     Same gate, different input. An earlier draft of this paragraph called the private-file run "the
     exact one the hook performs"; a shared entry point does not make the inputs the same, and
-    whether a RANGE is publishable stays a separate measurement over that range (team review,
-    gate 63).
+    whether a RANGE is publishable stays a separate measurement over that range (team review).
   * ONE TREE AT ONE MOMENT IS NOT A HISTORY. The hook scans each commit's tree against THAT
     commit's own allowlist, so a literal introduced and later removed stays refused in every commit
     that carries it, and a green here says nothing about any of them.
@@ -28,7 +27,7 @@ WHAT THIS FILE DOES NOT ESTABLISH.
     the private owner terms are not. A run that took that branch says so through the suite's own
     skip channel, which the release cycle already reads -- see the second arm. A green that
     silently dropped an arm is the failure this file exists about, and a note that only appears
-    inside an assertion message appears only when the assertion FAILS (team review, gate 63).
+    inside an assertion message appears only when the assertion FAILS (team review).
 """
 import importlib.util
 import pathlib
@@ -131,7 +130,7 @@ def _drop_the_copied_tool():
 
 
 def test_the_owner_identity_terms_were_available_to_the_scan() -> None:
-    """REPAIRED (team review, gate 63): the terms source was named only inside a failure message,
+    """REPAIRED (team review): the terms source was named only inside a failure message,
     so a passing run never said which of the two it took and a private-list scan was
     indistinguishable from a synthetic one. It is a SKIP now -- the channel the release cycle
     already reads with -rfs -- because a run that could not measure the owner-identity arm has
@@ -175,7 +174,7 @@ def test_the_gate_this_file_runs_can_still_refuse() -> None:
     on a dirty tree too and reads as proof forever. This plants a key-shaped value in a scratch
     tree and requires the same entry point, loaded the same way, to refuse it.
 
-    STRENGTHENED (team review, gate 63): requiring merely SOME hit was satisfiable by one unrelated
+    STRENGTHENED (team review): requiring merely SOME hit was satisfiable by one unrelated
     finding, so the planted value could go undetected while the control stayed green. The finding
     must now be the planted one -- its path, its line, its class and the content surface."""
     scanner, _ = _scanner_and_terms()

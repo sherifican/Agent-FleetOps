@@ -19,6 +19,7 @@ So the property is checked rather than remembered:
   * the PNG carries an alpha channel at all
   * all four corner pixels are fully transparent
   * the PNG is exactly 2x the SVG's own viewBox
+  * its painted ground is opaque inside and transparent outside, except edge AA
   * the PNG was rendered from the SVG that is in the tree right now
 
 The last one is the staleness check. `docs/render_banner.sh` records which SVG it
@@ -34,10 +35,13 @@ GUARD-CLASS: guard — the rendered PNG and its stamp must still match the SVG t
 """
 
 import hashlib
+import math
 import os
 import re
 import struct
 import sys
+import xml.etree.ElementTree as ET
+from xml.parsers import expat
 import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -132,20 +136,267 @@ def read_png(path):
     return w, h, colortype, rows
 
 
+def svg_number(text, *, percentage=False):
+    """Finite CSS Syntax 3 number token (also a subset of SVG 1.1 number).
+
+    ASCII digits only; optional sign, fraction and exponent. Unit suffixes,
+    trailing decimal points and non-XML whitespace are outside this model.
+    Outer XML whitespace is allowed. Gradient coordinates additionally admit
+    a percentage token: the number immediately followed by %, without a gap.
+    """
+    text = text.strip(' \t\r\n')
+    grammar = r'[+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?'
+    if re.fullmatch(grammar + (r'%?' if percentage else ''), text) is None:
+        raise ValueError('unsupported SVG number: ' + repr(text))
+    if percentage and text.endswith('%'):
+        text = text[:-1]
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError('non-finite SVG number')
+    return value
+
+
+def _svg_tree(path):
+    # Reject declarations before ElementTree can expand entities.
+    parser = expat.ParserCreate()
+    def unsupported_xml(*args):
+        raise ValueError('processing instructions and DOCTYPE/entities are unsupported')
+    parser.ProcessingInstructionHandler = unsupported_xml
+    parser.StartDoctypeDeclHandler = unsupported_xml
+    parser.EntityDeclHandler = unsupported_xml
+    with open(path, 'rb') as source:
+        body = source.read()
+    parser.Parse(body, True)
+    return ET.fromstring(body)
+
+
+def _svg_viewbox(svg):
+    if 'viewBox' in svg.attrib:
+        # Model XML whitespace and comma separators, never Unicode whitespace.
+        text = svg.get('viewBox').strip(' \t\r\n')
+        parts = re.split(r'(?:[ \t\r\n]+,?[ \t\r\n]*|,[ \t\r\n]*)', text)
+        vb = [svg_number(part) for part in parts]
+    else:
+        vb = [0, 0, svg_number(svg.attrib['width']), svg_number(svg.attrib['height'])]
+    if len(vb) != 4 or min(vb[2:]) <= 0:
+        raise ValueError('invalid SVG viewBox')
+    return vb
+
+
 def svg_viewbox(path):
-    with open(path, encoding="utf-8") as fh:
-        tag = re.search(r"<svg[^>]*>", fh.read())
-    if not tag:
-        raise Unreadable("no <svg> element")
-    vb = re.search(r'viewBox="([\d.\s-]+)"', tag.group(0))
-    if vb:
-        parts = vb.group(1).split()
-        return int(float(parts[2])), int(float(parts[3]))
-    w = re.search(r'width="(\d+)"', tag.group(0))
-    h = re.search(r'height="(\d+)"', tag.group(0))
-    if not (w and h):
-        raise Unreadable("no viewBox or width/height")
-    return int(w.group(1)), int(h.group(1))
+    try:
+        return tuple(_svg_viewbox(_svg_tree(path))[2:])
+    except (ET.ParseError, expat.ExpatError, KeyError, ValueError) as exc:
+        raise Unreadable(f'cannot derive painted ground or SVG viewport: {exc}') from exc
+
+
+def svg_ground(path):
+    """Return the circular rounded ground's inner box and radius in PNG pixels.
+
+    The first drawable root child is the ground (defs are not painted). Refuse
+    unsupported geometry rather than silently measuring a different shape.
+    """
+    try:
+        svg = _svg_tree(path)
+        namespace = '{http://www.w3.org/2000/svg}'
+        if svg.tag != namespace + 'svg':
+            raise ValueError('unsupported SVG namespace or root')
+        for node in svg.iter():
+            name = node.tag.removeprefix(namespace)
+            if name in {'set', 'animate', 'animateTransform', 'animateMotion',
+                        'animateColor', 'discard', 'style', 'script'}:
+                raise ValueError(f'active SVG element {name} is unsupported')
+            if name.startswith('{') or any(key.lower().startswith('on') for key in node.attrib):
+                raise ValueError('foreign elements and event handlers are unsupported')
+
+        def attributes(node, allowed):
+            unknown = set(node.attrib) - allowed
+            if unknown:
+                raise ValueError(f'unsupported {node.tag.rsplit("}", 1)[-1]} attributes: '
+                                 + ', '.join(sorted(unknown)))
+
+        # Explicit element/attribute allowlists; later artwork cannot introduce
+        # executable or document-wide styling constructs (checked above).
+        attributes(svg, {'id', 'viewBox', 'width', 'height', 'role', 'aria-label', 'opacity'})
+        children = [node for node in svg if node.tag.rsplit('}', 1)[-1]
+                    not in ('defs', 'title', 'desc', 'metadata')]
+        if not children or children[0].tag.rsplit('}', 1)[-1] != 'rect':
+            raise ValueError('the first painted SVG child must be the ground rect')
+        ground = children[0]
+        attributes(ground, {'id', 'x', 'y', 'width', 'height', 'rx', 'ry',
+                            'fill', 'fill-opacity', 'opacity', 'stroke',
+                            'stroke-width', 'stroke-opacity'})
+        if len(ground):
+            raise ValueError('ground rect children are unsupported')
+        for node in (svg, ground):
+            if svg_number(node.get('opacity', '1')) != 1:
+                raise ValueError('the ground must be opaque')
+
+        def number(name, default=None):
+            value = svg_number(ground.attrib[name] if default is None
+                          else ground.get(name, default))
+            if not math.isfinite(value):
+                raise ValueError(f'non-finite ground {name}')
+            return value
+
+        x, y = number('x', '0'), number('y', '0')
+        width, height = number('width'), number('height')
+        rx = number('rx', ground.get('ry', '0'))
+        ry = number('ry', ground.get('rx', '0'))
+        if width <= 0 or height <= 0 or min(rx, ry) < 0:
+            raise ValueError('invalid ground dimensions or radius')
+        rx, ry = min(rx, width / 2), min(ry, height / 2)
+        if rx != ry:
+            raise ValueError('elliptical ground corners are unsupported')
+        def opaque_paint(value):
+            # Deliberately narrow: no alpha-bearing colors, paint servers or
+            # context-dependent colors may be treated as a solid opaque shape.
+            value = value.strip().lower()
+            return (re.fullmatch(r'#[0-9a-f]{3}(?:[0-9a-f]{3})?', value) is not None
+                    or value in {'black', 'silver', 'gray', 'white', 'maroon',
+                                 'red', 'purple', 'fuchsia', 'green', 'lime',
+                                 'olive', 'yellow', 'navy', 'blue', 'teal', 'aqua'})
+
+        def gradient_properties(node, *, stop=False):
+            # Only a bounded inline CSS grammar is modeled. Check both attribute
+            # and style opacity: an override must not hide a translucent input.
+            paints = {'stop-color', 'stop-opacity'} if stop else set()
+            allowed_style = {'opacity', 'fill-opacity'} | paints
+            geometry = ({'offset'} if stop else
+                        {'x1', 'y1', 'x2', 'y2', 'gradientUnits', 'spreadMethod'})
+            if any(key.rsplit('}', 1)[-1] == 'href' for key in node.attrib):
+                raise ValueError('gradient inheritance is unsupported')
+            attributes(node, allowed_style | geometry | {'id', 'style'})
+            for key in geometry - {'gradientUnits', 'spreadMethod'}:
+                if key in node.attrib:
+                    value = node.get(key)
+                    svg_number(value, percentage=True)
+            if not stop:
+                if node.get('gradientUnits', 'objectBoundingBox') not in {'objectBoundingBox', 'userSpaceOnUse'}:
+                    raise ValueError('unsupported gradient units')
+                if node.get('spreadMethod', 'pad') not in {'pad', 'reflect', 'repeat'}:
+                    raise ValueError('unsupported gradient spread')
+            properties = {key: node.get(key) for key in allowed_style if key in node.attrib}
+            declarations = {}
+            for part in node.get('style', '').split(';'):
+                if not part.strip():
+                    continue
+                key, sep, value = part.partition(':')
+                key, value = key.strip().lower(), value.strip()
+                if not sep or key not in allowed_style or key in declarations:
+                    raise ValueError('unsupported gradient or stop style')
+                declarations[key] = value
+            for source in (properties, declarations):
+                for key, value in source.items():
+                    if key.endswith('opacity') and svg_number(value) != 1:
+                        raise ValueError('gradient and every stop must be opaque')
+                    if key == 'stop-color' and not opaque_paint(value):
+                        raise ValueError('unsupported gradient stop color')
+            properties.update(declarations)
+            return properties
+
+        fill = ground.get('fill', 'black').strip()
+        if not opaque_paint(fill):
+            reference = re.fullmatch(r'url\(#([^\s()#]+)\)', fill)
+            if reference is None:
+                raise ValueError('unsupported ground fill; requires opaque solid or local gradient')
+            candidates = [node for node in svg.iter() if node.get('id') == reference[1]]
+            if len(candidates) != 1:
+                raise ValueError('ground gradient id must resolve uniquely in this document')
+            gradient = candidates[0]
+            if gradient.tag != namespace + 'linearGradient':
+                raise ValueError('ground paint server must be a linearGradient; radial focal geometry is unmodeled')
+            parents = {child: parent for parent in svg.iter() for child in parent}
+            ancestor = parents[gradient]
+            while ancestor is not svg:
+                if ancestor.tag != namespace + 'defs':
+                    raise ValueError('ground gradient must be defined under plain defs')
+                attributes(ancestor, {'id'})
+                ancestor = parents[ancestor]
+            gradient_properties(gradient)
+            stops = list(gradient)
+            if not stops:
+                raise ValueError('ground gradient needs at least one stop')
+            for stop in stops:
+                if stop.tag != namespace + 'stop' or len(stop):
+                    raise ValueError('ground gradient requires static stops only')
+                properties = gradient_properties(stop, stop=True)
+                if not opaque_paint(properties.get('stop-color', '')):
+                    raise ValueError('gradient stops require explicit opaque solid colors')
+        if number('fill-opacity', '1') != 1:
+            raise ValueError('the ground fill must be opaque')
+        stroke = 0
+        if ground.get('stroke', 'none') != 'none':
+            if not opaque_paint(ground.get('stroke')):
+                raise ValueError('unsupported ground stroke; requires explicit opaque solid paint')
+            stroke = number('stroke-width', '1')
+            if stroke < 0 or number('stroke-opacity', '1') != 1:
+                raise ValueError('the ground stroke must be nonnegative and opaque')
+            if stroke and (rx == 0 or 'vector-effect' in ground.attrib):
+                raise ValueError('square or non-scaling ground strokes are unsupported')
+        vb = _svg_viewbox(svg)
+        for key, extent in (('width', vb[2]), ('height', vb[3])):
+            if key in svg.attrib and svg_number(svg.get(key)) != extent:
+                raise ValueError('SVG viewport must equal viewBox extent')
+        return ((x + rx - vb[0]) * SCALE, (y + ry - vb[1]) * SCALE,
+                (x + width - rx - vb[0]) * SCALE,
+                (y + height - ry - vb[1]) * SCALE, (rx + stroke / 2) * SCALE)
+    except (ET.ParseError, expat.ExpatError, KeyError, ValueError) as exc:
+        raise Unreadable(f'cannot derive painted ground: {exc}') from exc
+
+
+def check_alpha_shape(w, h, colortype, rows, shape):
+    """Require full coverage inside, zero coverage outside, edge AA only.
+
+    A rounded rect is its inner box dilated by a disk; the opaque centered
+    stroke expands that disk by half its width. Compare the nearest and farthest
+    points of each *pixel square* to the inner box. Only squares intersecting
+    the boundary are exempt, plus 0.25 device pixels of curved-edge rounding.
+    The committed render has two alpha=1 pixels whose squares miss the ideal
+    curve by 0.151 pixels. A quarter pixel covers that measured raster fringe;
+    sqrt(2)/2 + 0.25 < 1 pixel bounds the center-to-edge allowance. Straight
+    edges get no extra tolerance, so an aligned interior row cannot disappear.
+    Known limit: an rx=0 edge inside a pixel can falsely reject partial coverage.
+    """
+    left, top, right, bottom, radius = shape
+    radius2 = radius * radius
+    curve_inside2 = max(0, radius - 0.25)**2
+    curve_outside2 = (radius + 0.25)**2
+    bpp = CHANNELS[colortype]
+    # Separate x/y distances avoid recomputing horizontal geometry per row.
+    near_x = [max(left - (x + 1), x - right, 0)**2 for x in range(w)]
+    far_x = [max(left - x, x + 1 - right, 0)**2 for x in range(w)]
+    interior, exterior, band, nonopaque = 0, 0, 0, 0
+    first_inside = first_outside = None
+    for y, row in enumerate(rows):
+        near_y = max(top - (y + 1), y - bottom, 0)**2
+        far_y = max(top - y, y + 1 - bottom, 0)**2
+        for x, alpha in enumerate(row[bpp - 1::bpp]):
+            nonopaque += alpha != 255
+            inside2 = curve_inside2 if far_x[x] and far_y else radius2
+            outside2 = curve_outside2 if near_x[x] and near_y else radius2
+            if far_x[x] + far_y <= inside2:
+                if alpha != 255:
+                    interior += 1
+                    if first_inside is None:
+                        first_inside = (x, y, alpha)
+            elif near_x[x] + near_y >= outside2:
+                if alpha != 0:
+                    exterior += 1
+                    if first_outside is None:
+                        first_outside = (x, y, alpha)
+            else:
+                band += 1
+    lines = [f"   alpha shape   : {interior} non-opaque interior, "
+             f"{exterior} non-transparent exterior; {band} edge pixels allowed",
+             f"   non-opaque    : {nonopaque} pixels total"]
+    bad = []
+    for count, first, label in ((interior, first_inside, 'interior'),
+                                 (exterior, first_outside, 'exterior')):
+        if count:
+            bad.append(f"{count} {label} alpha violations; first at "
+                       f"({first[0]}, {first[1]}) alpha {first[2]}")
+    return lines, bad
 
 
 def check(root=ROOT):
@@ -159,7 +410,7 @@ def check(root=ROOT):
     except (Unreadable, OSError) as exc:
         return 2, [f"UNMEASURED: {exc}"]
 
-    lines, bad = [], []
+    lines, bad, unmeasured = [], [], []
 
     if colortype not in ALPHA_TYPES:
         bad.append("the PNG has no alpha channel at all, so its rounded corners "
@@ -190,6 +441,17 @@ def check(root=ROOT):
     else:
         lines.append(f"   geometry      : {w}x{h} = {SCALE}x the viewBox")
 
+    try:
+        shape = svg_ground(svg)
+    except (Unreadable, OSError) as exc:
+        unmeasured.append(str(exc))
+    else:
+        if colortype in ALPHA_TYPES and (w, h) == want:
+            shape_lines, shape_bad = check_alpha_shape(w, h, colortype, rows, shape)
+            lines.append('   ground shape  : MEASURED')
+            lines.extend(shape_lines)
+            bad.extend(shape_bad)
+
     with open(svg, "rb") as fh:
         svg_digest = hashlib.sha256(fh.read()).hexdigest()
     with open(png, "rb") as fh:
@@ -203,7 +465,6 @@ def check(root=ROOT):
     # report claimed the banner matched its source: a PNG swapped, re-rendered elsewhere,
     # or altered in a way that still parses passed every check, because nothing ever
     # hashed the image the check was vouching for.
-    unmeasured = []
     recorded = {}
     if not os.path.isfile(stamp):
         unmeasured.append("the render stamp is missing, so a stale PNG would look "
@@ -286,7 +547,7 @@ def _selftest():
         if not ok:
             failures.append(name)
 
-    svg_body = '<svg viewBox="0 0 4 2" width="4" height="2"><rect/></svg>'
+    svg_body = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 2" width="4" height="2"><rect width="4" height="2" rx="1"/></svg>'
     clear = (0, 0, 0, 0)
     solid = (14, 13, 24, 255)
     white = (255, 255, 255, 255)
@@ -336,7 +597,7 @@ def _selftest():
 
         write(good)
         with open(svg_p, "w", encoding="utf-8") as fh:
-            fh.write(svg_body.replace("<rect/>", "<rect x='1'/>"))
+            fh.write(svg_body.replace("<rect ", "<rect x='1' "))
         case("an edited SVG with an unrendered PNG goes red (stale)", check(td)[0] == 1)
 
         with open(svg_p, "w", encoding="utf-8") as fh:

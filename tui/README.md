@@ -25,6 +25,12 @@ Optional `~/.fleet_tui/boxes.json` is a list (or `{ "boxes": [...] }`) of box ob
 - **Light + cached** — refresh ≥ 1s; every subprocess reader cached (`fleet-doctor` ≥ 30s, `/api/ps` 5s, network ~20s).
 
 ## Build loop + testing
+
+Run the TUI suite as a non-root Linux user without `CAP_SYS_ADMIN` or
+`CAP_SYS_RESOURCE`. Setup refuses root or either capability with the exact failure:
+`Failed: TUI process isolation requires non-root without CAP_SYS_ADMIN/SYS_RESOURCE`.
+This refusal preserves the kernel process boundary; do not bypass it to run the suite.
+
 Features are built cheaply via the local lane: the orchestrator writes a tight spec + the pytest gate (orchestrator-authored, un-gameable), a local coder writes the pure `sources/`/`format.py` (via `aider-edit`), the deterministic pytest is the real gate, the orchestrator does the Textual wiring. See the shipped [local-lane-build-loop skill](../skills/local-lane-build-loop/SKILL.md) for the build recipe; provision its optional local tools separately. Run tests: `cd tui && .venv/bin/python -m pytest -q`. Launch: `./run.sh`.
 
 ## Backup & restore
@@ -45,7 +51,11 @@ the one-time migration from the repository root is:
 
 ```bash
 mkdir -p ~/.config/fleet_tui
-cp tui/paths.example.json ~/.config/fleet_tui/paths.json
+if [ -e "$HOME/.config/fleet_tui/paths.json" ] || [ -L "$HOME/.config/fleet_tui/paths.json" ]; then
+    echo "$HOME/.config/fleet_tui/paths.json exists; not overwriting" >&2
+else
+    cp tui/paths.example.json "$HOME/.config/fleet_tui/paths.json"
+fi
 ```
 
 Adopters using `XDG_CONFIG_HOME` should copy into its `fleet_tui` subdirectory instead.

@@ -13,3 +13,7 @@ adopt-scratch/
 # .aider.chat.history.md and three siblings into the root during wave 1 (org_lint 0 -> 4
 # strays); a `git add -A` would have committed them.
 .aider*
+
+# Local Python packaging output.
+*.egg-info/
+/tui/build/

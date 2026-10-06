@@ -12,25 +12,52 @@
 #   0 = clean · 1 = a real violation · 2 = UNMEASURED (something did not get checked)
 # 2 DOMINATES 1. A check that did not run is absent, and absent must be loud: not knowing whether a
 # guard ran can hide any number of violations beneath it.
+# ANY OTHER child status — a crash, a usage error, 127 (command not found), a signal — is NOT a
+# verdict. It is rolled as UNMEASURED (never as a violation), named with its step and raw value.
+# Measured on an earlier internal build (2026-09-23): an injected 127 was counted as a violation and its
+# raw value never appeared in the output, so a missing interpreter read as "one real finding".
 #
-# Usage:  guard/run_guards.sh [--with-canary]
+# Usage:  guard/run_guards.sh [--with-canary] [--release]
 #   --with-canary  also probe every cloud leg for liveness (costs one trivial cloud call per leg).
 #                  Without it the canary runs --dry-run, which proves the WIRING only and says so.
+#   --release      count coverage is MANDATORY: the documented-counts step runs
+#                  `guard/doc_count_drift.py --release`, so a count instrument that cannot be
+#                  read here is 2 = UNMEASURED (with the affected claim sites listed) instead of a
+#                  disclosed skip. Run it, with both suites' dependencies installed, against the
+#                  staged publication snapshot before tagging a release (guard/README.md).
+# Any other argument is refused with exit 2 BEFORE any guard runs: a misspelt flag that is
+# silently ignored produces a run that looks complete and measured something else.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
 WITH_CANARY=0
-[ "${1:-}" = "--with-canary" ] && WITH_CANARY=1
+RELEASE=0
+for arg in "$@"; do
+  case "$arg" in
+    --with-canary) WITH_CANARY=1 ;;
+    --release) RELEASE=1 ;;
+    *) printf 'unknown option: %s\nusage: guard/run_guards.sh [--with-canary] [--release]\n' "$arg" >&2
+       exit 2 ;;
+  esac
+done
 
 worst=0
 n_ok=0; n_violation=0; n_unmeasured=0; n_skipped=0
 note() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
-# 2 must win over 1, so never take a plain max of the raw codes.
-roll() { local rc=$1
+# roll <raw child status> <step> — the ONE place a child's exit becomes accounting.
+# 2 must win over 1, so never take a plain max of the raw codes. Only 0/1/2 are verdicts; anything
+# else (4, 127, 137, ...) means the child did not answer the question, so it is UNMEASURED — it
+# must never be read as a violation (that is "one real finding"), and it is named with its raw
+# value so the cause is visible rather than inferred.
+roll() { local rc=$1 step=$2
   case "$rc" in
     0) n_ok=$((n_ok + 1)) ;;
+    1) n_violation=$((n_violation + 1)) ;;
     2) n_unmeasured=$((n_unmeasured + 1)) ;;
-    *) n_violation=$((n_violation + 1)) ;;
+    *) n_unmeasured=$((n_unmeasured + 1))
+       printf '   UNMEASURED — %s exited %s; not a verdict (0 clean · 1 violation · 2 unmeasured)\n' \
+         "$step" "$rc"
+       rc=2 ;;
   esac
   if [ "$rc" = 2 ] || [ "$worst" = 2 ]; then worst=2; elif [ "$rc" != 0 ]; then worst=1; fi; }
 # NOT CONFIGURED is a THIRD outcome, and keeping it distinct is the point: 2 = UNMEASURED means
@@ -42,52 +69,57 @@ skip() { n_skipped=$((n_skipped + 1)); printf '   NOT CONFIGURED (skipped, not U
 
 note "1. TEETH-PROVER — can every guard actually fail?"
 echo "   (nothing below this line means anything until this passes)"
-python3 guard/teeth_prover.py; roll $?
+python3 guard/teeth_prover.py; roll $? guard/teeth_prover.py
 # --verify-anchors proves every mutation needle still binds exactly once in its target file —
 # a stale needle silently stops proving the guard has teeth. It does NOT prove the mutants die;
 # that is the full harness below, which needs the measurement corpus.
-python3 guard/mutation_harness.py --verify-anchors; roll $?
+python3 guard/mutation_harness.py --verify-anchors; roll $? guard/mutation_harness.py
 if [ -n "${RUN_MUTATION_HARNESS:-}" ]; then
-  python3 guard/mutation_harness.py; roll $?
+  python3 guard/mutation_harness.py; roll $? guard/mutation_harness.py
 else
   skip "the full mutation harness needs the measurement corpus this clone does not carry (set RUN_MUTATION_HARNESS=1 on a maintainer box); --verify-anchors above ran without it"
 fi
 
 note "2. CONTRACT AGREEMENT — do all surfaces state the same contract?"
-python3 guard/contract_agreement.py; roll $?
+python3 guard/contract_agreement.py; roll $? guard/contract_agreement.py
 echo "   A count written into prose is a surface too, and it does not recompute itself."
-python3 guard/doc_count_drift.py; roll $?
+if [ "$RELEASE" = 1 ]; then
+  echo "   RELEASE MODE: every count instrument must answer; a skipped one is UNMEASURED."
+  python3 guard/doc_count_drift.py --release; roll $? guard/doc_count_drift.py
+else
+  python3 guard/doc_count_drift.py; roll $? guard/doc_count_drift.py
+fi
 echo "   So is a rendered image: the banner PNG must still match the SVG it came from."
-python3 guard/banner_render.py; roll $?
+python3 guard/banner_render.py; roll $? guard/banner_render.py
 echo "   And the published voice is a surface: this repo is written by one person."
-python3 guard/voice_check.py; roll $?
+python3 guard/voice_check.py; roll $? guard/voice_check.py
 
 note "3. GUARD UNIT GATES — do the guards themselves still behave?"
-python3 -m pytest guard/tests/ -q; roll $?
+PYTEST_ADDOPTS= python3 -m pytest guard/tests/ -q; roll $? "pytest guard/tests/"
 
 note "4. GUARD SELF-TESTS — every proof-carrying tool must prove itself"
-python3 guard/honesty_stop_gate.py --self-test; roll $?
-python3 guard/envelope_tap.py --selftest; roll $?
-python3 guard/scrub_arm.py --selftest; roll $?
-python3 guard/population_arm.py --selftest; roll $?
-python3 guard/one_writer_gate.py --selftest; roll $?
-python3 guard/reconcile_gate.py --selftest; roll $?
-python3 guard/brief_scan.py --selftest; roll $?
-python3 guard/curation_gate.py --selftest; roll $?
-python3 guard/org_lint.py --selftest; roll $?
-python3 guard/reader_record.py --selftest; roll $?
-python3 guard/doc_count_drift.py --selftest; roll $?
-python3 guard/banner_render.py --selftest; roll $?
-python3 guard/voice_check.py --selftest; roll $?
+python3 guard/honesty_stop_gate.py --self-test; roll $? guard/honesty_stop_gate.py
+python3 guard/envelope_tap.py --selftest; roll $? guard/envelope_tap.py
+python3 guard/scrub_arm.py --selftest; roll $? guard/scrub_arm.py
+python3 guard/population_arm.py --selftest; roll $? guard/population_arm.py
+python3 guard/one_writer_gate.py --selftest; roll $? guard/one_writer_gate.py
+python3 guard/reconcile_gate.py --selftest; roll $? guard/reconcile_gate.py
+python3 guard/brief_scan.py --selftest; roll $? guard/brief_scan.py
+python3 guard/curation_gate.py --selftest; roll $? guard/curation_gate.py
+python3 guard/org_lint.py --selftest; roll $? guard/org_lint.py
+python3 guard/reader_record.py --selftest; roll $? guard/reader_record.py
+python3 guard/doc_count_drift.py --selftest; roll $? guard/doc_count_drift.py
+python3 guard/banner_render.py --selftest; roll $? guard/banner_render.py
+python3 guard/voice_check.py --selftest; roll $? guard/voice_check.py
 # The PID binder's self-test needs a live child process and /proc. Where there is no /proc
 # it returns 2 = UNMEASURED on its own, which is correct: the mechanism was not exercised.
-python3 guard/verify_running_build_pid.py --selftest; roll $?
+python3 guard/verify_running_build_pid.py --selftest; roll $? guard/verify_running_build_pid.py
 # The roster arm is a TEMPLATE, so its proof is its gate rather than a --selftest flag: the
 # gate runs the template unedited against fake rosters. Wiring the gate here keeps the
 # "every proof-carrying tool proves itself" step honest for it too.
-python3 guard/tests/test_roster_check.py; roll $?
+python3 guard/tests/test_roster_check.py; roll $? guard/tests/test_roster_check.py
 if [ -f detect_poison.py ]; then
-  python3 guard/fetch_gate.py --selftest; roll $?
+  python3 guard/fetch_gate.py --selftest; roll $? guard/fetch_gate.py
 else
   skip "the fetch-gate selftest needs the adopter-supplied detector (detect_poison.py at the repo root)"
 fi
@@ -99,12 +131,12 @@ if [ -n "${PASSBACK_OUTBOX:-}" ]; then
   export PASSBACK_OUTBOX
   PASSBACK_TEETH_FILE="$PASSBACK_OUTBOX/replies/${PASSBACK_TEETH_TARGET:-REPLY_example.md}"
   if [ -f "$PASSBACK_TEETH_FILE" ]; then
-    python3 guard/tests/teeth_passback_send_check.py; roll $?
+    python3 guard/tests/teeth_passback_send_check.py; roll $? guard/tests/teeth_passback_send_check.py
   else
     echo "   PASSBACK_OUTBOX is set but no teeth target sits at \$PASSBACK_OUTBOX/replies (set"
     echo "   PASSBACK_TEETH_TARGET to a reply this box has already sent). This check WAS"
     echo "   configured and could not run: 2 = UNMEASURED."
-    roll 2
+    roll 2 guard/tests/teeth_passback_send_check.py
   fi
 else
   skip "the passback teeth test needs PASSBACK_OUTBOX (an outbox directory on this box)"
@@ -113,7 +145,7 @@ fi
 # adopter's, and a check aimed at a guessed path reads "nothing misfiled" — a clean-looking result
 # for a check that was never aimed at anything.
 if [ -n "${COMMS_ROOT:-}" ]; then
-  python3 guard/comms_filing.py --root "$COMMS_ROOT"; roll $?
+  python3 guard/comms_filing.py --root "$COMMS_ROOT"; roll $? guard/comms_filing.py
 else
   skip "the comms-filing check needs COMMS_ROOT (a comms directory on this box)"
 fi
@@ -125,12 +157,12 @@ echo "   green above is a light wired to nothing."
 # impostors. It used to be two lines here: non-zero exit AND the token appearing anywhere in the
 # output — which `echo <token>; exit 13` satisfies, as does any crash that prints the config it
 # just read. Both were measured being accepted as proof the runner can fail.
-python3 guard/negative_control.py; roll $?
+python3 guard/negative_control.py; roll $? guard/negative_control.py
 
 note "6. PUBLIC-BYTE SCRUB — no private material in public-bound bytes"
 echo "   Two pattern classes: private material and quoted speech. A rule name generalizes;"
 echo "   a quoted person does not — removal is the only fix, so the arm catches it pre-publish."
-python3 guard/scrub_arm.py --profile "${SCRUB_PROFILE:-adopter}"; roll $?
+python3 guard/scrub_arm.py --profile "${SCRUB_PROFILE:-adopter}"; roll $? guard/scrub_arm.py
 if [ "${SCRUB_PROFILE:-adopter}" = "adopter" ]; then
   echo "   NOTE: adopter profile = the shipped generic baseline only. A maintainer with a private"
   echo "   overlay (kept OUTSIDE the repo) runs SCRUB_PROFILE=maintainer SCRUB_OVERLAY=<path>;"
@@ -139,9 +171,9 @@ fi
 
 note "7. LEG LIVENESS"
 if [ "$WITH_CANARY" = 1 ]; then
-  python3 guard/leg_canary.py; roll $?
+  python3 guard/leg_canary.py; roll $? guard/leg_canary.py
 else
-  python3 guard/leg_canary.py --dry-run; roll $?
+  python3 guard/leg_canary.py --dry-run; roll $? guard/leg_canary.py
   echo "   NOTE: dry-run proves the WIRING only — no leg was probed, so this returns 2 = UNMEASURED"
   echo "   and 2 DOMINATES a violation. That is deliberate: until 2026-08-03 the dry run wrote"
   echo "   fabricated ALIVE state and reported a PASS, so the staleness check could never fire."
@@ -159,7 +191,7 @@ echo "   points named in the README; directories. Everything else at the root is
 # WHAT IT LINTS: THIS repository's root, not an adopter's project. Point it at your own
 # tree with ORG_LINT_ROOT=/path/to/your/repo (or --root); the exception classes travel, the
 # subject does not. A green here says this repo's root is clean and says nothing about yours.
-python3 guard/org_lint.py --root "${ORG_LINT_ROOT:-.}"; roll $?
+python3 guard/org_lint.py --root "${ORG_LINT_ROOT:-.}"; roll $? guard/org_lint.py
 
 note "RESULT"
 # One machine-readable line, so the step accounting can be asserted instead of eyeballed.

@@ -32,13 +32,73 @@ import importlib.util, os
 
 DETECTOR = "./detect_poison.py"
 
-# The detector's ACTUAL verdict vocabulary. Anything not clean-ish blocks.
-BLOCKING_PREFIXES = ("POTENTIAL_POISON", "CERTAIN_POISON", "scan-error")
+# Contract: the ONLY verdict strings scan() passes through, byte-equal — no surrounding
+# whitespace, no suffix, no decoration. Everything else the detector returns (a non-mapping, a missing
+# key, None, a non-str, '', ' CERTAIN_POISON', 'CLEAN:ok', 'NEW_POISON') is a scan-error and fails
+# CLOSED. Before this, a missing key defaulted to CLEAN and an unknown value was not a blocking prefix,
+# so a malformed detector response passed the payload through — the near-miss above, one door over.
+# Decorated forms are NOT approved by the adapter contract (the four names above are its whole
+# statement); accepting a decoration is a vocabulary change, made here on purpose or not at all.
+# A verdict is what the response STORES, never what its methods answer. The
+# response's real type (type(), never __class__) is dict or a dict subclass; its stored 'verdict'
+# entry's real type is str or a str subclass; and that entry's stored text (str.__str__) is
+# byte-equal to one of these four. No method of the response, of its keys, or of the verdict
+# runs, except a finalizer (__del__) when the object is freed, whoever frees it.
+# scan() returns the stored text as an exact str, so what verdict_blocks() and gate() see is
+# the text itself.
+SUPPORTED_VERDICTS = frozenset(("CLEAN", "DATA_QUALITY", "POTENTIAL_POISON", "CERTAIN_POISON"))
 
 
 def verdict_blocks(verdict):
-    """True when the payload must be WITHHELD. Named + tested so a vocabulary drift cannot pass silently."""
-    return str(verdict).startswith(BLOCKING_PREFIXES)
+    """True when the payload must be WITHHELD. Named + tested so a vocabulary drift cannot pass silently.
+
+    Release only stored CLEAN or DATA_QUALITY text from a real str type.
+    No method of the verdict runs, including a str subclass's overrides.
+    """
+    return not (issubclass(type(verdict), str)
+                and str.__str__(verdict) in ("CLEAN", "DATA_QUALITY"))
+
+
+class InvalidVerdict(ValueError):
+    """The detector returned something outside its vocabulary; the payload is withheld (scan-error)."""
+
+
+def _interpret(result):
+    """Reduce a detector response to a supported verdict, an EXACT str, or raise InvalidVerdict.
+
+    A response is judged by what it STORES, never by its methods:
+      - its real type, type(result), must be dict or a dict subclass (a __class__ that CLAIMS
+        dict is not believed);
+      - its stored entries are read with dict.items, the base method, so no __getitem__,
+        __contains__, get or keys of a subclass runs. Keys are matched by their stored text: a key
+        whose real type is str or a str subclass and whose str.__str__ is "verdict". Exactly one
+        such entry must exist; none, or more than one, is InvalidVerdict;
+      - that entry's real type must be str or a str subclass, and its stored text, str.__str__
+        (an exact copy that runs no override), must be byte-equal to one of SUPPORTED_VERDICTS;
+      - that text is returned as an exact str.
+    Anything else is InvalidVerdict, which scan() turns into a scan-error that withholds the payload.
+
+    Previously, the decision used isinstance(), membership, indexing and equality checks. So a str subclass STORING
+    "UNKNOWN" whose == and hash() placed it in SUPPORTED_VERDICTS was accepted, and gate() read it
+    with str(). So was a subclass storing "CERTAIN_POISON" whose __str__ answers "CLEAN", a dict
+    subclass whose __getitem__ answers "CLEAN" over a stored "CERTAIN_POISON", and an object whose
+    __class__ only claims str or dict. Each released the payload. An HONEST str Enum member,
+    V.CERTAIN_POISON of class V(str, Enum), released it too, because str() of it is
+    "V.CERTAIN_POISON". Its stored text is "CERTAIN_POISON", which now withholds, as it should.
+    """
+    if not issubclass(type(result), dict):
+        raise InvalidVerdict("the response is not a dict")
+    stored = [value for key, value in dict.items(result)
+              if issubclass(type(key), str) and str.__str__(key) == "verdict"]
+    if len(stored) != 1:
+        raise InvalidVerdict("the response stores %s 'verdict' entry"
+                             % ("no" if not stored else "more than one"))
+    if not issubclass(type(stored[0]), str):
+        raise InvalidVerdict("the stored verdict is not a str")
+    text = str.__str__(stored[0])
+    if text not in SUPPORTED_VERDICTS:
+        raise InvalidVerdict("unsupported verdict %r" % text)
+    return text
 
 
 def _visible_text(content):
@@ -61,14 +121,25 @@ def _visible_text(content):
 
 
 def scan(text, source="<unknown>"):
-    """Return the detector's verdict string, or 'scan-error:<Type>' if it could not run."""
+    """Return the detector's verdict as an exact str (see _interpret), or 'scan-error:<safe name>' if it
+    could not run or its response was not a supported verdict (scan-error:InvalidVerdict).
+
+    The scan-error name is the stored exception class name's A-Z a-z 0-9 _ characters, in order:
+    the first 80 of them, or "Exception" when there are none. No method of an object the detector
+    created runs while the name is built, except a finalizer (__del__) when the object is freed,
+    whoever frees it.
+    """
     try:
         spec = importlib.util.spec_from_file_location("dp", DETECTOR)
         dp = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(dp)
-        return dp.scan(_visible_text(text), title=source).get("verdict", "CLEAN")
+        return _interpret(dp.scan(_visible_text(text), title=source))
     except Exception as e:                       # noqa: BLE001 — a broken detector must fail CLOSED
-        return f"scan-error:{type(e).__name__}"
+        name = str.__str__(type.__dict__["__name__"].__get__(type(e)))
+        safe_name = "".join(char for char in name
+                            if ("A" <= char <= "Z" or "a" <= char <= "z"
+                                or "0" <= char <= "9" or char == "_"))[:80]
+        return "scan-error:" + (safe_name or "Exception")
 
 
 def envelope(body, source, verdict):

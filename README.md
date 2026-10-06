@@ -4,7 +4,7 @@
 
 # Agent-FleetOps
 
-Custom multi-agent orchestration built from scratch (no CrewAI, LangGraph, or any framework). Counters off-the-shelf failure modes — error cascades, argument loops, unverified agent trust — with mutation-proven drift guards, deterministic apply, driver-lock serialization, and verifier-first review panels. Routing decisions are made against real measured throughput per hardware tier, via a multi-box telemetry pipeline whose data is in the repo — not vendor benchmarks. **1088 tests in `guard/tests/`** prove every guard can fail, none of them needing a live fleet, a network or a credential. Validated in production via [ParaKit](https://github.com/sherifican/ParaKit-Open_Source)
+Custom multi-agent orchestration built from scratch (no CrewAI, LangGraph, or any framework). Counters off-the-shelf failure modes — error cascades, argument loops, unverified agent trust — with mutation-proven drift guards, deterministic apply, driver-lock serialization, and verifier-first review panels. Routing decisions are made against real measured throughput per hardware tier, via a multi-box telemetry pipeline whose data is in the repo — not vendor benchmarks. **5858 tests in `guard/tests/`** prove every guard can fail, none of them needing a live fleet, a network or a credential. Validated in production via [ParaKit](https://github.com/sherifican/ParaKit-Open_Source)
 
 ---
 >**So you wanna run an AI Fleet without it turning into a hallucination circus? I've put together a generalized version of my collection of skills and tools, please use as you see fit. This is not prompt engineering, more like automatic babysitting. I hope it helps, if you like what I've put together, throw me a star and I'll keep updating as I improve on the design, thanks!**
@@ -23,6 +23,8 @@ This repo is a pattern library. You do not need two workstations.
 **Hand it to your AI:** clone it, then paste the block under **Set it up with your own AI**; the agent records missing GPUs and CLIs as `ABSENT`.
 **Read it yourself:** read the specs for the operating contracts; run the guards for checks that can go red.
 Start with `eval-integrity`, `generate-review-fix-loop`, and `model-routing-table`; the [minimum viable slice](adopt/README.md#minimum-viable-slice) explains the rest.
+
+**If this looks like overengineering, that's the point.** You don't have to use every pattern here, only the ones that make sense for you. I find it easier to start from something fuller, with lots of options, and strip away what I don't need. It's always nice to have the *option*.
 
 ## How the pieces fit
 
@@ -60,11 +62,11 @@ another machine). The commit history tells that story.
 
 | Dir | Contents |
 |---|---|
-| `tui/` | **fleet-tui** — a Textual terminal monitor for a local/cloud model fleet. 27 headless source modules (excluding `__init__.py`) behind a 386-test hermetic suite; strict one-way pipeline (pure readers → pure formatters → app), frozen dataclass contracts, safe-default degradation. CI runs the full suite on pushes to `main` and on pull requests targeting it. |
+| `tui/` | **fleet-tui** — a Textual terminal monitor for a local/cloud model fleet. 27 headless source modules (excluding `__init__.py`) behind a 1179-test hermetic suite; strict one-way pipeline (pure readers → pure formatters → app), frozen dataclass contracts, safe-default degradation. CI runs the full suite on pushes to `main` and on pull requests targeting it. |
 | `skills/` | **Generalized agent-discipline procedures** — evaluation integrity, model routing (the living-table method), the local-lane build loop, multi-agent code workflow, research dispatch/verification, memory ops, brain bookkeeping, protected-function guards, blocked-page retrieval, the [should-we](skills/should-we/SKILL.md) directive check (interrogate the premise before executing an imperative), and more. Each encodes failure stories from real operation. The portable start-list is in [`adopt/20_skills.md`](adopt/20_skills.md); you are not expected to install them all. |
 | `templates/` | Copyable dispatch, honesty, pinned-environment, and research-artifact patterns. Templates are adoption patterns, not automatic enforcement. |
 | `_tools/` | The export pipeline's own gates — provenance wall-checker, secrets/personal-data scanner, and a **ref gate**, all mutation-proven (`--self-test`). The first two ask "is this tree safe to publish?"; the third asks the question they structurally cannot: **"what would a push actually publish?"** A history rewrite is only true of the branch you rewrote — this repo's own rewrite left a clean `main` beside two leftover refs that still carried the trailers and build artifacts the rewrite removed, one `push --all` away from being republished. That is history, not current state; what the gate reports today is what it finds on the clone it is pointed at: refs outside the publishable allow-list, never-publish objects still reachable, and AI-attribution trailers. Content gates scan a worktree; pushes carry refs. |
-| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 1088 tests in `guard/tests/`, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
+| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 5858 tests in `guard/tests/`, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
 | `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, the verified-system-map pattern, and the [research-team](specs/research-team-protocol.md), [rigor-spectrum](specs/rigor-spectrum.md), and [honesty-stop-gate](specs/honesty-stop-gate.md) guides. |
 | `bench/` | **The two-box throughput operating log** — 67 measurements over 22 model tags, with sample sizes and device labels attached. See below. |
 
@@ -220,12 +222,76 @@ Clone this repository, then point your orchestrator at `adopt/README.md`. The ag
 Read adopt/README.md and follow it in order. Inventory this host before prescribing configuration. Show me the plan and diffs before installing any cron entry, service, or shell hook, then retain the literal verification output.
 ```
 
+### Disk space, if you run it the way I do
+
+Most people take pieces of this repo, and those pieces stay small. Running many agent jobs,
+frequent full test suites, and keeping every receipt and log grows the working disk over time.
+The growth comes from running it and retaining the results.
+
+- **The test suite.** Before the footprint repair, a measured full `tui/` run left about 10 GB
+  of temporary data at suite exit, before harness cleanup. Passing startup scenarios now release
+  their scratch after validation. On an earlier internal runtime/test freeze,
+  the passing Python 3.14.4 gate sampled 532,606,976 bytes and left
+  569,344 bytes at suite exit, including the deliberately retained storage-error
+  test evidence. The total-footprint sampler runs every five seconds; a separate
+  one-second observer recorded the dominant `structural-cells.json` at 409,190,559
+  logical bytes (409,194,496 allocated). Earlier passing samples ranged from
+  142,360,576 bytes to 532,303,872 bytes on earlier internal builds; the smaller sample
+  missed the brief large structural file.
+  These are sampled observations, never continuous maxima; the structural
+  coverage test was preserved. Exact results are also in
+  [the TUI adoption guide](adopt/10_tui.md). The footprint check in [Verify all](adopt/90_verify_all.md) checks a passing run against
+  2 GiB sampled peak and 512 MiB residue limits. The `tui/` pytest config sets retention to
+  `failed`, count 1: a passing default run removes its own base directory; with normal cleanup,
+  the most recent failing run's whole base directory (including `tmp_path_factory` directories)
+  remains across passing runs until a later failing run replaces it. These settings apply only
+  to the TUI suite; `python3 -m pytest guard/tests/ -q` finds no ini file and uses pytest's
+  defaults (`all`, count 3), retaining passing runs' base directories and rotating the last three.
+  Cleanup is best effort; a failed or explicitly kept run can use much more space. An explicit
+  `--basetemp` leaves its base directory after the run and empties it when a later run reuses
+  that path; under `failed`, passing tests' `tmp_path` directories are still removed.
+- **Receipts, agent outputs and logs.** Kept evidence accumulates over time. Choose and review a retention
+  and archive policy for your team.
+
+Keep agent working directories and test scratch on a disk with room to spare, watch free space
+before it runs out, and review old outputs on a schedule. Archive or summarise evidence before
+considering deletion, and review any automatic cleanup policy before enabling it.
+
+Some explicit operations remove or replace files: `vision_ingest.py extract` clears temporary
+JPEGs, `gc` deletes recorded `_temp` frames that are neither selected nor reserve, and
+`reprune` removes kept frames that no longer qualify. `archive` replaces same-named files at
+the backup destination and removes source frames after read-back hash checks. The TUI's acknowledge action clears alert files or updates pending flags;
+its dispatch cleanup moves finished files into an archive and can replace same-named entries.
+Artifact transactions replace live files and their `.prev` snapshots, and the scanner replaces
+reports in its report directory; after a successful report publication it also removes older
+reports at its [reserved filenames](STAGING_README.md#reserved-filenames-in-_reports).
+The TUI test suite removes earlier runs' `/tmp/fleet-tui-tests-*` directories when their
+nine-field owner record names a dead PID incarnation in the same namespace and boot,
+with a verified local procfs PID view and one-use permission from its original helper.
+Initialization and later storage errors revoke that helper without a filesystem
+marker write; consumed/lost helpers cannot authorize another cleanup. Later sweeps
+name and retain those trees until a person removes them. Legacy three/five-field
+records remain. An ordinary crash can leave a helper awaiting the next sweep.
+Raw startup evidence uses unnumbered directories outside pytest rotation and this sweeper.
+Legacy, foreign-namespace and ambiguous records remain. The TUI resets
+malformed JSON in `presets.json` to defaults without a backup; keep a copy of a hand-edited
+file. Inbox hand-off rewrites the action-request queue, dropping unparseable lines and prior
+entries with the same source and title. The dispatch wrapper template truncates its output
+file before the worker runs. The hook installer's legacy route refuses differing existing
+hooks; `--pre-push-config --replace` backs up a differing pre-push hook before replacing it.
+Review the operation and destination before invoking a file-changing command.
+
 ### Activate the publication hook
 
 Cloning this repository installs no Git hook, and running pytest does not install one either. `guard/hooks/pre-push` is tracked source; Git does not track its hooks directory, so a fresh clone has no publication gate until one is installed on purpose. Two policy inputs have to be provisioned first, and neither travels with a clone: the scanner's identity terms in `_tools/identity_terms.txt` (gitignored — copy `_tools/identity_terms.example.txt` and fill it with your own terms, one per line) and the approved commit identities in this repository's local Git config (`git config --local --add fleetops.approvedIdentity '<owner-email>'` — a GitHub handle such as `<owner-gh>` is not automatically the right e-mail). With both in place, install into Git's effective hook path, confirm the installed bytes match the tracked hook, and rehearse a clean acceptance and a planted refusal in an isolated repository before relying on it:
 
 ```bash
-cp _tools/identity_terms.example.txt _tools/identity_terms.txt   # then edit it: your terms, one per line
+if [ -e _tools/identity_terms.txt ] || [ -L _tools/identity_terms.txt ]; then
+    echo "_tools/identity_terms.txt exists; not overwriting" >&2
+else
+    cp _tools/identity_terms.example.txt _tools/identity_terms.txt
+fi
+# Then edit it: your terms, one per line.
 git config --local --add fleetops.approvedIdentity '<owner-email>'
 bash guard/hooks/install.sh --pre-push-config          # preflight, install pre-push only, verify byte parity
 bash guard/hooks/install.sh --check-pre-push-config    # read-only: preflight + byte parity; rerun before a push
@@ -696,3 +762,8 @@ it than leave it implicit.
 ## License
 
 MIT — see LICENSE.
+
+The current suite-count captions use Python 3.14 collection. Python 3.11/3.12
+collect the same TUI cases and skip the unavailable Unicode array typecode w
+case. Baseline Python 3.13 skips the unwritten Unicode 15.1.0 census.
+Python 3.13 execution at this revision is unmeasured.

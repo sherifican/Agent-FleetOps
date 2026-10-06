@@ -78,7 +78,11 @@ If the inventory and the human-approved plan identify locally available relay fi
 
 ```bash
 mkdir -p "$HOME/.fleet_tui"
-cp tui/docs/boxes.example.json "$HOME/.fleet_tui/boxes.json"
+if [ -e "$HOME/.fleet_tui/boxes.json" ] || [ -L "$HOME/.fleet_tui/boxes.json" ]; then
+    echo "$HOME/.fleet_tui/boxes.json exists; not overwriting" >&2
+else
+    cp tui/docs/boxes.example.json "$HOME/.fleet_tui/boxes.json"
+fi
 ${EDITOR:-vi} "$HOME/.fleet_tui/boxes.json"
 ./tui/.venv/bin/python - <<'PY'
 from fleet_tui.sources.boxes import read_boxes
@@ -93,13 +97,19 @@ PY
 
 ## Step 4 — run the hermetic acceptance suite
 
+Run the TUI suite as a non-root Linux user without `CAP_SYS_ADMIN` or
+`CAP_SYS_RESOURCE`. Setup refuses root or either capability with the exact failure:
+`Failed: TUI process isolation requires non-root without CAP_SYS_ADMIN/SYS_RESOURCE`.
+This refusal preserves the kernel process boundary; do not bypass it to run the suite.
+
+
 **ADOPTER COMMAND:**
 
 ```bash
 cd tui && .venv/bin/python -m pytest -q
 ```
 
-**VERIFY — expected output:** pytest exits `0`; this export's acceptance run reports `386 passed`. A different result is a blocker: retain the output and do not describe the TUI as verified.
+**VERIFY — expected output:** pytest must exit `0` and report `1179 passed` on Python 3.14, or `1178 passed, 1 skipped` on Python 3.11/3.12 because Unicode array typecode w is unavailable. These versions describe the same 1179 cases. Baseline Python 3.13 skips the unwritten Unicode 15.1.0 census; Python 3.13 execution at this revision is unmeasured. Retain the actual output and interpreter's readline backend; a different result is a blocker, and collection alone does not verify the TUI.
 
 ## Step 5 — launch only after the acceptance run
 
@@ -112,3 +122,61 @@ cd tui && ./run.sh
 **VERIFY — expected outcome:** `MANUAL: in an interactive terminal, the monitor opens; missing state files render degraded cells rather than terminating the process. A noninteractive shell cannot confirm the rendered interface.`
 
 External input setup is fail-closed: follow [Point the TUI at your fleet](../tui/README.md#point-the-tui-at-your-fleet), copy and edit `tui/paths.example.json`, or set `FLEET_TUI_<KEY>`; absent keys display `not configured: <key>`.
+
+The canonical count above uses Python 3.14. Python 3.11/3.12 collect the same
+cases and skip the unavailable Unicode array typecode w case. Baseline Python
+3.13 skips the unwritten Unicode 15.1.0 census; native 3.13 collection for
+this revision is unmeasured.
+
+
+Passing startup scenarios remove their compact input and child pytest tree;
+a passing startup-observation module then removes its remaining scratch.
+A passing suite still leaves two `fleet-tui-startup-*` trees from the deliberate
+initialization/finalizer storage-error fixtures; they preserve negative-test
+evidence until a person removes them. To retain raw startup
+evidence, pass `--keep-startup-artifacts` with a persistent destination.
+Without `fleet-data-path`, also supply `--startup-artifacts-root`; the flag
+alone refuses explicitly before allocating startup evidence. When installed, `fleet-data-path
+test-scratch-kept <run>` supplies the kept output root; an explicit
+`--startup-artifacts-root` must agree and must be outside the repository.
+Failed scenarios and failed modules retain their evidence in unnumbered
+`fleet-tui-startup-*` directories beside pytest basetemp, outside numbered
+rotation and the isolation sibling sweeper. These remain until a person removes
+them. Initialization and later storage errors retain the HOME sandbox too.
+The sticky initialization veto is supplemented by a one-use helper permission
+published before payload. Retention revokes that helper through its preallocated
+pidfd without a filesystem write; normal cleanup revokes before removing anything,
+and failed retirement consumes permission before its first deletion. Later
+sweeps name the retained tree and cannot authorize another cleanup. Older
+three/five-field records are retained without attempting to reinterpret them.
+Consumers of receipt JSON must request
+retention; ordinary passing runs keep receipt digests in memory.
+
+On an earlier internal runtime/test freeze, a passing
+Python 3.14.4 run sampled **532,606,976 B peak** and **569,344 B residue** at exit,
+including deliberately retained storage-error test evidence. Total-footprint
+sampling runs every five seconds. A separate one-second observer recorded the
+dominant `structural-cells.json` at **409,190,559 logical bytes**
+(409,194,496 allocated). Earlier passing samples on internal builds ranged from
+142,360,576 B to 532,303,872 B; the smaller sample missed the brief large
+structural file. These are sampled observations, never continuous maxima;
+the structural coverage test was preserved. These figures describe that earlier
+internal runtime/test revision. Subsequent revisions changed the test file and its
+AGENTS.md contracts, including source-location controls, main-process scrub
+controls and retirement-failure controls; the isolation runtime remained
+byte-identical. The figures are historical measurements of that earlier internal freeze,
+not a footprint measurement of the later tests.
+The current footprint remains a
+large reduction
+versus 10,019,028,992 bytes for both at suite exit before the repair and harness cleanup.
+Sampling was every five seconds, so this is a sampled peak, not a continuous
+maximum. The release gate permits at most 2 GiB peak and 512 MiB residue after
+a passing run. Reserve 3 GiB per ordinary run as an operating budget (the peak
+and residue limits plus 512 MiB margin); this budget is not a measured minimum.
+Budget at least 25 GiB for retained evidence or the pre-repair reproduction;
+the small passing-run footprint does not bound failing or kept artifacts.
+Run the footprint check in [Verify all](90_verify_all.md) and retain its actual
+peak, residue, test summary and exit code. Explicit `--basetemp` skips pytest's
+session-end base-directory removal and numbered-directory rotation; under the
+`failed` policy, passing tests' `tmp_path` directories are still removed.
+Remove only that run's tree after its receipt and any required archive are written.

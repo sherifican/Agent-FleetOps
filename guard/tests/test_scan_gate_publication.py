@@ -147,10 +147,10 @@ def clean_env(tmp_path: Path, path_prefix: Path | None = None) -> dict:
 def install_policy(module, report_path: Path, staged: Path) -> None:
     """Call the policy installer the way the publication path does: on a HELD descriptor.
 
-    The installer stopped taking the staged file by NAME at round seventeen. A pathname is what a
+    The installer stopped taking the staged file by NAME in an earlier revision. A pathname is what a
     swapped symlink can occupy, and os.chmod on this platform cannot decline to follow one — it is
     not in os.supports_follow_symlinks, and follow_symlinks=False raises NotImplementedError,
-    which is not an OSError. Round eighteen moved the DIRECTORY behind a descriptor as well, so the
+    which is not an OSError. An earlier revision moved the DIRECTORY behind a descriptor as well, so the
     installer takes the validated directory fd and basenames: a path joined onto the report
     directory is exactly what a substituted directory re-resolves. Every arm that calls the
     installer directly goes through here, so no arm can quietly keep measuring a contract the code
@@ -1145,7 +1145,7 @@ def test_self_test_fixture_is_still_live(tmp_path: Path, arm: str) -> None:
     """
     driver = make_tool(tmp_path)
     source = SCANNER.read_text(encoding="utf8")
-    expected = "cfg = {" + '"' + API_KEY_FIELD + '": "' + "abcDEF123456789" + "xyzKLMNO" + '"}\n'
+    expected = "cfg = {" + '"' + API_KEY_FIELD + '": "' + "ghiJKL123456789" + "xyzKLMNO" + '"}\n'
 
     if arm == "candidate-source-self-scan":
         staging = make_staging(tmp_path)
@@ -1165,7 +1165,7 @@ def test_self_test_fixture_is_still_live(tmp_path: Path, arm: str) -> None:
         assert proc.returncode == 0, "CONTROL: --self-test passes"
         assert "self-test: PASS" in proc.stdout and "mutations red" in proc.stdout, \
             "CONTROL: the self-test reports its clean and dirty arms live"
-        assert "abcDEF123456789" not in proc.stdout + proc.stderr, "CONTROL: fixture value not echoed"
+        assert "ghiJKL123456789" not in proc.stdout + proc.stderr, "CONTROL: fixture value not echoed"
         # The verdict must be computed, not asserted: a driver that lost the generic arm cannot
         # turn its planted-secret fixture red, so its own self-test must say FAIL and exit 1.
         arm_lines = [ln for ln in source.splitlines(keepends=True) if '("generic-key-assign",' in ln]
@@ -1187,7 +1187,7 @@ def test_self_test_fixture_is_still_live(tmp_path: Path, arm: str) -> None:
     staging = make_staging(tmp_path)
     write(staging / "_tools" / "scan_gate.py", "".join(lines))
     proc = scan(tmp_path, driver, staging)
-    assert "abcDEF123456789" not in proc.stdout + proc.stderr + (report(staging) or ""), \
+    assert "ghiJKL123456789" not in proc.stdout + proc.stderr + (report(staging) or ""), \
         "CONTROL: fixture value not echoed"
     assert proc.returncode == 1, "REPAIRED: an unsplit fixture literal in the scanner source is rejected"
     assert hit("SECRET", "generic-key-assign", "content", "_tools/scan_gate.py", node.lineno) in \
@@ -1471,7 +1471,7 @@ def test_the_report_is_left_readable_like_an_ordinary_file(tmp_path: Path) -> No
     expected = stat.S_IMODE(reference.stat().st_mode) & ~0o007
     reference.unlink()
 
-    # The premise of this arm INVERTED at round eleven. It was written when mkstemp's 0600
+    # The premise of this arm INVERTED in an earlier revision. It was written when mkstemp's 0600
     # surviving into the artifact was the defect; owner-only is now the deliberate policy, because
     # inheriting an ordinary create published findings at 0644 under an ordinary umask. What the
     # arm still has to prove is that the OWNER can open it and that nobody else can.
@@ -1486,11 +1486,11 @@ def test_the_report_is_left_readable_like_an_ordinary_file(tmp_path: Path) -> No
 def test_a_refusal_report_is_readable_too(tmp_path: Path) -> None:
     """The refusal path is the one a reader needs MOST, and it has its own mkstemp call.
 
-    Round eleven superseded the other-only cap this arm was first rewritten for. A new report is
+    An earlier revision superseded the other-only cap this arm was first rewritten for. A new report is
     OWNER-ONLY: the gate refused the argument that group access expresses a sharing decision,
     since an ordinary create grants the primary group access with nobody deciding anything. So the
     assertion is no longer "an ordinary create minus other" — it is that nothing beyond the owner
-    is granted. Round seventeen removed the second half of the sentence that used to stand here,
+    is granted. An earlier revision removed the second half of the sentence that used to stand here,
     which said a directory policy stricter than 0600 still wins by intersection: it does not any
     more, because the only thing that reliably arrived through that intersection was the umask
     stripping the owner's own bits off the findings. The mode is a constant now.
@@ -1522,12 +1522,12 @@ def test_a_refusal_report_is_readable_too(tmp_path: Path) -> None:
 # =============================================================================================
 # GROUP 17 — the report's mode is a CONTRACT, and forcing a umask-derived one overrides it
 #
-# Round-2 adversarial review, F2. GROUP 16 fixed mkstemp's 0600 by forcing 0o666 & ~umask. That
+# An earlier adversarial review found this. GROUP 16 fixed mkstemp's 0600 by forcing 0o666 & ~umask. That
 # overcorrected in three measured ways: an existing PRIVATE report (0600) was widened, an existing
 # group-writable report (0660) lost group write, and in a directory carrying a default ACL the
 # report no longer matched what an ordinary create there produces.
 #
-# The property is not "some particular octal", and it changed at round eleven. REPLACING a report
+# The property is not "some particular octal", and it changed in an earlier revision. REPLACING a report
 # must not change who could read or write it, NARROWED so "other" never gains access — the report
 # being replaced lives in the untrusted tree, and a committed one checks out 0644. CREATING one
 # lands OWNER-ONLY: the old rule was "exactly where an ordinary create lands", which is how a
@@ -1551,18 +1551,18 @@ def _ordinary_create_mode(directory: Path, name: str = ".ordinary_probe") -> int
         probe.unlink()
 
 
-# 0o660 was here until round fourteen and now narrows to 0o640: group WRITE on a report that came
+# 0o660 was here until an earlier revision and now narrows to 0o640: group WRITE on a report that came
 # out of the untrusted tree is the plant an independent review demonstrated — any member of the
 # staging tree's group overwrites the published report with a CLEAN line after the scanner returns.
 # The presets below are the modes preservation still keeps EXACTLY, which is what this arm is for;
 # the narrowing itself is pinned by test_a_planted_existing_report_cannot_widen_the_findings_it_is
 # _replaced_by. 0o400 is included so the arm also covers a policy stricter than the cap.
-# 0o640 joined 0o660 in being narrowed at round fifteen: both review legs refused keeping group
+# 0o640 joined 0o660 in being narrowed in an earlier revision: both review legs refused keeping group
 # READ on a replacement, because a planted 0640 hands the file's group the class, path and line of
 # every secret found and "there was an existing file" is not a sharing decision by anyone who
 # matters when that file came out of the untrusted tree. What still round-trips EXACTLY is
 # owner-only and stricter.
-# ROUND SEVENTEEN TURNED THIS ARM AROUND, and the reason is worth keeping. What a replacement
+# AN EARLIER REVISION TURNED THIS ARM AROUND, and the reason is worth keeping. What a replacement
 # preserved used to be "the mode it already had, narrowed". 0o400 is the case that decided it: a
 # report the OPERATOR had made read-only and a report the UMASK had made read-only are the same
 # four bits, and this writer cannot tell them apart. Removing an owner's own bits from a file that
@@ -1595,11 +1595,11 @@ def test_replacing_a_report_publishes_the_one_rule_whatever_it_replaced(
 def test_a_new_report_lands_where_an_ordinary_create_in_that_directory_lands(tmp_path: Path) -> None:
     """Covers the default-ACL case without needing to know whether one is present.
 
-    Round eleven superseded the other-only cap this arm was first rewritten for. A new report is
+    An earlier revision superseded the other-only cap this arm was first rewritten for. A new report is
     OWNER-ONLY: the gate refused the argument that group access expresses a sharing decision,
     since an ordinary create grants the primary group access with nobody deciding anything. So the
     assertion is no longer "an ordinary create minus other" — it is that nothing beyond the owner
-    is granted. Round seventeen removed the second half of the sentence that used to stand here,
+    is granted. An earlier revision removed the second half of the sentence that used to stand here,
     which said a directory policy stricter than 0600 still wins by intersection: it does not any
     more, because the only thing that reliably arrived through that intersection was the umask
     stripping the owner's own bits off the findings. The mode is a constant now.
@@ -1624,7 +1624,7 @@ def test_a_new_report_lands_where_an_ordinary_create_in_that_directory_lands(tmp
 
 def test_a_default_acl_that_would_lock_the_owner_out_does_not_decide_the_report(
         tmp_path: Path) -> None:
-    """The arm that changed direction at round seventeen, and why.
+    """The arm that changed direction in an earlier revision, and why.
 
     Until then the mode was INTERSECTED with what the directory would give an ordinary create, so
     a default ACL stricter than owner-only decided the published mode. A cold review leg measured
@@ -1745,7 +1745,7 @@ def test_a_refusal_report_keeps_the_mode_the_report_it_replaces_had(tmp_path: Pa
 # =============================================================================================
 # GROUP 19 — equal mode bits do not mean equal access
 #
-# Round-3 adversarial review, F2. Preserving st_mode across the atomic replace looked like it
+# An earlier adversarial review found this. Preserving st_mode across the atomic replace looked like it
 # preserved the permission contract. It does not: POSIX ACLs live in an extended attribute, not in
 # the mode bits, so a report carrying a named ACL entry comes back with the DIRECTORY's default ACL
 # instead of its own — same four octal digits, different set of people who can read it.
@@ -1823,7 +1823,7 @@ def test_a_refusal_report_strips_the_access_control_list_too(tmp_path: Path) -> 
     """The refusal path gets the same policy, and had to be asserted separately once before.
 
     The refusal writer has its own mkstemp call and its own publish, so a policy proven on the
-    ordinary path says nothing about it — round fourteen hardened the report DIRECTORY in
+    ordinary path says nothing about it — an earlier revision hardened the report DIRECTORY in
     write_report only, and the gate found the refusal path still writing into an unhardened one.
     """
     if os.geteuid() == 0:
@@ -1930,7 +1930,7 @@ def test_a_report_with_no_acl_does_not_inherit_the_directorys_default(tmp_path: 
     assert _acl(rp) is None, (
         "the replaced report inherited the DIRECTORY's default ACL. The old report's policy was "
         "its mode alone; handing the new one an inherited ACL changes who may read it while "
-        "every mode bit stays identical — the same failure as round 3, in the other direction")
+        "every mode bit stays identical — the same failure as the earlier defect, in the other direction")
     assert stat.S_IMODE(rp.stat().st_mode) == before_mode, "and the mode is still preserved"
 
 
@@ -1939,7 +1939,7 @@ def test_the_staged_report_is_never_wider_than_the_policy_being_installed(tmp_pa
 
     It was written because reverting the ACL/chmod order left the whole suite green: the staged
     file briefly carried group and other access under the inherited policy before the intended one
-    landed. Round fifteen stopped installing ACLs entirely, so that specific window is gone — but
+    landed. An earlier revision stopped installing ACLs entirely, so that specific window is gone — but
     the property behind it is not, and it is the reason this arm survives rather than being
     deleted: at NO point may the staged inode be wider than the policy being installed, because an
     exposure a later call narrows again is still an exposure while it lasts.
@@ -1961,8 +1961,8 @@ def test_the_staged_report_is_never_wider_than_the_policy_being_installed(tmp_pa
     staged.write_text("scan_gate: REFUSED input-error\n", encoding="utf-8")
     staged.chmod(0o600)
 
-    # The mode call moved from a pathname chmod to fchmod on the held descriptor at round
-    # seventeen, so the observation moved with it. Reading the mode back through os.fstat(fd)
+    # The mode call moved from a pathname chmod to fchmod on the held descriptor in an earlier implementation,
+    # so the observation moved with it. Reading the mode back through os.fstat(fd)
     # rather than by name is the point: a name can be swapped between the call and the readback,
     # which is the defect this whole move closes.
     real_fchmod = module.os.fchmod
@@ -1995,7 +1995,7 @@ def test_a_refusal_that_cannot_publish_replaces_the_stale_clean(tmp_path: Path, 
     outer handler swallowed it and left the previous report in place. That report can say CLEAN
     next to an rc 2, which is the one outcome this writer exists to prevent.
 
-    The first fix UNLINKED it, and this arm asserted the removal. Round-5 review found that wrong:
+    The first fix UNLINKED it, and this arm asserted the removal. An earlier review found that wrong:
     not every old report says CLEAN, one carrying HITS is evidence worth more than absence, and
     anyone able to provoke a refusal was handed an erasure primitive. The name is now never
     dropped — a private 0600 refusal replaces the old bytes atomically instead.
@@ -2015,7 +2015,7 @@ def test_a_refusal_that_cannot_publish_replaces_the_stale_clean(tmp_path: Path, 
     module._write_refusal_report(str(staging), module.ScanRefused("report-path-unsafe '_reports'"))
 
     assert rp.exists(), (
-        "the canonical report NAME was dropped. An earlier revision unlinked here; round-5 review "
+        "the canonical report NAME was dropped. An earlier revision unlinked here; an earlier review "
         "found that destroys an old report carrying HITS, and hands anyone who can provoke a "
         "refusal an erasure primitive through this writer's own authority")
     body = rp.read_text(encoding="utf-8")
@@ -2031,7 +2031,7 @@ def test_a_refusal_that_cannot_publish_replaces_the_stale_clean(tmp_path: Path, 
 
 def test_a_recoverable_group_difference_is_repaired_rather_than_refused(tmp_path: Path,
                                                                         monkeypatch) -> None:
-    """Round-5 review: two defensible changes composed into deletion.
+    """Earlier review: two defensible changes composed into deletion.
 
     The ownership guard refused whenever the old report's gid differed from the staged file's, and
     the refusal writer's fallback then removed the report. But a group difference is ordinary and
@@ -2061,18 +2061,18 @@ def test_a_recoverable_group_difference_is_repaired_rather_than_refused(tmp_path
     chowns: list[dict] = []
     # The simulated chown MOVES the simulated group, exactly where a real one would. An earlier
     # draft made the post-repair verification succeed as soon as ANY chown was recorded, so
-    # chowning the WRONG FILE passed the arm — measured by the round-6 reviewer, which ran
+    # chowning the WRONG FILE passed the arm — measured by an earlier reviewer, which ran
     # chown(src, ...) against these assertions and watched them go green. The identity assertion
     # is now on the INODE behind the descriptor, which is strictly harder to fake than a path
     # string: a descriptor pointing at the old report fails it.
-    # Keyed by BOTH spellings: round eighteen made the installer read the old report as
+    # Keyed by BOTH spellings: an earlier revision made the installer read the old report as
     # os.lstat(BASENAME, dir_fd=...), and a fixture keyed only on the full path stopped applying
     # silently — the repair path was never entered and only this arm's CONTROL noticed.
     simulated_path_gid: dict[str, int] = {str(rp): other_gid, rp.name: other_gid}
     simulated_fd_gid: dict[int, int] = {}
 
     def lstat_with_a_different_group(path, *args, **kwargs):
-        # Round eighteen made the installer read the old report as os.lstat(BASENAME, dir_fd=...),
+        # An earlier revision made the installer read the old report as os.lstat(BASENAME, dir_fd=...),
         # so a fixture keyed on the full path silently stopped applying and the repair path was
         # never entered at all. The arm's own CONTROL caught that, which is what it is for.
         st = real_lstat(path, *args, **kwargs)
@@ -2120,7 +2120,7 @@ def test_a_refusal_preserves_the_findings_it_supersedes(tmp_path: Path, monkeypa
     Two revisions ago the refusal writer unlinked the report. One revision ago it replaced it
     instead, and the commit message called that preserving a report carrying HITS. It is not:
     os.replace destroys the old bytes exactly as surely as the unlink destroyed the name. Both
-    round-6 reviewers said so independently, and they were right — a findings report is the
+    Independent reviewers observed this, and they were right — a findings report is the
     artifact most worth keeping and it was the one still being lost.
     """
     driver = make_tool(tmp_path)
@@ -2339,7 +2339,7 @@ def test_findings_that_cannot_be_preserved_are_not_destroyed(tmp_path: Path) -> 
     findings = "SECRET\tgeneric_key_assignment\tcontents\tdocs/example.md:12\n"
     rp.write_text(findings, encoding="utf-8")
     # EVERY slot blocked by a populated directory: none can be unlinked, linked over, or mistaken
-    # for a preserved copy. Round nine added alternates, so blocking only the first name no longer
+    # for a preserved copy. An earlier revision added alternates, so blocking only the first name no longer
     # makes the evidence unpreservable — it just moves it to the next slot, which is the point.
     for name in _superseded_names():
         d = reports_dir / name
@@ -2425,9 +2425,9 @@ def _superseded_names():
 
 
 
-# GROUP 21 — the ninth review round. Two independent gate legs, given no shared premise, both
+# GROUP 21 — Two independent gate legs, given no shared premise, both
 # reproduced the same hole from the CLI: the "already preserved" check followed a symlink. One of
-# them additionally found the fix for the eighth round had introduced a stale-CLEAN regression.
+# them additionally found the fix for the earlier revision had introduced a stale-CLEAN regression.
 
 
 def test_a_symlink_at_the_slot_cannot_authorize_destroying_the_findings(tmp_path: Path) -> None:
@@ -2491,7 +2491,7 @@ def test_a_real_hard_link_still_authorizes_the_replace(tmp_path: Path) -> None:
 
 
 def test_an_occupied_slot_no_longer_denies_preservation(tmp_path: Path) -> None:
-    """Gate review, round nine: the eighth round's fix left a stale CLEAN standing.
+    """An earlier repair left a stale CLEAN standing.
 
     A report the scanner cannot READ is treated as findings, which is the safe direction for
     evidence. Combined with "findings may not be replaced unless preserved", an occupied slot
@@ -2736,8 +2736,8 @@ def test_a_new_findings_report_is_never_other_readable(tmp_path: Path) -> None:
 def test_an_acl_that_grants_other_is_stripped_rather_than_refused(tmp_path: Path) -> None:
     """SUPERSEDED SUBJECT: this arm asserted a REFUSAL. Stripping is strictly better.
 
-    Round twelve refused the publish when the old report's ACL granted other, because installing
-    that ACL restored the bits the mode cap removed. Round fifteen stopped installing ACLs at all,
+    An earlier revision refused the publish when the old report's ACL granted other, because installing
+    that ACL restored the bits the mode cap removed. An earlier revision stopped installing ACLs at all,
     which turns a refusal into a narrowing: the adopter gets their report, nobody else gets access,
     and the availability cost of the refusal disappears.
     """
@@ -2794,7 +2794,7 @@ def test_a_planted_existing_report_cannot_widen_the_findings_it_is_replaced_by(
     planted 0644 -> published 0644, planted 0666 -> published 0666. The new-report cap never ran,
     because this is the existing-report arm.
 
-    Narrow-only preservation keeps the property the earlier round protected — 0600 stays 0600,
+    Narrow-only preservation keeps the property the earlier implementation protected — 0600 stays 0600,
     0660 keeps group write — and refuses only "other", only downward.
     """
     if os.geteuid() == 0:
@@ -2833,7 +2833,7 @@ def test_a_directory_policy_cannot_publish_a_report_its_owner_cannot_read(
 
     It was built around _report_mode, a probe that measured what an ordinary create in the report
     directory produces and returned a GUESSED 0o600 when its unnamed O_TMPFILE attempt was
-    unsupported. Round seventeen deleted the probe: under a constant published mode there is
+    unsupported. An earlier revision deleted the probe: under a constant published mode there is
     nothing left to discover, and a function whose docstring described a caller that no longer
     existed is the defect the previous two rounds were spent on.
 
@@ -2978,7 +2978,7 @@ def test_a_planted_group_writable_report_cannot_keep_its_group_write(tmp_path: P
 
 
 def test_the_refusal_path_hardens_the_report_directory_too(tmp_path: Path) -> None:
-    """Round fourteen hardened the directory in write_report ONLY, and the gate caught it.
+    """An earlier revision hardened the directory in write_report ONLY, and the gate caught it.
 
     The refusal writer has its own publish, and it is the path that runs when something is already
     wrong — so hardening the path that usually succeeds and not the one that runs on failure gets
@@ -3007,9 +3007,9 @@ def test_the_refusal_path_hardens_the_report_directory_too(tmp_path: Path) -> No
 @pytest.mark.parametrize("planted", [0o640, 0o644, 0o660])
 def test_a_planted_report_cannot_hand_its_group_the_findings(tmp_path: Path,
                                                              planted: int) -> None:
-    """The round-fifteen change, and it was UNPINNED until this arm existed.
+    """The no-inherited-ACL policy, and it was UNPINNED until this arm existed.
 
-    Round fourteen kept group READ on the replacement path, reasoning that the demonstrated attack
+    An earlier revision kept group READ on the replacement path, reasoning that the demonstrated attack
     was a write. Both review legs refused that independently: a planted 0640 hands the file's group
     the class, path and line of every secret found, and "there was an existing file" is not a
     sharing decision by anyone who matters when that file came out of the untrusted tree.
@@ -3131,7 +3131,7 @@ def test_a_write_and_traverse_report_directory_still_publishes(tmp_path: Path,
     """An availability regression the hardening introduced, caught by the gate with a control.
 
     A directory at 0300 grants WRITE and TRAVERSE but not READ. Its owner can create and traverse
-    named entries there perfectly well — an O_RDONLY open of it simply fails. Round fourteen used
+    named entries there perfectly well — an O_RDONLY open of it simply fails. An earlier revision used
     O_RDONLY alone to anchor the hardening and turned that into a refusal, where the parent
     scanner published normally. Measured both ways before the fix.
 
@@ -3169,7 +3169,7 @@ def test_a_write_and_traverse_report_directory_still_publishes(tmp_path: Path,
 
 
 # =============================================================================================
-# GROUP 22 — the seventeenth round. A policy expressed as an INTERSECTION cannot tell
+# GROUP 22 — A policy expressed as an INTERSECTION cannot tell
 # "narrower because the operator wants it narrower" from "narrower because the umask removed
 # the owner's OWN bits", and the second one publishes an artifact nobody can open.
 #
@@ -3182,7 +3182,7 @@ def test_a_write_and_traverse_report_directory_still_publishes(tmp_path: Path,
 #
 #   umask 0277 with no _reports -> makedirs(mode=0o700) yields 0500, and 0600/0700 yield
 #   0100/0000 -> the next mkstemp raises EACCES -> the scan refuses a tree whose owner can
-#   write it perfectly well. Round fourteen's availability regression again, moved from the
+#   write it perfectly well. The earlier availability regression again, moved from the
 #   hardening path into the creation path.
 #
 # Removing an owner's own bits from a file that owner still owns buys NO confidentiality — the
@@ -3191,7 +3191,7 @@ def test_a_write_and_traverse_report_directory_still_publishes(tmp_path: Path,
 # directory keeps owner rwx, and group and other are what the confidentiality argument was
 # always actually about.
 #
-# The same round found the mode call reachable through a swapped pathname. Every other metadata
+# The same review found the mode call reachable through a swapped pathname. Every other metadata
 # call in the policy installer passes follow_symlinks=False; os.chmod on this platform cannot
 # (os.chmod is not in os.supports_follow_symlinks, and follow_symlinks=False raises
 # NotImplementedError, which is not an OSError and would escape the refusal writer). So the one
@@ -3403,12 +3403,12 @@ def test_a_replacement_and_a_new_report_publish_the_same_mode(
 
 
 # =============================================================================================
-# GROUP 23 — the seventeenth round, second half. Preservation narrows the evidence it keeps,
+# GROUP 23 — Preservation narrows the evidence it keeps,
 # and it narrows it on BOTH the branch that links and the branch that finds it already linked.
 #
 # The gate leg ruled the second branch blocking and the cold leg ranked the ACL/chmod coupling
 # MED; those are the two arms here, and they converged independently on the second one, which is
-# the strongest signal this round's pairing produced.
+# the strongest signal this repair's pairing produced.
 #
 #   A. The "already preserved by an earlier call" branch returned True without touching the
 #      mode. A copy an earlier run left wide — or one whose narrowing failed that time — stayed
@@ -3493,9 +3493,9 @@ def test_a_failed_acl_strip_does_not_skip_the_mode_cap(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(module.os, "removexattr", refusing_removexattr)
 
-    # RESCOPED IN ROUND TWENTY-SIX, and the property it was written for is the one asserted below.
+    # RESCOPED IN AN EARLIER REVISION, and the property it was written for is the one asserted below.
     # This arm was authored against a version that answered True here, and it read that answer as
-    # "the evidence was not destroyed". Those are different claims, and round twenty-six separated
+    # "the evidence was not destroyed". Those are different claims, and an earlier revision separated
     # them: a denied strip now forfeits the reserved name and DECLINES the replacement, so the
     # findings stay where they already were — at the canonical name, under their own inode, with
     # the mode cap applied. Nothing this arm was protecting is gone; the place to look for it
@@ -3524,7 +3524,7 @@ def test_a_failed_acl_strip_does_not_skip_the_mode_cap(tmp_path: Path, monkeypat
 
 
 # =============================================================================================
-# GROUP 24 — the seventeenth round, third part. A publish that REFUSES must not take this scan's
+# GROUP 24 — A publish that REFUSES must not take this scan's
 # findings down with it.
 #
 # The cold leg reproduced this from the CLI. A FIFO at the canonical report name is not a
@@ -3639,9 +3639,9 @@ def test_a_later_successful_publish_clears_the_unpublished_findings(tmp_path: Pa
 
 
 # =============================================================================================
-# GROUP 25 — the eighteenth round. The directory was validated and then named again.
+# GROUP 25 — The directory was validated and then named again.
 #
-# Every earlier round anchored a FILE: the staged descriptor is held across the metadata install,
+# Earlier implementations anchored a FILE: the staged descriptor is held across the metadata install,
 # the mode goes on with fchmod, the ACL strip reaches the inode through /proc/self/fd. None of it
 # helped, because the DIRECTORY those names were resolved in was still a pathname. The gate leg
 # reproduced the consequence and I reproduced it independently before changing anything:
@@ -3722,7 +3722,7 @@ def test_the_refusal_fallback_sets_the_mode_through_the_descriptor(tmp_path: Pat
     """
     source = SCANNER.read_text(encoding="utf-8")
     # Anchored on a symbol that exists on BOTH sides of the change. An earlier draft indexed from
-    # _publish_refusal, which round eighteen introduced — so on the previous commit the arm died
+    # _publish_refusal, which an earlier revision introduced — so on the previous commit the arm died
     # with "substring not found" instead of reporting the gadget. A test that can only fail
     # because a name is missing has not measured the behaviour it is named for.
     fallback = source[source.index("def _write_refusal_report"):]
@@ -3815,7 +3815,7 @@ def test_creating_the_report_tree_does_not_leave_a_world_writable_ancestor(
 
 
 # =============================================================================================
-# GROUP 27 — the nineteenth round. Two findings from the publication gate, both measured there
+# GROUP 27 — Two findings from the publication gate, both measured there
 # with an injected fault AND a no-injection control, and both reproduced here before the fix.
 #
 #   F1. `_preserve_superseded` caught EVERY OSError from its opening lstat and answered True,
@@ -3825,7 +3825,7 @@ def test_creating_the_report_tree_does_not_leave_a_world_writable_ancestor(
 #       injected one EIO and one EACCES into that single call, left every other call real, and
 #       watched the old findings disappear; its no-injection control kept them.
 #
-#   F5. My own regression from round seventeen. The hardening verifies the post-chmod mode
+#   F5. My own regression from an earlier revision. The hardening verifies the post-chmod mode
 #       against a fixed 0700 even when restoration was NOT requested, so a pre-existing 0322
 #       directory — which the hardening itself narrows to 0300 — is then refused for lacking
 #       owner read. A directory ALREADY at 0300 skips that branch and publishes. The scanner
@@ -3900,7 +3900,7 @@ def test_a_usable_report_directory_is_not_refused_for_lacking_owner_read(
 ) -> None:
     """REPAIRED: the hardening must judge the mode it asked for, not a fixed 0700.
 
-    0o300 already published before this round; 0o322 is the SAME effective directory once group
+    0o300 already published before this repair; 0o322 is the SAME effective directory once group
     and other write are removed, and it was refused. Whether the scanner accepted a directory
     depended on which side of its own narrowing it started.
     """
@@ -3938,7 +3938,7 @@ def test_a_usable_report_directory_is_not_refused_for_lacking_owner_read(
 
 
 # =============================================================================================
-# GROUP 28 — the nineteenth round, quarantine. Round seventeen added a place to KEEP findings a
+# GROUP 28 — quarantine. An earlier revision added a place to KEEP findings a
 # publish could not complete. The gate found it destroys evidence in both directions.
 #
 #   F2a. The quarantine name can be BLOCKED — a populated directory sitting at it, which cannot
@@ -4122,7 +4122,7 @@ def test_creating_an_ancestor_cannot_change_the_mode_of_a_substituted_directory(
 
 
 # =============================================================================================
-# GROUP 29 — the twentieth round, from the cold leg's review of the nineteenth state.
+# GROUP 29 — An earlier review of directory ownership and permission restoration.
 #
 #   #2 The symlink refusal fires ABOVE _stage_report, so the hits are never written anywhere and
 #      the quarantine added for the FIFO case cannot see them. The leg put it exactly: "this is
@@ -4249,8 +4249,8 @@ def test_the_refusal_fallback_checks_the_staged_inode_before_replacing(tmp_path:
     source = SCANNER.read_text(encoding="utf-8")
     body = source[source.index("def _write_refusal_report"):]
     fallback = body[body.index("except (OSError, UnicodeError):"):]
-    # RESCOPED IN ROUND THIRTY. This arm used to look for the identity check and the single
-    # os.replace INSIDE the fallback's own text. Round thirty moved both into the one shared
+    # RESCOPED IN AN EARLIER REVISION. This arm used to look for the identity check and the single
+    # os.replace INSIDE the fallback's own text. An earlier revision moved both into the one shared
     # publication path, `_replace_canonical_guarded`, precisely so that neither refusal branch
     # can omit them again — so the property is now: the fallback CALLS that path, and that path
     # carries the identity check and the module's only refusal replace.
@@ -4268,7 +4268,7 @@ def test_the_refusal_fallback_checks_the_staged_inode_before_replacing(tmp_path:
 
 
 # =============================================================================================
-# GROUP 30 — the twenty-first round. The gate refuted a claim I made in round nineteen's own
+# GROUP 30 — The gate refuted a claim I made in an earlier implementation's own
 # commit message, and it was right.
 #
 # I wrote that withholding restoration from a non-empty directory "confines any widening to
@@ -4339,7 +4339,7 @@ def test_a_populated_directory_is_never_widened_by_the_ancestor_helper(tmp_path:
 def test_a_pre_existing_directory_is_never_widened_however_it_looks(tmp_path: Path) -> None:
     """REPAIRED: restoration follows CREATION, so what a directory looks like cannot authorize it.
 
-    Round nineteen asked "does it look empty?" and answered with st_nlink when it could not list.
+    An earlier revision asked "does it look empty?" and answered with st_nlink when it could not list.
     Measured on this filesystem, a directory holding a regular file has st_nlink 2 exactly like an
     empty one, so the probe authorized the widening it was added to prevent. The question was
     wrong, not just its answer: what matters is whether THIS call created the directory, and a
@@ -4377,8 +4377,8 @@ def test_a_pre_existing_directory_is_never_widened_however_it_looks(tmp_path: Pa
 
 
 # =============================================================================================
-# GROUP 31 — the twenty-second round. Two writers that did not agree about the same path, and
-# round fourteen's availability case applied one level too shallow.
+# GROUP 31 — Two writers that did not agree about the same path, and
+# the earlier availability case applied one level too shallow.
 #
 #   #1 O_NOFOLLOW APPLIES TO THE TRAILING COMPONENT ONLY. open(2) is explicit: "Symbolic links in
 #      earlier components of the pathname will still be followed." write_report avoids that by
@@ -4422,7 +4422,7 @@ def test_the_refusal_writer_does_not_follow_a_staging_symlink_the_publisher_refu
 
 
 def test_a_write_and_search_scan_root_can_still_publish(tmp_path: Path) -> None:
-    """REPAIRED: round fourteen's availability case, applied to the scan root and not just below it.
+    """REPAIRED: the earlier availability case, applied to the scan root and not just below it.
 
     A 0300 directory grants create and traverse but not read, so an O_RDONLY open of it fails. The
     O_PATH fallback exists for precisely that and was wired to `_reports` while the scan root kept
@@ -4469,7 +4469,7 @@ def test_quarantine_does_not_link_through_a_symlink(tmp_path: Path) -> None:
     source = SCANNER.read_text(encoding="utf-8")
     quarantine = source[source.index("def _quarantine_unpublished"):]
     quarantine = quarantine[:quarantine.index("\ndef ")]
-    # RESCOPED IN ROUND THIRTY. This arm asserted `follow_symlinks=False` on the quarantine link
+    # RESCOPED IN AN EARLIER REVISION. This arm asserted `follow_symlinks=False` on the quarantine link
     # so that a staged NAME swapped for a symlink could not link its target into the evidence
     # store. Quarantine no longer links by name at all: it links the HELD INODE through the
     # descriptor directory, which has no source name to be a symlink. The property survives in a
@@ -4588,7 +4588,7 @@ def test_a_retained_report_whose_policy_failed_is_not_presented_as_compliant(
 
 def test_the_refusal_docstring_does_not_describe_a_guard_it_no_longer_has(tmp_path: Path) -> None:
     """REPAIRED: the docstring said it catches only OSError/UnicodeError and lets a ValueError
-    from __str__ propagate. Round eighteen changed both and left the paragraph standing."""
+    from __str__ propagate. An earlier revision changed both and left the paragraph standing."""
     source = SCANNER.read_text(encoding="utf-8")
     doc = source[source.index("def _write_refusal_report"):]
     doc = doc[:doc.index('"""', doc.index('"""') + 3)]
@@ -4597,16 +4597,16 @@ def test_the_refusal_docstring_does_not_describe_a_guard_it_no_longer_has(tmp_pa
     # forbid the correction from explaining itself.
     assert "still propagates: a refusal whose __str__ raises" not in doc, (
         "the refusal writer's docstring still claims an unexpected type propagates and replaces "
-        "the refusal being reported; the guard became `except Exception` two rounds ago")
+        "the refusal being reported; the guard became `except Exception` ago")
     assert "scoped to the errors this can expect" not in doc, (
         "and it still describes an OSError/UnicodeError-only guard that the code no longer has")
 
 
 # =============================================================================================
-# GROUP 33 — the twenty-fourth round. The same defect, in a second helper, two rounds later.
+# GROUP 33 — The same defect, in a second helper, later.
 #
-# Round nineteen fixed `_preserve_superseded` treating an lstat error as "the file is absent",
-# because failing to INSPECT something is not evidence about what it is. Round twenty-three then
+# An earlier revision fixed `_preserve_superseded` treating an lstat error as "the file is absent",
+# because failing to INSPECT something is not evidence about what it is. An earlier revision then
 # introduced `_staged_holds_evidence`, which converts an fstat error into False — and its caller
 # reads False as "there is nothing here worth keeping" and UNLINKS a stage holding real findings.
 #
@@ -4704,20 +4704,20 @@ def test_the_no_injection_control_retains_the_stage(tmp_path: Path) -> None:
 
 
 # =============================================================================================
-# GROUP 34 — the twenty-fifth round. A write that fails halfway, and a cleanup that removes what
+# GROUP 34 — A write that fails halfway, and a cleanup that removes what
 # it managed to write.
 #
 # `_stage_report` unlinks its own staged file on any write error. That cleanup predates every
 # retention rule this file has since grown: the caller never receives the descriptor, so the
-# quarantine path added in round seventeen and the retain-the-stage rule added in round nineteen
+# quarantine path added in an earlier revision and the retain-the-stage rule added in an earlier revision
 # cannot see those bytes at all. A findings report interrupted partway through writing is deleted
 # by the function that wrote it.
 #
-# THE HISTORY IS THE POINT. The cold leg traced this statically in round nineteen and said so —
+# THE HISTORY IS THE POINT. The cold leg traced this statically in an earlier revision and said so —
 # "examine _stage_report's own write-error cleanup separately... that write-error case was
 # statically traced, not fault-injected here". It was a static observation with no reproduction
 # attached, so it read as lower priority than the arms that came with measurements, and I did not
-# follow it up. Five rounds later the gate fault-injected it: an EFBIG partway through the body,
+# follow it up. Later the gate fault-injected it: an EFBIG partway through the body,
 # 128 bytes on disk, removed, finding_copies=0.
 #
 # A traced defect with no reproduction is still a defect. It is only cheaper to ignore.
@@ -4829,9 +4829,9 @@ def test_a_partly_written_status_line_is_still_cleaned_up(tmp_path: Path) -> Non
 
 
 # =============================================================================================
-# GROUP 35 — the twenty-sixth round. The rule quarantine learned, applied to preservation.
+# GROUP 35 — The rule quarantine learned, applied to preservation.
 #
-# Round twenty-three established it for the quarantine path: a RESERVED name means "retained
+# An earlier revision established it for the quarantine path: a RESERVED name means "retained
 # evidence, carrying the report's access policy", so a file whose ACL strip was denied does not
 # get one. Preservation was never brought in line. It links the old findings into
 # scan_report.superseded.txt BEFORE installing the retained inode's policy, `_narrow_kept_copy`
@@ -4879,7 +4879,7 @@ def test_a_preserved_copy_whose_policy_failed_does_not_authorize_replacement(
         "CONTROL: the findings themselves must be untouched — a declined replacement leaves them "
         "standing at the canonical name, which is where they already were")
     # A RESERVED NAME MAY REMAIN, and it must be a second name for the report rather than a copy
-    # standing in for one. Removing it is what this round's first shape did, and an arm below
+    # standing in for one. Removing it is what this repair's first shape did, and an arm below
     # reproduces the evidence loss that caused. What must NOT happen is the replacement.
     for p in reports.iterdir():
         if p.name.startswith("scan_report.superseded"):
@@ -4908,7 +4908,7 @@ def test_the_no_injection_control_authorizes_replacement(tmp_path: Path) -> None
 def test_the_forfeit_must_not_remove_the_last_name_for_the_findings(tmp_path: Path) -> None:
     """REPAIRED: giving back a reserved name must never be the act that destroys the evidence.
 
-    Round twenty-six's first shape unlinked the reserved name when the policy was denied, and
+    An earlier implementation's first shape unlinked the reserved name when the policy was denied, and
     justified it in a comment: the link is a SECOND name for the report's own inode, so removing
     it removes no bytes. That sentence is true only while the canonical name still reaches that
     inode, and this module exists because the tree is hostile and a name can stop reaching an
@@ -4962,7 +4962,7 @@ def test_the_forfeit_must_not_remove_the_last_name_for_the_findings(tmp_path: Pa
 
 
 # =============================================================================================
-# GROUP 36 — the twenty-seventh round. Two destructive operations that acted on a name whose
+# GROUP 36 — Two destructive operations that acted on a name whose
 # identity was established at an earlier instant.
 #
 # The gate returned five findings of one class: in a report directory another same-UID process can
@@ -5143,11 +5143,10 @@ def test_staged_findings_survive_the_staged_name_being_unlinked(tmp_path: Path) 
 
 
 # =============================================================================================
-# GROUP 37 — the twenty-eighth round. Preservation stops asking a NAME and holds the inode.
+# GROUP 37 — Preservation stops asking a NAME and holds the inode.
 #
 # Three legs across two providers converged on one sentence, independently and with no shared
-# premise: this module moved every piece of metadata work onto held descriptors in rounds
-# eighteen to twenty-three, and preservation was left asking a pathname whether the policy is on
+# premise: this module moved every piece of metadata work onto held descriptors in earlier implementations, and preservation was left asking a pathname whether the policy is on
 # "the inode we actually hold". A name lookup is not a hold. The cold leg wrote the prescription
 # out: after the link, open the slot O_PATH, require its fstat to equal the inode that was
 # preserved, and do the narrowing and the classification THROUGH that descriptor.
@@ -5199,7 +5198,7 @@ def test_a_slot_swapped_after_the_link_does_not_release_the_findings(tmp_path: P
         "over the only remaining name for the real findings")
     _a_under_a_slot = [p.name for p in reports.iterdir() if p.name.startswith("scan_report.superseded")
                        and _A_MARK in p.read_text(encoding="utf-8", errors="replace")]
-    # Since round forty-six the link is made from the held inode, a swapped slot is detected by the
+    # Since an earlier revision the link is made from the held inode, a swapped slot is detected by the
     # helper and the NEXT slot is taken, so A is preserved and the replacement is rightly authorized.
     assert authorized is False or _a_under_a_slot, (
         "REPAIRED: the replacement was authorized on the strength of a file this scan never "
@@ -5238,7 +5237,7 @@ def test_a_slot_swapped_after_the_link_is_not_reported_as_narrowed(tmp_path: Pat
         pytest.skip("no link was made, so no slot could be swapped")
     _a_under_a_slot = [p.name for p in reports.iterdir() if p.name.startswith("scan_report.superseded")
                        and _A_MARK in p.read_text(encoding="utf-8", errors="replace")]
-    # Since round forty-six the link is made from the held inode, a swapped slot is detected by the
+    # Since an earlier revision the link is made from the held inode, a swapped slot is detected by the
     # helper and the NEXT slot is taken, so A is preserved and the replacement is rightly authorized.
     assert authorized is False or _a_under_a_slot, (
         "REPAIRED: the policy was installed on a planted file and reported as installed on the "
@@ -5269,14 +5268,14 @@ def test_the_ordinary_preservation_path_is_unchanged(tmp_path: Path) -> None:
 
 
 # =============================================================================================
-# GROUP 38 — the twenty-ninth round. The sibling branch, and a reserved name given out too early.
+# GROUP 38 — The sibling branch, and a reserved name given out too early.
 #
-# Round twenty-eight anchored preservation to a held descriptor and anchored ONE of its two
+# An earlier revision anchored preservation to a held descriptor and anchored ONE of its two
 # branches. The existing-slot branch — the one that runs when no new link could be made and an
 # earlier call's copy is already sitting in a slot — still compared an lstat to the expected inode
 # and then handed the NAME to a helper that opens it again. A leg reproduced the gap: it returned
 # True after narrowing a different inode than the one it had checked. This is the same defect in a
-# second place, two rounds later, which has now happened often enough in this file to be worth
+# second place, later, which has now happened often enough in this file to be worth
 # naming as a habit rather than an accident: when a fix anchors one branch, its sibling is where
 # the same defect goes to live.
 #
@@ -5443,7 +5442,7 @@ def test_copy_out_works_when_the_umask_stripped_owner_read(tmp_path: Path) -> No
 def test_the_sweep_keeps_a_reserved_name_whose_age_cannot_be_read(tmp_path: Path) -> None:
     """REPAIRED: a question this code cannot answer must not authorize destruction.
 
-    The age guard added one round earlier skips a reserved name that is newer than this run's own
+    The age guard added earlier skips a reserved name that is newer than this run's own
     staging. A cold leg pointed out that its except-OSError falls THROUGH to the unlink: when the
     lstat fails, the sweep does the exact thing the guard was added to prevent. That is the same
     inversion `_staged_holds_evidence` was rewritten to remove, still standing here.
@@ -5579,16 +5578,16 @@ def test_a_slot_stolen_after_authorization_does_not_get_the_report_replaced(tmp_
 
 
 # =============================================================================================
-# GROUP 39 — the thirtieth round. Five evidence-retention failures, four of them in code the
+# GROUP 39 — Five evidence-retention failures, four of them in code the
 # last three rounds wrote, and one more sibling branch.
 #
 # The pattern this file has now shown three times gets its own sentence: WHEN A FIX ANCHORS ONE
-# BRANCH, ITS SIBLING IS WHERE THE DEFECT GOES TO LIVE. Round twenty-nine put the spent-authorization
+# BRANCH, ITS SIBLING IS WHERE THE DEFECT GOES TO LIVE. An earlier revision put the spent-authorization
 # re-check before the ordinary refusal replace and not before the fallback one. The review leg's
-# structural advice — put the shared preconditions in ONE publication path — is what this round
+# structural advice — put the shared preconditions in ONE publication path — is what this repair
 # does, so there is no second branch left to forget.
 #
-# The copy-out helper, added in round twenty-seven as the last-resort rescue for an inode with no
+# The copy-out helper, added in an earlier revision as the last-resort rescue for an inode with no
 # names, turned out to lose that inode in three ways of its own: it deleted a completed recovery
 # stage when every reserved name was occupied; it claimed custody of a reserved link it never
 # confirmed was the stage it wrote; and quarantine's new mismatch branch, which relies on it,
@@ -5708,7 +5707,7 @@ def test_copy_out_confirms_the_reserved_link_is_its_stage(tmp_path: Path) -> Non
         raise OSError(errno.EIO, "policy install failed (injected)")
 
     def link_that_substitutes_the_stage(src, dst, *args, **kwargs):
-        # THE SUBSTITUTION, re-keyed in round thirty: the link is now made through the
+        # THE SUBSTITUTION, re-keyed in an earlier revision: the link is now made through the
         # descriptor directory, so the stage name no longer arrives as `src`. The writer takes
         # the stage NAME (unlink + decoy at that name) just before the link; the link then sees
         # an inode with no names and must fail rather than attach anything.
@@ -5756,7 +5755,7 @@ def test_quarantine_mismatch_still_rescues_the_held_original(tmp_path: Path) -> 
         raise OSError(errno.EIO, "policy install failed (injected)")
 
     def link_after_the_stage_was_replaced(src, dst, *args, **kwargs):
-        # THE SUBSTITUTION, re-keyed in round thirty: the link is now made through the
+        # THE SUBSTITUTION, re-keyed in an earlier revision: the link is now made through the
         # descriptor directory, so the stage name no longer arrives as `src`. The writer takes
         # the stage NAME (unlink + decoy at that name) just before the link; the link then sees
         # an inode with no names and must fail rather than attach anything.
@@ -5829,7 +5828,7 @@ def test_the_sweep_does_not_run_without_a_reference_timestamp(tmp_path: Path) ->
 
 
 # =============================================================================================
-# GROUP 40 — the thirty-first round. Four defects in the round-thirty rescue path, found by the
+# GROUP 40 — Four defects in the earlier rescue path, found by the
 # invariant leg on its fourth pass. All four are mine, and the first is the kind that should not
 # survive a re-read: the bounded recursion never passed depth+1, so the bound was a comment.
 # =============================================================================================
@@ -5851,7 +5850,7 @@ def test_the_rescue_recursion_actually_advances_its_depth(tmp_path: Path) -> Non
 
     real_link = module._link_held_inode
     def link_that_always_finds_no_names(fd, candidate, dirfd):
-        # Every attempt: the stage has "lost its last name" — and, since round forty-nine, the
+        # Every attempt: the stage has "lost its last name" — and, since an earlier revision, the
         # name really is taken, because the recursion now lives in the finally's re-ask and only
         # fires when the stage name no longer reaches the stage. Without an advancing depth this
         # recurses until Python gives up.
@@ -5872,7 +5871,7 @@ def test_the_rescue_recursion_actually_advances_its_depth(tmp_path: Path) -> Non
         module._link_held_inode = real_link
         os.close(src); os.close(dirfd)
     assert not any(p.name.startswith("scan_report.unpublished") for p in reports.iterdir()), (
-        "CONTROL: with every link refused, no reserved name may be taken (since round fifty the answer is\n"
+        "CONTROL: with every link refused, no reserved name may be taken (since an earlier revision the answer is\n"
         "True when a complete copy is KEPT, so the reserved names are what this control reads)")
     assert max(depths) >= 1 and len(depths) <= 3, (
         f"REPAIRED: depths seen were {depths}. The recursion must pass depth+1 and stop at the "
@@ -6033,8 +6032,8 @@ def test_the_replace_is_refused_when_the_canonical_inode_changed_since_preservat
 
 
 # =============================================================================================
-# GROUP 41 — the thirty-second round. Three findings from the invariant leg on f153122, and all
-# three are the shape round thirty named: a name read or deleted after — or without — the
+# GROUP 41 — Three findings from the invariant leg on f153122, and all
+# three are the shape an earlier revision named: a name read or deleted after — or without — the
 # identity check that its sibling branch already carries.
 # =============================================================================================
 
@@ -6178,7 +6177,7 @@ def test_releasing_a_status_slot_checks_the_slot_is_still_the_status_inode(tmp_p
 def test_the_staged_identity_check_is_the_syscall_before_the_replace(tmp_path: Path) -> None:
     """REPAIRED (cold leg #2): identity of the replace SOURCE is only useful in the syscall before it.
 
-    Round thirty-one put two guards BETWEEN the staged-name identity check and the rename. Plant a
+    An earlier revision put two guards BETWEEN the staged-name identity check and the rename. Plant a
     wide-open file at the staged name during the second guard: the rename then publishes the
     planted entry under the canonical name, mode and all, and the last reference to the staged
     body is closed. The guards must run first and the identity check last.
@@ -6321,7 +6320,7 @@ def test_narrowing_reports_false_when_the_mode_did_not_land(tmp_path: Path) -> N
 
 
 # =============================================================================================
-# GROUP 42 — the thirty-third round. The findings ledger (rounds 17–31, every leg output on
+# Findings preservation. The findings ledger (every leg output on
 # disk) listed fourteen items with no fixing commit and no documented limit. Three are code.
 # =============================================================================================
 
@@ -6338,7 +6337,7 @@ def test_the_refusal_writer_does_not_raise_on_a_staging_path_that_is_not_a_strin
 
 
 def test_the_refusal_fallback_does_not_publish_a_mode_it_did_not_verify(tmp_path: Path) -> None:
-    """REPAIRED (ledger #10): the fallback fchmods and never looks; the ordinary path has looked since round 17."""
+    """REPAIRED (ledger #10): the fallback fchmods and never looks; the ordinary path already checks."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "fallback_mode_verified")
     reports = tmp_path / "_reports"
@@ -6417,7 +6416,7 @@ def test_a_kept_stage_is_left_owner_readable(tmp_path: Path) -> None:
 
 
 # =============================================================================================
-# GROUP 43 — the thirty-fourth round. The invariant leg's FIX-FORWARD on 0829b97: identity
+# GROUP 43 — The invariant leg's FIX-FORWARD on 0829b97: identity
 # cleanup was put before the close (right), but not under a finally — a cancellation inside the
 # helper leaks the descriptor at three sites. And two chmod sites still trust the return code.
 # =============================================================================================
@@ -6559,12 +6558,12 @@ def test_rescue_declines_a_reserved_name_when_its_mode_did_not_land(tmp_path: Pa
         module.os.fchmod = real_fchmod
         os.close(src); os.close(dirfd)
     assert _findings_anywhere(reports, "docs/int.md:2"), "CONTROL: the copied bytes must survive somewhere"
-    assert not any(p.name.startswith("scan_report.unpublished") for p in reports.iterdir()), (   # the answer is True since round fifty: a complete copy is KEPT
+    assert not any(p.name.startswith("scan_report.unpublished") for p in reports.iterdir()), (   # the answer is True since an earlier revision: a complete copy is KEPT
         "REPAIRED: the rescue reserved a name for a copy whose mode it set and never verified")
 
 
 # =============================================================================================
-# GROUP 44 — the thirty-fifth round. The cold leg's three on 0829b97: the scan arm round-trips
+# GROUP 44 — The cold leg's three on 0829b97: the scan arm round-trips
 # arbitrary path bytes and the publication arm assumed UTF-8 text; a kept partial stage at the
 # umask-masked create mode; and the sweep's age check followed by an unlink of the NAME.
 # =============================================================================================
@@ -6668,7 +6667,7 @@ def test_a_kept_partial_stage_is_left_owner_readable(tmp_path: Path) -> None:
 
 
 # =============================================================================================
-# GROUP 45 — the thirty-sixth round. The invariant leg's FIX-FORWARD on 3c075f0: a mode check
+# GROUP 45 — The invariant leg's FIX-FORWARD on 3c075f0: a mode check
 # I put before the bytes were copied (an empty stage counted as retained evidence), and three
 # more descriptor lifetimes not under a finally.
 # =============================================================================================
@@ -6695,7 +6694,7 @@ def test_rescue_copies_the_bytes_before_deciding_about_the_reserved_name(tmp_pat
         os.close(src); os.close(dirfd)
     assert not any(p.name.startswith("scan_report.unpublished") for p in reports.iterdir()), (
         "CONTROL: the reserved name must still be declined on a mode mismatch (the answer itself is True\n"
-        "since round fifty — a complete copy is kept)")
+        "since an earlier revision — a complete copy is kept)")
     stages = [p for p in reports.iterdir() if p.name.startswith(".scan_report_") and p.name != ".scan_report_src"]
     assert stages and all(p.stat().st_size > 0 for p in stages), (
         f"REPAIRED: the rescue declined the reserved name BEFORE copying the bytes; the kept stage "
@@ -6807,7 +6806,7 @@ def test_a_publish_cancelled_in_the_reference_stamp_read_still_closes_the_stage(
 
 
 # =============================================================================================
-# GROUP 46 — the thirty-seventh round. The cold leg's two on 3c075f0: the rescue read the whole
+# GROUP 46 — The cold leg's two on 3c075f0: the rescue read the whole
 # source into memory before any stage existed, so a mid-read failure lost the last copy; and
 # kept leftover stages were narrowed by mode alone, never stripped of an inherited ACL.
 # =============================================================================================
@@ -6925,7 +6924,7 @@ def test_a_kept_stage_after_a_failed_quarantine_has_its_acl_stripped(tmp_path: P
 
 
 # =============================================================================================
-# GROUP 47 — the thirty-eighth round. The invariant leg's FIX-FORWARD on 0c28c5e.
+# GROUP 47 — The invariant leg's FIX-FORWARD on 0c28c5e.
 # =============================================================================================
 
 
@@ -7106,7 +7105,7 @@ def test_a_partial_stage_kept_through_a_cancelled_size_read_is_still_narrowed(tm
 
 
 # =============================================================================================
-# GROUP 48 — the thirty-ninth round. The cold leg's three on 0c28c5e: a reserved name dropped
+# GROUP 48 — The cold leg's three on 0c28c5e: a reserved name dropped
 # by someone else after the link lets the stage removal take the LAST name; the rescue binds a
 # reserved name when its strip was denied; and the primary stage is written before any policy.
 # =============================================================================================
@@ -7201,7 +7200,7 @@ def test_the_rescue_declines_a_reserved_name_when_the_strip_is_denied(tmp_path: 
         module._strip_acl_by_fd = real_strip
         os.close(src); os.close(dirfd)
     assert _findings_anywhere(reports, "docs/int.md:2"), "CONTROL: the bytes must survive under some name"
-    assert not any(p.name.startswith("scan_report.unpublished") for p in reports.iterdir()), (   # the answer is True since round fifty: a complete copy is KEPT
+    assert not any(p.name.startswith("scan_report.unpublished") for p in reports.iterdir()), (   # the answer is True since an earlier revision: a complete copy is KEPT
         "REPAIRED: the rescue bound a reserved name to a copy whose ACL strip was denied — the "
         "name asserts a policy that is not on the file; quarantine already declines in this case")
 
@@ -7249,7 +7248,7 @@ def test_a_terms_file_with_no_terms_does_not_match_everything(tmp_path: Path) ->
 
 
 # =============================================================================================
-# GROUP 49 — the fortieth round. An executed on-box review of 461db53 (33 schedules, one FAIL):
+# GROUP 49 — An executed on-box review of 461db53 (33 schedules, one FAIL):
 # quarantine's failure returns AFTER its identity check trusted the name; a decoy renamed onto
 # the staged name during the failing call, plus the failure itself, left the findings unnamed.
 # =============================================================================================
@@ -7315,8 +7314,8 @@ def test_quarantine_rescues_when_a_failure_after_its_identity_check_finds_the_na
 
 
 # =============================================================================================
-# GROUP 50 — the forty-second round. Gate 37: an invariant-framed leg (Gemini, reading the module
-# as a file) found the nlink rule of round 39 refusing to remove an EMPTY rescue stage, which has
+# GROUP 50 — Findings after replacement: an invariant-framed leg (Gemini, reading the module
+# as a file) found the nlink rule refusing to remove an EMPTY rescue stage, which has
 # never been linked and so has exactly one name.
 # =============================================================================================
 
@@ -7343,7 +7342,7 @@ def test_an_empty_rescue_stage_is_removed(tmp_path: Path) -> None:
 def test_a_stale_clean_is_still_replaced_where_the_xattr_api_is_absent(tmp_path: Path) -> None:
     """CONTROL for a review claim: without the xattr API, the refusal still replaces a stale CLEAN.
 
-    A gate-37 leg read `_narrow_held_copy` returning False on such platforms and concluded the
+    A prior review leg read `_narrow_held_copy` returning False on such platforms and concluded the
     refusal writer "always aborts" there. The status-line branch of preservation answers True
     before narrowing is consulted, so a stale CLEAN — the case the refusal exists for — is still
     replaced; only a FINDINGS report is left unreplaced there, which is the safe direction.
@@ -7361,7 +7360,7 @@ def test_a_stale_clean_is_still_replaced_where_the_xattr_api_is_absent(tmp_path:
 
 
 def test_a_cancellation_during_the_sweep_does_not_quarantine_the_published_report(tmp_path: Path) -> None:
-    """REPAIRED (executed review, gate 37): after the replace the stage IS the report; the failure handler
+    """REPAIRED (executed review): after the replace the stage IS the report; the failure handler
     must not copy it out again under a reserved name."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "sweep_cancel_no_duplicate")
@@ -7396,7 +7395,7 @@ def test_a_cancellation_during_the_sweep_does_not_quarantine_the_published_repor
         f"quarantined the renamed stage by descriptor and left a duplicate under {dupes}")
 
 
-# ---- gate 37, the cold leg: the round-40 swap moved one function down -----------------------
+# ---- Earlier review: the earlier swap moved one function down -----------------------
 
 def test_a_decoy_swapped_in_during_the_kept_stage_narrowing_does_not_free_the_findings(tmp_path: Path) -> None:
     """REPAIRED (cold #1): after `_false_or_rescue` says False, the caller narrows and closes; a swap
@@ -7485,7 +7484,7 @@ def test_the_post_check_identity_helper_reads_the_held_side_first(tmp_path: Path
 
 
 # =============================================================================================
-# GROUP 51 — the forty-third round. Gate 38's invariant leg (Gemini): with the ACL strip denied
+# GROUP 51 — invariant leg (Gemini): with the ACL strip denied
 # (or no xattr API at all), each refusal over the SAME findings inode took a fresh preservation
 # slot — eight refusals of one report exhaust the capacity the README calls finite.
 # =============================================================================================
@@ -7516,14 +7515,14 @@ def test_the_same_findings_inode_never_takes_a_second_slot(tmp_path: Path) -> No
     assert len(slots) <= 1, (
         f"REPAIRED: three refusals over ONE findings inode took {len(slots)} slots ({slots}); a "
         f"report whose policy cannot be installed must not consume the finite capacity once per refusal")
-    # Since round fifty-three a report whose policy cannot be installed takes NO reserved name at
+    # Since an earlier revision a report whose policy cannot be installed takes NO reserved name at
     # all (the inode is narrowed before it is linked, and a denied strip declines the link), so
     # the count here is zero; the arm pins "never a second slot", not "exactly one".
 
 
 # =============================================================================================
-# GROUP 52 — the forty-fourth round. Gate 38's cold leg (grok) on d7e4a3c, an executed on-box
-# review of d7e4a3c, and gate 39's invariant leg (Gemini) on f69cfff: the stage writer's own
+# GROUP 52 — cold leg (grok) on d7e4a3c, an executed on-box
+# review of d7e4a3c, and invariant leg (Gemini) on f69cfff: the stage writer's own
 # keep branch narrowed and then closed without re-checking the name; the identity-unlink helper
 # read the name before the held inode; a rescue whose first read failed left an empty stage
 # under retention; and the post-publish sweep opened reserved names without O_NONBLOCK where
@@ -7532,7 +7531,7 @@ def test_the_same_findings_inode_never_takes_a_second_slot(tmp_path: Path) -> No
 
 
 def test_a_swap_during_the_stage_writers_own_keep_narrowing_does_not_free_the_findings(tmp_path: Path) -> None:
-    """REPAIRED (cold #1, gate 38): `_stage_report`'s handler is the only holder of a partial findings
+    """REPAIRED (cold #1): `_stage_report`'s handler is the only holder of a partial findings
     body; after it narrows the kept stage it must re-check the name before the close, as write_report does."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "stage_keep_swap")
@@ -7581,7 +7580,7 @@ def test_a_swap_during_the_stage_writers_own_keep_narrowing_does_not_free_the_fi
 
 
 def test_the_identity_unlink_helper_reads_the_held_side_first(tmp_path: Path) -> None:
-    """REPAIRED (cold #2, gate 38): `_remove_own_stage` compared a name lookup taken BEFORE the held
+    """REPAIRED (cold #2): `_remove_own_stage` compared a name lookup taken BEFORE the held
     fstat; a rename onto the name between the two removed a foreign findings inode's last name."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "unlink_helper_order")
@@ -7625,7 +7624,7 @@ def test_the_identity_unlink_helper_reads_the_held_side_first(tmp_path: Path) ->
 
 @pytest.mark.parametrize("failure", ["read_raises", "write_no_progress"])
 def test_a_rescue_that_fails_before_its_first_byte_leaves_no_empty_stage(tmp_path: Path, failure: str) -> None:
-    """REPAIRED (executed review, gate 38): a read that raises, or a write that makes no progress, before
+    """REPAIRED (executed review): a read that raises, or a write that makes no progress, before
     any byte reached the stage returned with retention on — an empty 0-byte stage stayed forever."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "rescue_first_" + failure)
@@ -7669,7 +7668,7 @@ def test_a_rescue_that_fails_before_its_first_byte_leaves_no_empty_stage(tmp_pat
 
 
 def test_the_sweep_does_not_block_on_a_fifo_where_o_path_is_absent(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg, gate 39): without O_PATH the sweep opened reserved names O_RDONLY, and
+    """REPAIRED (invariant leg): without O_PATH the sweep opened reserved names O_RDONLY, and
     a FIFO planted at one blocked the open until a writer appeared — the scanner hung after publishing."""
     import threading, time
     driver = make_tool(tmp_path)
@@ -7712,15 +7711,15 @@ def test_the_sweep_does_not_block_on_a_fifo_where_o_path_is_absent(tmp_path: Pat
 
 
 # =============================================================================================
-# GROUP 53 — the forty-fifth round. Gate 40 on 4632326: the invariant leg (Gemini) found the
-# round-44 re-check in `_stage_report` skipped by a cancellation inside the narrowing it follows;
-# the executed review found the round-44 empty-stage release skipped by a cancellation before
+# GROUP 53 — An earlier build, 4632326: the invariant leg (Gemini) found the
+# The re-check in `_stage_report` skipped by a cancellation inside the narrowing it follows;
+# the executed review found the empty-stage release skipped by a cancellation before
 # the rescue's first byte.
 # =============================================================================================
 
 
 def test_a_cancellation_inside_the_keep_narrowing_still_rescues_a_swapped_stage(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg, gate 40): the re-check after the narrowing must run in cleanup that a
+    """REPAIRED (invariant leg): the re-check after the narrowing must run in cleanup that a
     cancellation inside the narrowing cannot skip — otherwise the close frees a swapped stage."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "stage_keep_narrow_cancel")
@@ -7770,7 +7769,7 @@ def test_a_cancellation_inside_the_keep_narrowing_still_rescues_a_swapped_stage(
 
 
 def test_a_cancellation_before_the_rescues_first_byte_leaves_no_empty_stage(tmp_path: Path) -> None:
-    """REPAIRED (executed review, gate 40): retention-on-cancellation is for bytes; an empty stage is
+    """REPAIRED (executed review): retention-on-cancellation is for bytes; an empty stage is
     not evidence under a cancellation either, and is removed by identity."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "rescue_first_read_cancel")
@@ -7805,7 +7804,7 @@ def test_a_cancellation_before_the_rescues_first_byte_leaves_no_empty_stage(tmp_
 
 
 def test_a_cancellation_inside_the_callers_kept_stage_narrowing_still_rescues(tmp_path: Path) -> None:
-    """REPAIRED (cold #1, gate 40): write_report's kept-stage branch has the same narrow-then-re-check pair;
+    """REPAIRED (cold #1): write_report's kept-stage branch has the same narrow-then-re-check pair;
     an interrupt inside the narrowing must not skip the re-check there either."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "caller_keep_narrow_cancel")
@@ -7848,7 +7847,7 @@ def test_a_cancellation_inside_the_callers_kept_stage_narrowing_still_rescues(tm
 
 
 def test_the_link_helper_confirms_custody_with_the_name_last(tmp_path: Path) -> None:
-    """REPAIRED (cold #2, gate 40): `_link_held_inode` looked the new name up BEFORE the held fstat, so a
+    """REPAIRED (cold #2): `_link_held_inode` looked the new name up BEFORE the held fstat, so a
     decoy swapped onto the reserved name between the two passed as custody taken."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "link_helper_order")
@@ -7899,7 +7898,7 @@ def test_the_link_helper_confirms_custody_with_the_name_last(tmp_path: Path) -> 
 
 
 # =============================================================================================
-# GROUP 54 — the forty-sixth round. Gate 41's cold leg (grok) on e1c1404: preservation still
+# GROUP 54 — cold leg (grok) on e1c1404: preservation still
 # linked the canonical NAME, so a report substituted between the lookup and the link took a
 # reserved second name; a post-link confirmation error was read as "slot unusable" and the same
 # inode took a second slot; and a write-only stage could not be read back by the rescue when the
@@ -7908,7 +7907,7 @@ def test_the_link_helper_confirms_custody_with_the_name_last(tmp_path: Path) -> 
 
 
 def test_preservation_links_the_inode_it_recorded_not_whatever_the_name_holds(tmp_path: Path) -> None:
-    """REPAIRED (cold #1, gate 41): a report substituted at the canonical name between preservation's
+    """REPAIRED (cold #1): a report substituted at the canonical name between preservation's
     lookup and its link must not get a reserved name; the recorded inode is what is preserved."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "preserve_links_inode")
@@ -7950,7 +7949,7 @@ def test_preservation_links_the_inode_it_recorded_not_whatever_the_name_holds(tm
 
 
 def test_an_unconfirmed_custody_never_takes_a_second_reserved_name(tmp_path: Path) -> None:
-    """REPAIRED (cold #2, gate 41): a confirmation error AFTER a successful link means custody may have
+    """REPAIRED (cold #2): a confirmation error AFTER a successful link means custody may have
     been taken; the caller must not move on to link the same inode into the next slot."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "unconfirmed_custody")
@@ -7989,7 +7988,7 @@ def test_an_unconfirmed_custody_never_takes_a_second_reserved_name(tmp_path: Pat
 
 
 def test_a_rescue_reads_the_held_descriptor_when_the_reopen_is_refused(tmp_path: Path) -> None:
-    """REPAIRED (cold #3, gate 41): a stage the rescue cannot reopen through the descriptor directory
+    """REPAIRED (cold #3): a stage the rescue cannot reopen through the descriptor directory
     (a 0200 stage whose chmod did not stick) must still be copied from the descriptor it holds."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "rescue_pread_fallback")
@@ -8022,14 +8021,14 @@ def test_a_rescue_reads_the_held_descriptor_when_the_reopen_is_refused(tmp_path:
 
 
 # =============================================================================================
-# GROUP 55 — the forty-seventh round. Gate 42's invariant leg (Gemini) on 4e0be0a: an unconfirmed
+# GROUP 55 — invariant leg (Gemini) on 4e0be0a: an unconfirmed
 # custody made preservation return before its rescue block, so a recorded report whose name had
 # been taken lost its last reference at the close.
 # =============================================================================================
 
 
 def test_an_unconfirmed_custody_still_rescues_a_recorded_report_whose_name_is_gone(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg, gate 42): the custody-unconfirmed exit of preservation must still run
+    """REPAIRED (invariant leg): the custody-unconfirmed exit of preservation must still run
     the held-descriptor rescue when the canonical name no longer reaches the recorded inode."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "preserve_unconfirmed_rescue")
@@ -8072,7 +8071,7 @@ def test_an_unconfirmed_custody_still_rescues_a_recorded_report_whose_name_is_go
 
 
 def test_preservation_rescues_an_owner_unreadable_report_whose_name_is_taken(tmp_path: Path) -> None:
-    """REPAIRED (executed review, gate 42): the copy-out narrows with fchmod, which a path-only descriptor
+    """REPAIRED (executed review): the copy-out narrows with fchmod, which a path-only descriptor
     refuses (EBADF), so a mode-000 report whose name was taken could not be reopened for reading and was
     freed at the close; the narrowing must fall back to chmod through the descriptor directory."""
     driver = make_tool(tmp_path)
@@ -8113,7 +8112,7 @@ def test_preservation_rescues_an_owner_unreadable_report_whose_name_is_taken(tmp
 
 
 def test_an_unconfirmed_custody_in_the_copy_out_still_rescues_a_diverged_stage(tmp_path: Path) -> None:
-    """REPAIRED (inventory trace, gate 42): the copy-out's custody-unconfirmed exit kept its stage by
+    """REPAIRED (inventory trace): the copy-out's custody-unconfirmed exit kept its stage by
     retention alone; a stage whose name was taken meanwhile lost its last reference at the close."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "copyout_unconfirmed_rescue")
@@ -8153,14 +8152,14 @@ def test_an_unconfirmed_custody_in_the_copy_out_still_rescues_a_diverged_stage(t
 
 
 # =============================================================================================
-# GROUP 56 — the forty-eighth round. Gate 43's invariant leg (Gemini) on 407a89c: the round-47
+# Rescue depth. An earlier invariant review found that the
 # copy-out rescue re-entered through `_false_or_rescue`, which carried no depth, so a racer who
 # keeps taking names could drive the rescue chain until descriptors ran out.
 # =============================================================================================
 
 
 def test_the_copy_out_rescue_chain_is_depth_bounded(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg, gate 43): a rescue that re-enters the copy-out must carry its depth;
+    """REPAIRED (invariant leg): a rescue that re-enters the copy-out must carry its depth;
     an unbounded chain leaks a stage and a descriptor per level until the process runs out."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "rescue_chain_depth")
@@ -8210,7 +8209,7 @@ def test_the_copy_out_rescue_chain_is_depth_bounded(tmp_path: Path) -> None:
 
 
 def test_the_copy_outs_finally_re_asks_the_stage_name_before_the_close(tmp_path: Path) -> None:
-    """REPAIRED (cold #1, gate 43): every retention exit of the copy-out closed its stage without asking
+    """REPAIRED (cold #1): every retention exit of the copy-out closed its stage without asking
     whether the stage name still reached it; a strip denied plus a swapped stage name freed the copy."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "copyout_finally_reask")
@@ -8249,14 +8248,14 @@ def test_the_copy_outs_finally_re_asks_the_stage_name_before_the_close(tmp_path:
 
 
 # =============================================================================================
-# GROUP 57 — the forty-ninth round. Gate 44's invariant leg (Gemini) on e71e440: the copy-out's
-# no-custody arm made its own nested copy and the round-48 finally then asked again, so a taken
+# GROUP 57 — invariant leg (Gemini) on e71e440: the copy-out's
+# no-custody arm made its own nested copy and the finally then asked again, so a taken
 # stage name produced two copies of the same findings.
 # =============================================================================================
 
 
 def test_a_taken_stage_name_after_a_refused_link_yields_exactly_one_copy(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg, gate 44): the no-custody arm must defer to the finally's single
+    """REPAIRED (invariant leg): the no-custody arm must defer to the finally's single
     re-ask rather than copy on its own and then be copied again."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "single_rescue_copy")
@@ -8299,7 +8298,7 @@ def test_a_taken_stage_name_after_a_refused_link_yields_exactly_one_copy(tmp_pat
 
 @pytest.mark.parametrize("site", ["quarantine", "copy_out"])
 def test_a_reserved_name_taken_before_the_stage_release_does_not_free_the_findings(tmp_path: Path, site: str) -> None:
-    """REPAIRED (cold #1, gate 44): the release path read nlink >= 2 and then unlinked the stage four
+    """REPAIRED (cold #1): the release path read nlink >= 2 and then unlinked the stage four
     syscalls later; a reserved name removed in between made that unlink the last name, custody was
     reported taken, and the caller's close freed the findings."""
     driver = make_tool(tmp_path)
@@ -8348,14 +8347,14 @@ def test_a_reserved_name_taken_before_the_stage_release_does_not_free_the_findin
 
 
 # =============================================================================================
-# GROUP 58 — the fiftieth round. Gate 45's invariant leg (Gemini) on 5b1a014: the copy-out
+# GROUP 58 — invariant leg (Gemini) on 5b1a014: the copy-out
 # answered False while keeping a complete stage, quarantine passed that answer up, and
 # write_report's re-ask copied the same findings a second time.
 # =============================================================================================
 
 
 def test_a_complete_kept_copy_counts_as_custody_so_the_caller_does_not_copy_again(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg, gate 45): a copy-out that keeps a COMPLETE stage under the temporary prefix
+    """REPAIRED (invariant leg): a copy-out that keeps a COMPLETE stage under the temporary prefix
     must answer True, or the caller's own re-ask makes a second copy of the same findings."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "kept_copy_is_custody")
@@ -8396,7 +8395,7 @@ def test_a_complete_kept_copy_counts_as_custody_so_the_caller_does_not_copy_agai
 
 
 def test_quarantine_does_not_copy_a_stage_whose_name_is_intact_after_a_refused_link(tmp_path: Path) -> None:
-    """REPAIRED (executed review, gate 45): quarantine's no-custody arm copied unconditionally; with the
+    """REPAIRED (executed review): quarantine's no-custody arm copied unconditionally; with the
     staged name intact that made two copies of the same findings (the stage and the copy)."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "quarantine_no_copy_when_intact")
@@ -8435,7 +8434,7 @@ def test_quarantine_does_not_copy_a_stage_whose_name_is_intact_after_a_refused_l
 
 
 def test_a_failed_link_count_read_after_the_release_unlink_still_copies_out(tmp_path: Path) -> None:
-    """REPAIRED (executed review, gate 45): after the stage unlink a failed link-count read cannot mean
+    """REPAIRED (executed review): after the stage unlink a failed link-count read cannot mean
     'keep the name' — the name is gone; a copy must be attempted rather than letting the close decide."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "release_fstat_fault")
@@ -8475,7 +8474,7 @@ def test_a_failed_link_count_read_after_the_release_unlink_still_copies_out(tmp_
 
 
 def test_the_nested_rescue_never_unlinks_its_own_stage(tmp_path: Path) -> None:
-    """REPAIRED (cold #1, gate 45): the depth-one rescue released its stage after linking, so a racer's
+    """REPAIRED (cold #1): the depth-one rescue released its stage after linking, so a racer's
     second act on the reserved name left the copy nameless with no further rescue; at depth one the
     module keeps the stage and takes no last name of its own."""
     driver = make_tool(tmp_path)
@@ -8512,7 +8511,7 @@ def test_the_nested_rescue_never_unlinks_its_own_stage(tmp_path: Path) -> None:
 
 
 def test_a_link_count_already_zero_on_entry_to_the_release_is_rescued(tmp_path: Path) -> None:
-    """REPAIRED (cold #2, gate 45): both names taken before the release helper's first read left the
+    """REPAIRED (cold #2): both names taken before the release helper's first read left the
     held descriptor as the last reference; the helper skipped the case and the caller closed."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "release_nlink_zero_on_entry")
@@ -8547,7 +8546,7 @@ def test_a_link_count_already_zero_on_entry_to_the_release_is_rescued(tmp_path: 
 
 
 # =============================================================================================
-# GROUP 59 — the fifty-first round. Gate 46's inventory on 5850e01: a stage name taken while the
+# GROUP 59 — inventory on 5850e01: a stage name taken while the
 # copy streamed, plus no creatable name for the depth-one rescue, left the copy-out answering
 # True over no copy, and write_report then skipped the re-ask that had rescued this corner
 # from the original descriptor at 5b1a014.
@@ -8556,7 +8555,7 @@ def test_a_link_count_already_zero_on_entry_to_the_release_is_rescued(tmp_path: 
 
 @pytest.mark.parametrize("mode", ["depth1_no_name", "depth1_name_taken", "release_nlink0_no_name"])
 def test_the_copy_outs_answer_is_false_when_its_kept_stage_lost_its_name_and_the_rescue_failed(tmp_path: Path, mode: str) -> None:
-    """REPAIRED (cold #1–3 and the inventory, gate 46): the answer must be decided after the cleanup — False
+    """REPAIRED (cold #1–3 and the inventory): the answer must be decided after the cleanup — False
     whenever the copy's inode has no name left and no nested copy kept a named complete one — so that
     write_report's False handler still runs against the original descriptor it holds open."""
     driver = make_tool(tmp_path)
@@ -8626,7 +8625,7 @@ def test_the_copy_outs_answer_is_false_when_its_kept_stage_lost_its_name_and_the
 
 
 # =============================================================================================
-# GROUP 60 — the fifty-second round. Gate 47's invariant leg on c3f5bb3: two answers given from
+# GROUP 60 — invariant leg on c3f5bb3: two answers given from
 # no reading. A depth-one copy whose link landed closed with no check at all, answering True
 # over an inode both of whose names a racer had taken; and the release helper answered "custody
 # holds" when its first link-count read failed, where its own depth-one branch answers False.
@@ -8634,7 +8633,7 @@ def test_the_copy_outs_answer_is_false_when_its_kept_stage_lost_its_name_and_the
 
 
 def test_a_depth_one_copy_whose_link_landed_and_then_lost_both_names_answers_false(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg #1, gate 47): the depth-one linked branch must still read the link count
+    """REPAIRED (invariant leg #1): the depth-one linked branch must still read the link count
     before its close — a copy with no name left answers False, and every caller above then retries
     from the original descriptor write_report still holds open."""
     driver = make_tool(tmp_path)
@@ -8695,7 +8694,7 @@ def test_a_depth_one_copy_whose_link_landed_and_then_lost_both_names_answers_fal
 
 
 def test_a_release_pre_read_that_fails_does_not_answer_custody(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg #2, gate 47): a link-count read that fails before the release acts is not
+    """REPAIRED (invariant leg #2): a link-count read that fails before the release acts is not
     "custody holds" — the helper answers False, like its depth-one branch, and write_report's False
     handler re-asks the original descriptor instead of closing it over an inode that may have no name."""
     driver = make_tool(tmp_path)
@@ -8735,7 +8734,7 @@ def test_a_release_pre_read_that_fails_does_not_answer_custody(tmp_path: Path) -
 
 
 # =============================================================================================
-# GROUP 61 — the fifty-third round. Gate 48's cold leg on 2fb1625: preservation linked the
+# GROUP 61 — cold leg on 2fb1625: preservation linked the
 # canonical inode into a reserved name at whatever mode it had and narrowed it afterwards (a
 # 0644 findings report was readable under a well-known second name for the window, and for
 # good if the process died in it), kept the reserved name when the strip was then denied; and
@@ -8749,7 +8748,7 @@ def _plant_wide_findings_report(module, reports: Path) -> None:
 
 
 def test_preservation_narrows_the_held_inode_before_it_takes_a_reserved_name(tmp_path: Path) -> None:
-    """REPAIRED (cold #3, gate 48): the reserved superseded name is created at 0600, never at the
+    """REPAIRED (cold #3): the reserved superseded name is created at 0600, never at the
     canonical inode's old mode — the narrowing runs on the held descriptor BEFORE the link."""
     driver = make_tool(tmp_path)
     module = import_driver(driver, "preserve_narrow_first")
@@ -8785,7 +8784,7 @@ def test_preservation_narrows_the_held_inode_before_it_takes_a_reserved_name(tmp
 
 
 def test_preservation_takes_no_reserved_name_when_the_strip_is_denied(tmp_path: Path) -> None:
-    """REPAIRED (cold #3 sibling, gate 48): a reserved name asserts the policy; with the strip
+    """REPAIRED (cold #3 sibling): a reserved name asserts the policy; with the strip
     denied the held inode gets no reserved name at all (as the copy-out already does), and the
     replacement is declined."""
     driver = make_tool(tmp_path)
@@ -8821,7 +8820,7 @@ def test_preservation_takes_no_reserved_name_when_the_strip_is_denied(tmp_path: 
 
 
 def test_a_release_pre_read_that_fails_still_copies_the_bytes_out(tmp_path: Path) -> None:
-    """REPAIRED (cold #2, gate 48): the release helper's failed first read is "cannot tell" like its
+    """REPAIRED (cold #2): the release helper's failed first read is "cannot tell" like its
     post-unlink read — a copy is attempted through the descriptor, one level deep, instead of
     answering False and letting the copy-out's finally close a stage that may be nameless."""
     driver = make_tool(tmp_path)
@@ -8863,7 +8862,7 @@ def test_a_release_pre_read_that_fails_still_copies_the_bytes_out(tmp_path: Path
 
 
 # =============================================================================================
-# GROUP 62 — the fifty-fourth round. Gate 49's cold leg on 884e6c2: preservation asked the
+# GROUP 62 — cold leg on 884e6c2: preservation asked the
 # last-reference question only when NO slot was linked; after a confirmed link it closed the
 # held canonical descriptor with no question, and both classification closes did the same —
 # the one sibling in the module still closing a findings-bearing descriptor unasked.
@@ -8920,7 +8919,7 @@ def _preserve_with_racer(tmp_path: Path, tag: str, occupy_slots: bool, hook: str
 
 @pytest.mark.parametrize("hook", ["after_link_confirmation", "after_prefix_read_linked", "after_prefix_read_no_slot"])
 def test_preservation_asks_the_last_reference_question_before_every_findings_close(tmp_path: Path, hook: str) -> None:
-    """REPAIRED (cold #1, gate 49): a findings-bearing descriptor preservation holds is copied out
+    """REPAIRED (cold #1): a findings-bearing descriptor preservation holds is copied out
     before its close when no name reaches the inode any more — after a confirmed link, after the
     classification through the slot, and after the classification reopen with no slot."""
     module, reports, answer, acts = _preserve_with_racer(tmp_path, "preserve_close_" + hook,
@@ -8931,7 +8930,7 @@ def test_preservation_asks_the_last_reference_question_before_every_findings_clo
 
 
 def test_a_cancellation_inside_the_pre_link_narrowing_does_not_leak_the_held_descriptor(tmp_path: Path) -> None:
-    """REPAIRED (inventory p.6, gate 49): the narrowing before the link runs under the same
+    """REPAIRED (inventory p.6): the narrowing before the link runs under the same
     cancellation guard as the one after it — an interrupt inside it closes the held descriptor
     before propagating (884e6c2 leaked it; c3f5bb3 did not, having no pre-link narrowing)."""
     driver = make_tool(tmp_path)
@@ -8977,7 +8976,7 @@ def test_a_cancellation_inside_the_pre_link_narrowing_does_not_leak_the_held_des
 
 
 # =============================================================================================
-# GROUP 63 — the fifty-fifth round. Gate 50's invariant leg on 8dd9edd: the last-reference
+# GROUP 63 — invariant leg on 8dd9edd: the last-reference
 # rescue after the link loop ran before classification, so a CLEAN whose names were taken was
 # copied to a reserved unpublished name; the cancellation closes in preservation (the pre-link
 # narrowing, the slot classification) and the already-preserved-slot close were still unasked.
@@ -9002,7 +9001,7 @@ def _take(reports: Path, names) -> None:
 
 
 def test_a_clean_whose_names_were_taken_is_never_copied_to_a_reserved_name(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg #4, gate 50): the last-reference rescue reads the prefix through the
+    """REPAIRED (invariant leg #4): the last-reference rescue reads the prefix through the
     descriptor first — a status line is not evidence and never takes a reserved unpublished name."""
     module, reports = _preserve_arm_setup(tmp_path, "preserve_clean_not_copied", "scan_gate: CLEAN\n")
     real_lstat = module.os.lstat
@@ -9029,7 +9028,7 @@ def test_a_clean_whose_names_were_taken_is_never_copied_to_a_reserved_name(tmp_p
 
 @pytest.mark.parametrize("site", ["pre_link_narrowing", "slot_classification", "already_preserved_slot"])
 def test_preservations_remaining_closes_ask_before_closing(tmp_path: Path, site: str) -> None:
-    """REPAIRED (invariant leg #1–#3, gate 50): a cancellation inside the pre-link narrowing or the
+    """REPAIRED (invariant leg #1–#3): a cancellation inside the pre-link narrowing or the
     slot classification, and the already-preserved-slot cleanup, close a findings-bearing descriptor
     only after the last-reference question — the racer's acts before them are answered by a copy."""
     module, reports = _preserve_arm_setup(tmp_path, "preserve_close_" + site, "generic\tkey\tassignment\tdocs/W.md:1\n")
@@ -9082,7 +9081,7 @@ def test_preservations_remaining_closes_ask_before_closing(tmp_path: Path, site:
 
 
 def test_a_clean_whose_name_diverged_with_no_slot_is_never_copied_to_a_reserved_name(tmp_path: Path) -> None:
-    """REPAIRED (executed review v-j, gate 50): the no-slot rescue in preservation asked only whether the
+    """REPAIRED (executed review v-j): the no-slot rescue in preservation asked only whether the
     canonical name still held the inode; a CLEAN whose name was taken was copied to a reserved
     unpublished name. The last-reference question there reads the prefix first, like the others."""
     module, reports = _preserve_arm_setup(tmp_path, "preserve_clean_noslot", "scan_gate: CLEAN\n")
@@ -9110,7 +9109,7 @@ def test_a_clean_whose_name_diverged_with_no_slot_is_never_copied_to_a_reserved_
 
 
 def test_a_cancellation_inside_the_held_copy_opener_does_not_close_the_last_reference_unasked(tmp_path: Path) -> None:
-    """REPAIRED (cold #2 fourth instance, gate 50): the opener's own cancellation guard, between the
+    """REPAIRED (cold #2 fourth instance): the opener's own cancellation guard, between the
     open and the return, asks the last-reference question before it closes what it just opened."""
     module, reports = _preserve_arm_setup(tmp_path, "opener_kbi", "generic\tkey\tassignment\tdocs/W.md:1\n")
     real_fstat = module.os.fstat
@@ -9136,7 +9135,7 @@ def test_a_cancellation_inside_the_held_copy_opener_does_not_close_the_last_refe
 
 
 # =============================================================================================
-# GROUP 64 — the fifty-sixth round. Gate 51's cold leg on f863349: the no-slot arm of
+# GROUP 64 — cold leg on f863349: the no-slot arm of
 # preservation asked the last-reference question and then never closed the descriptor it had
 # asked about, so the hold leaked to process exit and a name taken afterwards took the findings
 # with it; the held-copy opener's successful return sat outside its own cancellation guard; and
@@ -9157,7 +9156,7 @@ def _open_report_fds(reports: Path, name: str = "scan_report.txt") -> list:
 
 
 def test_preservation_closes_the_held_canonical_when_no_slot_took_it(tmp_path: Path) -> None:
-    """REPAIRED (cold #1, gate 51): the no-slot exit asked the last-reference question and left the
+    """REPAIRED (cold #1): the no-slot exit asked the last-reference question and left the
     descriptor open. A leaked hold is the last reference once the canonical name goes, and nothing
     runs on the way to process exit: the question and the close are one act at every exit."""
     module, reports = _preserve_arm_setup(tmp_path, "preserve_noslot_close", "generic\tkey\tassignment\tdocs/W.md:1\n")
@@ -9176,7 +9175,7 @@ def test_preservation_closes_the_held_canonical_when_no_slot_took_it(tmp_path: P
 
 
 def test_the_held_copy_openers_success_return_is_inside_its_cancellation_guard(tmp_path: Path) -> None:
-    """REPAIRED (cold #2, gate 51): the opener's comment owns the interval from the open to the RETURN,
+    """REPAIRED (cold #2): the opener's comment owns the interval from the open to the RETURN,
     but the return statement sat outside the try, so a cancellation delivered between the identity
     check and the return closed nothing. Structural, because the window is one bytecode boundary
     that no injection can address: the return must be inside the guarded try."""
@@ -9200,7 +9199,7 @@ def test_the_held_copy_openers_success_return_is_inside_its_cancellation_guard(t
 
 
 def test_the_staged_rescue_does_not_copy_a_status_line_to_a_reserved_name(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg, gate 51): the name-identity rescue on a staged file copied whatever it
+    """REPAIRED (invariant leg): the name-identity rescue on a staged file copied whatever it
     held. A staged CLEAN or REFUSED is not evidence — the README says a reserved name means retained
     evidence — so the rescue reads the prefix first, as the last-reference question already does."""
     driver = make_tool(tmp_path)
@@ -9227,7 +9226,7 @@ def test_the_staged_rescue_does_not_copy_a_status_line_to_a_reserved_name(tmp_pa
 
 
 # =============================================================================================
-# GROUP 65 — the fifty-seventh round. Gate 52's invariant leg on 212e683: quarantine's own
+# GROUP 65 — invariant leg on 212e683: quarantine's own
 # diverged arm calls the copy-out directly, so the status-line test the staged rescue had just
 # been given was bypassed at the one site that reaches it most often; and the copy-out's source
 # descriptor was acquired outside the block whose finally closes it.
@@ -9235,7 +9234,7 @@ def test_the_staged_rescue_does_not_copy_a_status_line_to_a_reserved_name(tmp_pa
 
 
 def test_quarantine_does_not_copy_a_staged_status_line_to_a_reserved_name(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg, gate 52): quarantine's diverged arm reaches the copy-out without going
+    """REPAIRED (invariant leg): quarantine's diverged arm reaches the copy-out without going
     through the name-identity rescue, so the status-line test added there did not cover it. A staged
     CLEAN or REFUSED whose name has diverged takes no reserved name by any route."""
     driver = make_tool(tmp_path)
@@ -9266,7 +9265,7 @@ def test_quarantine_does_not_copy_a_staged_status_line_to_a_reserved_name(tmp_pa
 
 
 def test_the_copy_outs_source_descriptor_is_acquired_inside_the_block_that_closes_it(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg, gate 52): the source reopen sat above the try whose finally closes it,
+    """REPAIRED (invariant leg): the source reopen sat above the try whose finally closes it,
     so a cancellation in the gap leaked it to process exit. Structural, like the opener's return:
     the window is a statement boundary no injection can address."""
     driver = make_tool(tmp_path)
@@ -9294,7 +9293,7 @@ def test_the_copy_outs_source_descriptor_is_acquired_inside_the_block_that_close
 
 
 def test_preservation_closes_the_classification_descriptor_for_a_status_line_too(tmp_path: Path) -> None:
-    """REPAIRED (executed review, gate 52): the classification's finally both ASKS and CLOSES, and it was
+    """REPAIRED (executed review): the classification's finally both ASKS and CLOSES, and it was
     gated on the report not being a status line — so a CLEAN left the descriptor open. The question
     already lets a status line go on its own; the close must not be conditional on the answer."""
     module, reports = _preserve_arm_setup(tmp_path, "preserve_clean_classify_close", "scan_gate: CLEAN\n")
@@ -9313,7 +9312,7 @@ def test_preservation_closes_the_classification_descriptor_for_a_status_line_too
 
 
 def test_an_unreadable_status_line_is_repaired_before_it_is_classified(tmp_path: Path) -> None:
-    """REPAIRED (cold #1, gate 52): the last-reference question classified a path-only descriptor BEFORE
+    """REPAIRED (cold #1): the last-reference question classified a path-only descriptor BEFORE
     anyone repaired owner-read, so a CLEAN at mode 000 read as unreadable, fell to the findings side,
     and the copy-out — which does repair owner-read — copied `scan_gate: CLEAN` into the namespace that
     means retained evidence. The repair happens first, so the classification reads what is there."""
@@ -9340,7 +9339,7 @@ def test_an_unreadable_status_line_is_repaired_before_it_is_classified(tmp_path:
 
 
 def test_the_opener_asks_before_closing_when_the_identity_read_itself_fails(tmp_path: Path) -> None:
-    """REPAIRED (cold #3, gate 52): an identity read that FAILED closed the descriptor without asking. A
+    """REPAIRED (cold #3): an identity read that FAILED closed the descriptor without asking. A
     question this code cannot answer never authorizes destruction — the same rule the staged-evidence
     helper is built on — so the last-reference question runs there too, at worst a duplicate."""
     module, reports = _preserve_arm_setup(tmp_path, "opener_identity_eio", "generic\tkey\tassignment\tdocs/W.md:1\n")
@@ -9372,9 +9371,9 @@ def test_the_opener_asks_before_closing_when_the_identity_read_itself_fails(tmp_
 
 
 def test_a_status_line_is_never_left_parked_in_a_superseded_slot(tmp_path: Path) -> None:
-    """REPAIRED (inventory, gate 52): the slot is linked before the report is classified, and the release
-    of a status line's slot was refused whenever that slot had become the only name — the trade round
-    twenty-six refused for EVIDENCE. A status line is not evidence, and a stale CLEAN under a reserved
+    """REPAIRED (inventory): the slot is linked before the report is classified, and the release
+    of a status line's slot was refused whenever that slot had become the only name — a trade an earlier implementation
+    refused for EVIDENCE. A status line is not evidence, and a stale CLEAN under a reserved
     name beside an exit status of two is the very thing the reserved namespace must not say."""
     module, reports = _preserve_arm_setup(tmp_path, "status_line_parked", "scan_gate: CLEAN\n")
     real_prefix = module._read_prefix_held
@@ -9404,7 +9403,7 @@ def test_a_status_line_is_never_left_parked_in_a_superseded_slot(tmp_path: Path)
 
 
 # =============================================================================================
-# GROUP 66 — the fifty-eighth round. Gate 53's invariant leg on aca6e8a: the slot descriptor is
+# GROUP 66 — invariant leg on aca6e8a: the slot descriptor is
 # guarded only where it is USED, by two disjoint handlers, with plain statements between them
 # and no handler over the whole of its life; and quarantine takes a reserved name for whatever
 # the staged inode holds when its NAME never diverged — bytes overwritten in place included.
@@ -9412,7 +9411,7 @@ def test_a_status_line_is_never_left_parked_in_a_superseded_slot(tmp_path: Path)
 
 
 def test_the_slot_descriptors_whole_life_is_under_one_handler(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg, gate 53): the descriptor held on the superseded slot was covered only
+    """REPAIRED (invariant leg): the descriptor held on the superseded slot was covered only
     inside the two blocks that use it. A cancellation between them — at a bare condition, where no
     call can be hooked — left it open, and it is the last reference once both names go. Structural,
     for the same reason the opener's return arm is: the window is a statement boundary."""
@@ -9446,7 +9445,7 @@ def test_the_slot_descriptors_whole_life_is_under_one_handler(tmp_path: Path) ->
 
 
 def test_quarantine_takes_no_reserved_name_for_a_stage_overwritten_in_place(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg, gate 53): quarantine asked the status-line question only where the staged
+    """REPAIRED (invariant leg): quarantine asked the status-line question only where the staged
     NAME had diverged. Bytes rewritten under the same inode leave the name intact, so a stage holding
     `scan_gate: CLEAN` was linked straight to a reserved name that means retained evidence."""
     driver = make_tool(tmp_path)
@@ -9474,7 +9473,7 @@ def test_quarantine_takes_no_reserved_name_for_a_stage_overwritten_in_place(tmp_
 
 
 def test_a_regular_inode_that_is_not_ours_is_left_exactly_as_it_was(tmp_path: Path) -> None:
-    """ADJUDICATED (cold #1 against the inventory, gate 53): the cold leg asked for the last-reference
+    """ADJUDICATED (cold #1 against the inventory): the cold leg asked for the last-reference
     rescue on an identity MISMATCH, reading it as the sibling of the failed-read arm. The inventory
     measured what that costs on that arm — a foreign file narrowed and its bytes published under a
     reserved name. "I cannot tell" is conservative toward copying; "this is not the inode we recorded"
@@ -9505,8 +9504,8 @@ def test_a_regular_inode_that_is_not_ours_is_left_exactly_as_it_was(tmp_path: Pa
 
 
 def test_the_copy_outs_source_reopen_does_not_wait_on_a_peer(tmp_path: Path) -> None:
-    """REPAIRED (cold #2, gate 53): the source reopen had no O_NONBLOCK, while the prefix read on the very
-    same descriptor directory has carried it all along. The identity-failure arm added last round can
+    """REPAIRED (cold #2): the source reopen had no O_NONBLOCK, while the prefix read on the very
+    same descriptor directory has carried it all along. The identity-failure arm added an earlier repair can
     hand the question an unverified descriptor, and opening the read end of a FIFO waits for a writer —
     inside a function documented never to block. The wait itself was measured on this box directly; this
     arm reads the flag, which is deterministic and cannot pass by measuring nothing."""
@@ -9543,14 +9542,14 @@ def test_the_copy_outs_source_reopen_does_not_wait_on_a_peer(tmp_path: Path) -> 
 
 
 # =============================================================================================
-# GROUP 67 — the fifty-ninth round. Gate 54's invariant leg on 2dac6c6: the name-clearing that
+# GROUP 67 — invariant leg on 2dac6c6: the name-clearing that
 # stops the whole-life handler closing a descriptor twice is a plain statement AFTER the rescue,
 # so a rescue that raises skips it and the handler closes again.
 # =============================================================================================
 
 
 def test_no_descriptor_is_closed_twice_when_a_rescue_raises(tmp_path: Path) -> None:
-    """REPAIRED (invariant leg, gate 54): the whole-life handler added last round is disarmed by clearing
+    """REPAIRED (invariant leg): the whole-life handler added an earlier repair is disarmed by clearing
     the local name after each early close — but as a plain statement, so a rescue that RAISES skips it
     and the handler closes the same descriptor again. The clearing belongs under a finally, the shape
     the held-copy opener was already given. A closed descriptor number is reused, so this counts closes
@@ -9618,7 +9617,7 @@ def test_no_descriptor_is_closed_twice_when_a_rescue_raises(tmp_path: Path) -> N
 
 @pytest.mark.parametrize("shape", ["reports_is_a_symlink", "reports_is_a_regular_file", "reports_is_a_fifo"])
 def test_findings_reach_the_operator_when_no_report_can_be_written(tmp_path: Path, capsys, shape: str) -> None:
-    """REPAIRED (cold #1, gate 54): every raise above the stage happens while this run's findings exist
+    """REPAIRED (cold #1): every raise above the stage happens while this run's findings exist
     only in the argument list. The refusal writer is handed the exception and never the hits, so a
     planted CLEAN behind an unusable `_reports` was all a reader saw beside an exit status of two.
     Staging first repaired this one name down; the directory name has nowhere to stage, so the
@@ -9663,18 +9662,18 @@ def test_a_clean_run_that_cannot_write_says_nothing_extra(tmp_path: Path, capsys
 
 
 # =============================================================================================
-# GROUP 68 — the sixtieth round. The executed review on 2dac6c6 measured a fourth window of the
-# same shape the round before closed at three: the status-line branch closes the slot descriptor
+# GROUP 68 — The executed review on 2dac6c6 measured a fourth window of the
+# same shape the earlier implementation closed at three: the status-line branch closes the slot descriptor
 # and clears the name as two statements inside its finally, so a cancellation between them leaves
 # the whole-life handler armed over a descriptor that is already closed.
 # =============================================================================================
 
 
 def test_no_descriptor_is_closed_twice_when_a_cancellation_lands_between_close_and_clear(tmp_path: Path) -> None:
-    """REPAIRED (executed review, gate 54): the status-line branch's cleanup closes the slot descriptor and
+    """REPAIRED (executed review): the status-line branch's cleanup closes the slot descriptor and
     then clears the local name. A cancellation delivered between those two statements leaves the name
     set, and the whole-life handler closes a descriptor nothing holds. The other three sites were given
-    a finally last round; this is the fourth."""
+    a finally an earlier repair; this is the fourth."""
     module, reports = _preserve_arm_setup(tmp_path, "close_clear_window", "scan_gate: CLEAN\n")
     real_quietly, real_close, real_open = module._close_quietly, module.os.close, module.os.open
     live: set = set()
@@ -9723,7 +9722,7 @@ def test_no_descriptor_is_closed_twice_when_a_cancellation_lands_between_close_a
 
 
 def test_findings_reach_the_operator_when_the_stage_itself_cannot_be_made(tmp_path: Path) -> None:
-    """REPAIRED (cold #1, gate 55): the emission was wired only to the region that obtains the directory
+    """REPAIRED (cold #1): the emission was wired only to the region that obtains the directory
     descriptor. A stage that cannot be created — a report directory with no write permission, no
     creatable name, no space — fails AFTER that guard with the findings still only in the argument
     list and nothing durable anywhere. Everything above the first durable byte must emit."""
@@ -9750,7 +9749,7 @@ def test_findings_reach_the_operator_when_the_stage_itself_cannot_be_made(tmp_pa
 
 
 def test_a_swap_of_the_stage_name_during_the_rename_does_not_publish_and_then_free_the_findings(tmp_path: Path) -> None:
-    """REPAIRED (cold #2, gate 55): the identity check sits before the rename, so a same-uid writer that
+    """REPAIRED (cold #2): the identity check sits before the rename, so a same-uid writer that
     renames a planted symlink onto the staged name in that window has the rename move the PLANT to the
     canonical name. The publish flag was set because the rename returned, the failure handler was then
     skipped, and the close freed a findings inode with no name left. The canonical name is asked again
@@ -9789,7 +9788,7 @@ def test_a_swap_of_the_stage_name_during_the_rename_does_not_publish_and_then_fr
 
 
 def test_findings_are_never_written_into_a_stage_that_is_not_owner_only(tmp_path: Path) -> None:
-    """REPAIRED (cold #3, gate 55): the narrowing before the write is best effort and was never verified,
+    """REPAIRED (cold #3): the narrowing before the write is best effort and was never verified,
     so where it did not stick — a report directory carrying a default ACL, or one left at 0755 whose
     group read the hardening keeps — the findings were written into a file group could open. A
     reserved name is refused in that state; the stage held the same bytes under no such rule. A mode
@@ -9842,7 +9841,7 @@ def test_findings_are_never_written_into_a_stage_that_is_not_owner_only(tmp_path
 
 
 def test_a_cancellation_at_the_rescue_call_itself_still_closes_the_descriptor(tmp_path: Path) -> None:
-    """REPAIRED (executed review, gate 55): a REGRESSION from the round before. Clearing the local name
+    """REPAIRED (executed review): a REGRESSION from the earlier implementation. Clearing the local name
     under a finally stops a double close, but a cancellation delivered AT the call — before the callee's
     own arms run — clears the name over a descriptor nobody closed, and the whole-life handler then
     sees None and never fires. The handler asks the descriptor itself whether it is still ours rather
@@ -9885,7 +9884,7 @@ def test_a_cancellation_at_the_rescue_call_itself_still_closes_the_descriptor(tm
 
 
 def test_the_emission_does_not_carry_the_matched_text(tmp_path: Path) -> None:
-    """DECIDED (executed review, gate 55): the emission exists so a scan that found secrets cannot tell
+    """DECIDED (executed review): the emission exists so a scan that found secrets cannot tell
     nobody. It does not need to carry the fifth field. The class, the pattern name and the path and
     line say what and where. The error stream is a descriptor this tool did not choose and cannot
     narrow, and an adversary picks the moment it is used, so that field stays out of it.
@@ -9918,7 +9917,7 @@ def test_the_emission_does_not_carry_the_matched_text(tmp_path: Path) -> None:
     assert secret not in err, (
         f"DECIDED: the emission carried the matched text itself onto a stream this tool did not choose "
         f"and cannot narrow (stderr was {err!r})")
-    # STRENGTHENED (team review, gate 62). The line above is an exact-string check, so an emission
+    # STRENGTHENED (team review). The line above is an exact-string check, so an emission
     # that carried the value with one character changed at either end would satisfy it. The core is
     # the identifying half; require that too.
     assert KEY_SHAPED not in err, (
@@ -9938,7 +9937,7 @@ def test_the_emission_does_not_carry_the_matched_text(tmp_path: Path) -> None:
     module._emit_unwritten_findings = emit_with_the_field
     # ITS OWN NAME. The block above already restored the real stream through `real_stderr`; reusing
     # that name here would be one reordering away from capturing a StringIO as "the original" and
-    # leaving it installed (team review, gate 63).
+    # leaving it installed (team review).
     outer_stderr = sys.stderr
     sys.stderr = io.StringIO()
     try:
@@ -9958,7 +9957,7 @@ def test_the_emission_does_not_carry_the_matched_text(tmp_path: Path) -> None:
 
 
 def test_a_failure_after_the_stage_does_not_emit(tmp_path: Path) -> None:
-    """PINNED (executed review, gate 55): nothing in the suite held the other half of the rule. Once the
+    """PINNED (executed review): nothing in the suite held the other half of the rule. Once the
     report is staged the bytes are on disk under a name this scanner controls, and the retention paths
     own them; printing as well would put findings on the error stream on every publish failure."""
     driver = make_tool(tmp_path)
@@ -9992,7 +9991,7 @@ def test_a_failure_after_the_stage_does_not_emit(tmp_path: Path) -> None:
     assert "hit(s)" not in err, (
         f"PINNED: a failure AFTER the stage printed findings to the error stream; the bytes were already "
         f"on disk under a name this scanner controls (stderr was {err!r})")
-# GROUP 69 — the sixty-first round. `_cfd_still_ours` reads EVERY OSError from its identity
+# GROUP 69 — `_cfd_still_ours` reads EVERY OSError from its identity
 # fstat as "not ours". Both of preservation's cleanup handlers are gated on it, so an EIO or an
 # EACCES on a descriptor that is STILL OPEN and is the last reference to a findings inode
 # disarms the handler completely: no rescue, no close, and the findings are freed at process
@@ -10049,7 +10048,7 @@ def test_a_cleanup_acts_when_the_identity_question_cannot_be_answered(tmp_path: 
 
 
 # =============================================================================================
-# GROUP 70 — the sixty-first round. Once a stage exists, write_report's post-stage handler never
+# GROUP 70 — Once a stage exists, write_report's post-stage handler never
 # calls `_emit_unwritten_findings`, and the answer `_quarantine_unpublished` and `_false_or_rescue`
 # return is DISCARDED. When the staged name has stopped reaching the findings inode AND the
 # copy-out declines, the close in the finally is the last reference: nothing on disk, nothing on
@@ -10110,7 +10109,7 @@ def test_a_retention_answer_of_false_after_the_stage_still_reaches_the_operator(
 
 
 # =============================================================================================
-# GROUP 71 — the sixty-first round. Two plain assignments sit between the `except BaseException`
+# GROUP 71 — Two plain assignments sit between the `except BaseException`
 # that emits for a stage that could not be made and the `try:` whose handlers own the staged
 # descriptor. A cancellation delivered at either one leaves the stage on disk with nobody asking
 # whether to quarantine it under a reserved name, and no emission.
@@ -10171,7 +10170,7 @@ def test_no_statement_sits_between_the_stage_call_and_the_block_that_owns_its_de
 
 
 # =============================================================================================
-# GROUP 72 — the sixty-first round. `_stage_report`'s pre-write check tests the staged mode with
+# GROUP 72 — `_stage_report`'s pre-write check tests the staged mode with
 # `!= 0o600`, an inequality rather than a wideness test. A stage that reads back NARROWER than
 # owner-only — 0400, 0200, 0000 — is refused, which destroys this run's report file and pushes
 # the whole hit list onto the uncontrolled error stream.
@@ -10249,7 +10248,7 @@ def test_a_stage_narrower_than_owner_only_still_takes_the_findings(tmp_path: Pat
 # canonical name is ever taken while the strip is denied. Porting GROUP 73 would have spent
 # findings-never-lost to buy a guarantee the module already has. The reviewer's finding was real;
 # the fix it implied was not the one to make.
-# GROUP 74 — the sixty-first round. `_emit_unwritten_findings` ends in `except BaseException:
+# GROUP 74 — `_emit_unwritten_findings` ends in `except BaseException:
 # pass`, so a KeyboardInterrupt or a SystemExit delivered while it writes is SWALLOWED. Its
 # sibling `_write_refusal_report` documents the opposite policy in its own docstring — "a
 # cancellation is not a refusal to report".
@@ -10281,7 +10280,7 @@ def test_the_emission_does_not_swallow_a_cancellation(tmp_path: Path, cancellati
 
 
 # =============================================================================================
-# GROUP 75 — the sixty-first round. write_report takes `_held = os.fstat(fd)` immediately before
+# GROUP 75 — write_report takes `_held = os.fstat(fd)` immediately before
 # the rename and never consults `_held.st_mode`; only identity is checked, and only after the
 # rename. So this scanner can report a successful publication of an inode that was not 0600 at
 # the instant it landed at the canonical name.
@@ -10335,7 +10334,7 @@ def test_a_publication_is_refused_when_the_held_inode_is_not_owner_only(tmp_path
 
 
 # =============================================================================================
-# GROUP 76 — the sixty-first round. The emission is keyed on an EXCEPTION rather than on whether
+# GROUP 76 — The emission is keyed on an EXCEPTION rather than on whether
 # the bytes landed. `_stage_report` has a path that KEEPS a non-empty findings leftover and then
 # raises; the region above it then also prints the whole hit list to the error stream, so the
 # same findings are published twice — once to a file this scanner controls, once to a descriptor
@@ -10410,7 +10409,7 @@ def test_a_kept_partial_stage_does_not_also_put_the_findings_on_the_error_stream
 
 
 # =============================================================================================
-# GROUP 77 — the sixty-first round. `self_test` does `_load_identity_terms()[0]`. A terms file
+# GROUP 77 — `self_test` does `_load_identity_terms()[0]`. A terms file
 # that is LEGAL but holds only comments loads to an empty list, so `--self-test` dies with an
 # IndexError traceback instead of this module's own refusal type — the one state the loader
 # already documents (`_identity_terms` carries the comment about it) and does not refuse.
@@ -10442,7 +10441,7 @@ def test_a_comments_only_terms_file_refuses_rather_than_raising_indexerror(tmp_p
         f"missing input")
 
 
-# GROUP 78 — the sixty-first round, from the guarantee inventory rather than from a review. The
+# GROUP 78 — from the guarantee inventory rather than from a review. The
 # module's "never blocks" invariant was verified all over the REFUSAL path — every open there
 # carries O_PATH, O_NONBLOCK, O_DIRECTORY or O_EXCL, and several rounds were spent putting them
 # there. The scan itself, which is the one part of this tool that reads the UNTRUSTED tree, used a
@@ -10494,7 +10493,7 @@ def test_the_scan_does_not_wait_for_a_writer_on_a_planted_fifo(tmp_path: Path) -
         "stderr=%r" % (armed.returncode, armed.stderr[-400:]))
 
 
-# GROUP 79 — the sixty-first round, from the guarantee re-map. Two halves of this suite disagreed
+# GROUP 79 — from the guarantee re-map. Two halves of this suite disagreed
 # about what the fifth field of a hit tuple holds, and nothing compared them. One arm asserts
 # `surface in ("content", "name")` against a real scan; the emission arm hands `write_report` a
 # tuple whose fifth field is a secret and asserts it is withheld. Both pass. The second one cannot
@@ -10529,7 +10528,7 @@ def test_the_fifth_field_of_every_hit_names_an_arm_and_never_the_material(tmp_pa
     assert len(surfaces) == 2, (
         "CONTROL: both arms must have fired, or this measured only one branch of the domain "
         "(saw %r)" % sorted(surfaces))
-# GROUP 80 — the sixty-third round. `scan()` builds `hits` as a LOCAL LIST and the caller's name
+# GROUP 80 — `scan()` builds `hits` as a LOCAL LIST and the caller's name
 # is bound only when the function returns normally. Every refusal raised partway through the walk
 # — a malformed wide encoding, an unreadable input, a git failure on the file after the one that
 # already matched — unwinds out of `scan()` and takes the findings collected so far with it.
@@ -10589,7 +10588,7 @@ def test_findings_collected_before_a_refusal_reach_the_operator(tmp_path: Path) 
 
 
 # =============================================================================================
-# GROUP 81 — the sixty-third round. TWO LOADER OPENS ON A PATH THIS TOOL DOES NOT CONTROL.
+# GROUP 81 — TWO LOADER OPENS ON A PATH THIS TOOL DOES NOT CONTROL.
 # `_load_identity_terms` and `_allowlist` each ask `os.path.isfile` and then hand the SAME PATH to
 # a plain builtin `open`. Between the two calls the entry can become a named pipe, and the open of
 # a FIFO's read end waits for a writer — forever, against an invariant that says this module never
@@ -10683,11 +10682,11 @@ def test_a_loader_open_does_not_wait_for_a_writer_on_a_named_pipe(tmp_path: Path
 # The other half is real and is NOT closed: the walk still reads symlink TARGETS, so content from
 # outside the tree can be reported under an in-tree path. Fixing THAT without reintroducing the
 # mutant means telling an escaping link from a dangling one, which means resolving the target and
-# binding the comparison to a descriptor rather than a path — more machinery than a round should
+# binding the comparison to a descriptor rather than a path — more machinery than this repair should
 # improvise, and the two halves of the finding pull in opposite directions. It goes to the gate as
 # a design question with that framing, which is what produced a usable answer for the ownership
 # rule rather than a patch someone had to take back.
-# GROUP 83 — the sixty-third round. `_git` CALLS `subprocess.run` WITH `capture_output` AND
+# GROUP 83 — `_git` CALLS `subprocess.run` WITH `capture_output` AND
 # `check` AND NO TIMEOUT. Every selected-Git path in this module goes through it — the root
 # probe, the index read, every blob read — so a git that does not exit (a filesystem that will
 # not answer, an index lock held by another process, a `git` on PATH that hangs) parks the scan
@@ -10766,7 +10765,7 @@ def test_a_git_that_does_not_exit_is_given_up_on(tmp_path: Path) -> None:
 
 
 # =============================================================================================
-# GROUP 84 — the sixty-third round. `_emit_unwritten_findings` OPENS WITH "Never raises." and then
+# GROUP 84 — `_emit_unwritten_findings` OPENS WITH "Never raises." and then
 # re-raises KeyboardInterrupt and SystemExit — deliberately, and correctly: a cancellation is not
 # a failure to print, and the function's own comment says so at length three lines below the
 # handler. The sentence at the top was simply never updated, and it is the sentence a caller
@@ -10868,7 +10867,7 @@ def test_the_never_raises_docstring_names_what_the_code_lets_through(tmp_path: P
 
 
 # =============================================================================================
-# GROUP 85 — the sixty-third round. THE STRUCTURAL LINT, and the arm that runs it over the module.
+# GROUP 85 — THE STRUCTURAL LINT, and the arm that runs it over the module.
 #
 # `guard/fd_ownership_check.py` answers ONE question over the whole of `_tools/scan_gate.py`: does
 # any STATEMENT stand between a descriptor acquisition and the `try` whose `finally` releases it?
@@ -11125,7 +11124,7 @@ REJECTED_SHAPES = {
     """, "unowned"),
 
     # ------------------------------------------------------------------------------------------
-    # THE SIXTY-FIFTH ROUND'S SHAPE. Each of these is the accepted `acquire-then-own` fixture
+    # ACQUISITION AND OWNERSHIP SHAPE. Each of these is the accepted `acquire-then-own` fixture
     # above with the acquisition moved into a try of its own. ZERO statements still stand between
     # the two blocks, so the statement counter is satisfied by every one of them; the block rule
     # is the only thing that can tell them apart from the fixture they were derived from.
@@ -11370,7 +11369,7 @@ def test_zero_statements_between_is_accepted_and_the_lint_says_what_that_leaves_
         "the class that stays open")
     assert "syscall" in module.COVERAGE_DISCLOSURE and "no source check" in module.COVERAGE_DISCLOSURE, (
         "the disclosure must name what it does not cover, not merely exist")
-    # AND WHAT IT NOW DOES COVER. The sixty-fifth round widened the checker from "no statement
+    # AND WHAT IT NOW DOES COVER. The checker was widened the checker from "no statement
     # stands between" to "no statement and no BLOCK stands between", and a scope sentence that
     # still describes only the narrower question understates the instrument in the direction that
     # makes a later reader trust a pass less than it deserves — while a sentence that stopped
@@ -11435,7 +11434,7 @@ def test_no_statement_stands_between_an_acquisition_and_its_owner() -> None:
     assert not gaps, (
         "a descriptor is acquired away from the block that owns it:\n%s" % module.report(sites))
 
-    # AND THE CLAIM THE SIXTY-FIFTH ROUND ADDED: the sites where a BLOCK, rather than a statement,
+    # AND THE BLOCK-OWNERSHIP CLAIM: the sites where a BLOCK, rather than a statement,
     # stands between the acquisition and its owner. These are NOT zero, and pinning them at zero
     # would have meant repairing nine call sites in the same change that introduced the rule.
     # Pinned as an EXACT SET instead, by (function, acquirer), for the reason the list below is:
@@ -11463,7 +11462,7 @@ def test_no_statement_stands_between_an_acquisition_and_its_owner() -> None:
     cross_try = sorted((s.function, s.callee) for s in sites if s.verdict == "cross-try")
     assert cross_try == sorted([
         # `_copy_out_unpublished` and `write_report`'s stage call came OFF this list in the
-        # sixty-sixth round: both acquisitions are nested inside the blocks that release them now,
+        # Both acquisitions are nested inside the blocks that release them now,
         # and each has an executed arm that was red before the reshape. Removed deliberately, in
         # the same commit as the repair, which is what this list is for.
         ("_makedirs_owner_only", "_open_dir_nofollow"),
@@ -11504,7 +11503,7 @@ def test_no_statement_stands_between_an_acquisition_and_its_owner() -> None:
         # are held by `with` blocks and so are not here at all, which is the shape a new site should
         # take — this list is for sites that cannot yet be written that way, not a parking space.
         ("_load_identity_terms", "_open_untrusted_text"),
-        # `_makedirs_owner_only` came OFF this list in the sixty-fourth round: its child directory
+        # `_makedirs_owner_only` came OFF this list in the earlier revision: its child directory
         # descriptor is now handed over before the parent is released, so the finally names it from
         # the moment it exists. Removed deliberately, in the same commit as the repair, which is
         # what this list is for.
@@ -11515,7 +11514,7 @@ def test_no_statement_stands_between_an_acquisition_and_its_owner() -> None:
         "the set of acquisition shapes this lint cannot classify has CHANGED. If a new site "
         "appeared, put it in the accepted language rather than in this list. If one was repaired, "
         "take it out of this list in the same commit.\n%s" % module.report(sites))
-# GROUP 86 — the sixty-fourth round. THE PAYLOAD COMES FROM THE INDEX AND THE EXEMPTION POLICY
+# GROUP 86 — THE PAYLOAD COMES FROM THE INDEX AND THE EXEMPTION POLICY
 # COMES FROM THE WORKING TREE. `_publishable_files` selects Git when `.git` is present and hands
 # back staged blob OIDs, and `_scan_into` reads every byte it judges out of those blobs. One line
 # above that loop, `allow = _allowlist(staging)` opens `<staging>/_tools/scan_allow.tsv` through
@@ -11610,7 +11609,7 @@ def test_the_exemption_policy_is_read_from_the_same_tree_as_the_payload(tmp_path
 
 
 # =============================================================================================
-# GROUP 87 — the sixty-fourth round. A FAILED RESCUE IS RECORDED AS RETAINED EVIDENCE.
+# GROUP 87 — A FAILED RESCUE IS RECORDED AS RETAINED EVIDENCE.
 # `_false_or_rescue` answers False in three different situations: the staged name still reaches
 # the held inode (bytes retained under that name), the held inode is a status line (nothing worth
 # keeping), and `_copy_out_unpublished` could not make a copy at all (NOTHING retained). Only the
@@ -11751,7 +11750,7 @@ def test_findings_with_no_custody_are_not_recorded_as_retained(tmp_path: Path, m
 
 
 # =============================================================================================
-# GROUP 88 — the sixty-fourth round. AN OWNED DIRECTORY DESCRIPTOR ESCAPES DURING THE HANDOVER IN
+# GROUP 88 — AN OWNED DIRECTORY DESCRIPTOR ESCAPES DURING THE HANDOVER IN
 # `_makedirs_owner_only`. The loop opens `child`, runs the chmod under an `except BaseException`
 # that closes `child` and re-raises — and that handler's scope ENDS there. The next two statements
 # are `_close_quietly(fd)` and then `fd = child`. A cancellation delivered at that close leaves
@@ -11841,14 +11840,14 @@ def test_a_cancellation_at_the_handover_close_leaks_no_directory_descriptor(tmp_
 
 
 # =============================================================================================
-# GROUP 89 — the sixty-fourth round. A DIRECTORY THIS SCANNER CREATES KEEPS ITS INHERITED ACCESS
+# GROUP 89 — A DIRECTORY THIS SCANNER CREATES KEEPS ITS INHERITED ACCESS
 # CONTROL LISTS. A parent carrying a default ACL hands every new child BOTH an access ACL and a
 # default ACL of its own. `_harden_report_dir` then removes group and other WRITE from the mode
 # and restores the owner bits — and strips neither list. The mode bits are what every permission
 # arm in this suite reads, and they are exactly the channel an ACL does not travel on: the report
 # directory can read 0700 while a named user still holds entries on it, and the default list it
 # now carries hands the same entries to everything created inside it afterwards. The file-side
-# twin of this was closed in round twenty-odd ("the report now carries NO ACL: removing one is
+# twin of this was closed in an earlier revision ("the report now carries NO ACL: removing one is
 # always narrowing"); the directory the scanner creates was left out of that rule.
 # =============================================================================================
 
@@ -11915,7 +11914,7 @@ def test_a_report_directory_this_scanner_creates_carries_no_access_control_list(
 
 
 # =============================================================================================
-# GROUP 90 — the sixty-fourth round. THE HEADLINE DISCLOSURE AND THE NAME ARM DISAGREE. The module
+# GROUP 90 — THE HEADLINE DISCLOSURE AND THE NAME ARM DISAGREE. The module
 # docstring's fourth line says values are never printed, only file, line number, class and pattern
 # name. That is true of a CONTENT match and false of a NAME match: the name arm matches a secret
 # in a FILENAME, and the path column then carries the matched value verbatim into the report body,
@@ -11986,7 +11985,7 @@ def test_the_never_printed_disclosure_accounts_for_the_name_arm(tmp_path: Path) 
         "sentence has to say that — naming the content scope it holds for and the path that "
         "escapes it — or stop making the claim."
         % (unqualified[0], ", ".join(carried)))
-# GROUP 91 — the sixty-sixth round. A CANCELLATION IN THE CROSS-TRY TRANSITION TAKES THIS RUN'S
+# GROUP 91 — A CANCELLATION IN THE CROSS-TRY TRANSITION TAKES THIS RUN'S
 # FINDINGS WITH IT, IN `write_report`.
 #
 # `_stage_report` returns a descriptor whose findings body is ALREADY ON DISK. The call sits in a
@@ -12258,7 +12257,7 @@ def test_a_cancellation_between_the_stage_and_its_owner_does_not_lose_the_findin
 
 
 # =============================================================================================
-# GROUP 92 — the sixty-sixth round. THE SAME TRANSITION IN THE RESCUE, `_copy_out_unpublished`.
+# GROUP 92 — THE SAME TRANSITION IN THE RESCUE, `_copy_out_unpublished`.
 #
 # The rescue's `os.open` creates the stage inside a `try` of its own — the loop's retry guard,
 # with an `except BaseException` that closes the descriptor if the loop is cut short. That handler
@@ -12370,7 +12369,7 @@ def test_a_cancellation_between_the_rescue_stage_and_its_owner_does_not_lose_the
 
 
 # =============================================================================================
-# GROUP 93 — the sixty-sixth round. `_open_held_copy` HAS THE SAME TRANSITION AND THE LINT PASSES
+# GROUP 93 — `_open_held_copy` HAS THE SAME TRANSITION AND THE LINT PASSES
 # IT, because the function hands the descriptor back and the lint's shape D treats the release as
 # the caller's obligation.
 #
@@ -12509,12 +12508,12 @@ def test_a_cancellation_before_the_held_copy_guard_does_not_lose_the_preserved_f
 
 
 # =============================================================================================
-# GROUP 94 — the sixty-seventh round, repaired twice since. TWO CLAIMS THE CODE DID NOT SUPPORT:
+# GROUP 94 — TWO CLAIMS THE CODE DID NOT SUPPORT:
 # the lint's coverage sentence counted three sites of a shape the module has two of, and a comment
 # in `_open_held_copy` named a `finally` its block does not have.
 #
 # WHAT EACH LAYER HERE BINDS, stated exactly, because the sentence that used to sit in this place
-# claimed more than the code did and a reviewer proved it (team review, gate 64). There are three
+# claimed more than the code did and a reviewer proved it (team review). There are three
 # layers and they catch three different things:
 #
 #   the CHECKERS below hold the assertion and its message, and take their input as an argument;
@@ -12570,7 +12569,7 @@ def _own_scope_nodes(scope):
     `ast.walk` does not stop: given a function it descends into every `def` inside it, so a try
     belonging to an inner helper could be selected as the referent of a comment in the outer one.
     A reviewer built both directions of that — an inner `finally` excusing an outer claim, and an
-    inner `except` condemning a good one (team review, gate 64)."""
+    inner `except` condemning a good one (team review)."""
     out, stack = [], list(ast.iter_child_nodes(scope))
     while stack:
         node = stack.pop()
@@ -12585,7 +12584,7 @@ def unsupported_finally_claims(source: str):
     """Comment lines claiming a `finally` that the block they introduce does not have.
 
     THE RELATION, stated exactly, because the first version got it wrong in both directions (team
-    review, gate 63). The sentence introduces the block that follows it: the slot is preset, a try
+    review). The sentence introduces the block that follows it: the slot is preset, a try
     is entered, and that try's finally is the claim. So the referent is the FIRST `try` beginning at
     or after the comment, in the comment's own lexical scope — not "some enclosing try", which
     accepted an unrelated OUTER finally, and not the comment's own enclosing range, which rejected
@@ -12601,7 +12600,7 @@ def unsupported_finally_claims(source: str):
     if not claims:
         return []
     tree = ast.parse(source)
-    # STATED LIMIT (team review, gate 66): a class is a hard boundary in both directions, so a
+    # STATED LIMIT (team review): a class is a hard boundary in both directions, so a
     # claim inside a class body whose cleanup is a try/finally WRAPPING the whole class is flagged
     # even though it is true. That shape is legal and this predicate does not support it; the
     # phrase it keys on has never appeared in one.
@@ -12611,7 +12610,7 @@ def unsupported_finally_claims(source: str):
     # class body fell back to the module or the enclosing function — whose traversal then
     # deliberately excludes that class's own blocks. A truthful class-local claim found no try at
     # all, and a false one could be excused by an unrelated try further out. The boundary set and
-    # the candidate set have to be the same set (team review, gate 65).
+    # the candidate set have to be the same set (team review).
     scopes = [n for n in ast.walk(tree)
               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
     unsupported = []
@@ -12698,7 +12697,7 @@ def test_the_count_reader_reads_what_it_claims_to_read(sentence: str, expected) 
 def test_the_count_checker_is_the_assertion_the_arm_makes(
         label: str, disclosure: str, module: str, must_raise: bool) -> None:
     """CONTROL: parsing a number is not comparing it, and the version of this control that compared
-    two helper results itself never reached the arm's assertion (team review, gate 64). This drives
+    two helper results itself never reached the arm's assertion (team review). This drives
     `check_coverage_count` — the function the arm calls — and requires it to raise or not."""
     try:
         check_coverage_count(disclosure, module)
@@ -12782,8 +12781,8 @@ def test_the_finally_checker_binds_the_block_the_comment_introduces(
         label: str, source: str, must_raise: bool) -> None:
     """CONTROL: the arm passes by finding nothing, and this predicate has now been wrong in three
     distinct ways — an enclosing-range test that accepted an unrelated outer finally and rejected
-    the correct pre-try placement (gate 63), and an `ast.walk` that descended into nested functions
-    in both directions (gate 64). Each case here is one of those, driven through the checker the
+    the correct pre-try placement, and an `ast.walk` that descended into nested functions
+    in both directions. Each case here is one of those, driven through the checker the
     arm calls."""
     try:
         check_no_unsupported_finally_claim(source)
@@ -12799,7 +12798,7 @@ def test_the_finally_checker_binds_the_block_the_comment_introduces(
 def test_the_repaired_arms_still_call_their_checkers() -> None:
     """CONTROL, and the only layer that can see this: a control cannot notice that another TEST
     stopped testing. A reviewer replaced both arms above with `return` and every control stayed
-    green, twice, because the controls drive the checkers directly (team review, gates 63 and 64).
+    green, twice, because the controls drive the checkers directly instead of exercising these arms.
     This reads this file's own AST and requires each arm to still call the checker it is named for.
 
     It is a structural claim, not a behavioural one. An arm that calls its checker with the wrong
@@ -12817,7 +12816,7 @@ def test_the_repaired_arms_still_call_their_checkers() -> None:
             # BY TRAILING NAME, not by call shape. Keyed on `ast.Name` alone, a checker reached
             # through a module or an object — `checkers.check_coverage_count(...)` — parses as an
             # `ast.Attribute` and the tripwire would report the arm as gutted when it is not, or
-            # miss a rename that routed around it (team review, gate 65).
+            # miss a rename that routed around it (team review).
             called = {c.func.id if isinstance(c.func, ast.Name) else c.func.attr
                       for c in ast.walk(node)
                       if isinstance(c, ast.Call) and isinstance(c.func, (ast.Name, ast.Attribute))}
@@ -12832,7 +12831,7 @@ def test_the_repaired_arms_still_call_their_checkers() -> None:
         "that sees it." % "; ".join(missing))
 
 
-# GROUP 95 — the sixty-eighth round, repaired at the sixty-ninth. A COMMIT HASH CITED IN PROSE IS A
+# GROUP 95 — A COMMIT HASH CITED IN PROSE IS A
 # CLAIM A READER CAN CHECK, and one of them had been false for some time before anyone did. This
 # module and its documents cite the commit that settled a thing — `(team review, df87c71)` — many
 # times over. One of those, in `guard/README.md`, named a commit on no branch: an earlier instance
@@ -12846,20 +12845,20 @@ def test_the_repaired_arms_still_call_their_checkers() -> None:
 # The first version hand-listed the files to read and left out the file carrying the most citations
 # of all — this one — so a dangling hash here generated no lookup and no failure. It also excused
 # every hash in the table's left column without ever asking whether the RIGHT column resolves,
-# which is the half a reader actually follows (team review, gate 64). The file set is derived from
+# which is the half a reader actually follows (team review). The file set is derived from
 # what git tracks now, and both columns are checked.
 
-_HASH = re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7}\b")
+_HASH = re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b", re.IGNORECASE)
 
 # WHICH TRACKED FILES CAN CARRY PROSE. Declared by suffix, not discovered by whether a read
 # happened to succeed. The version before this one asked git for `*.md` and `*.py` and then
 # silently `continue`d past any file it could not decode, which made "every citation is checked"
-# unfalsifiable: an unreadable file counted as a file with no citations (team review, gate 65).
+# unfalsifiable: an unreadable file counted as a file with no citations (team review).
 # The repository's own rule is that UNMEASURED dominates a violation, so a file in this set that
 # cannot be read turns the arm RED and is named. Binaries are excluded by DECLARING them, below,
 # so that exclusion is a decision on the record rather than a swallowed exception.
 #
-# STATED LIMIT (team review, gate 66). An extensionless path is prose by declaration, which is
+# STATED LIMIT (team review). An extensionless path is prose by declaration, which is
 # right for the two git hooks and the licence and would be wrong for an extensionless BINARY — a
 # compiled file, a submodule, a symlink to a directory. Such a file would arrive as UNREADABLE and
 # turn the arm red, and adding "" to the binary set is not the remedy, since it would excuse every
@@ -12870,41 +12869,76 @@ _PROSE_SUFFIXES = {".md", ".py", ".sh", ".txt", ".tsv", ".csv", ".json", ".jsonl
                    ".yaml", ".toml", ".cfg", ".ini", ".svg", ".template", ".example",
                    # .hashes is the owner-phrase policy: hex digests and widths, read as text by
                    # the scanner, so it is scanned as prose and not excluded as an opaque blob.
+                   # .sha256 carries a text digest plus provenance; scan it as prose,
+                   # consistent with the production scanner's suffix-independent text views.
+                   ".sha256",
                    ".hashes", ""}
 _BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".ico", ".woff", ".woff2",
                     ".zip", ".gz", ".tar", ".stamp"}
 
 
-def cited_hashes(text: str):
-    """Short hashes cited in prose. Mixed letters and digits are required, so an ordinary
-    seven-letter word is not read as a hash; a longer hex run (a digest in a fixture) has no word
-    boundary inside it and is not matched either.
+def noncommit_hash_spans(text: str, rel: str):
+    """Explicit lexical forms that are not citations to this repository.
 
-    STATED LIMIT: an all-digit or all-letter short hash is not matched. Roughly one abbreviated
-    hash in forty is of that shape, and none of this repository's citations are (team review,
-    gate 65). The alternative — matching any seven hex characters — reads every English word
-    spellable in hex as a citation, and the arm becomes noise nobody runs. (The obvious examples
-    are not written here: this docstring is itself inside a file the arm reads, and naming one
-    made the arm report its own explanation as a dangling citation.)"""
-    return sorted(set(_HASH.findall(text)))
+    Each exemption covers only its named capture, never the whole line or file.
+    External action pins are commits in the action's repository, not this one.
+    The Python hex alphabet and RGBA colour literals are data. The abbreviated
+    credential specimen ends in an ellipsis. The synthetic doctor fixture's two
+    version fields are sample upstream/local labels, not repository provenance.
+    No other hex token beside one of these forms is exempt.
+    """
+    rules = []
+    if Path(rel).suffix in {".yml", ".yaml"}:
+        rules.append(("external-action", re.compile(
+            r"(?m)^\s*-\s+uses:\s+[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@"
+            r"(?P<hash>[0-9a-f]{40})(?:\s*(?:#.*)?)$")))
+    if Path(rel).suffix == ".py":
+        rules.extend([
+            ("hex-alphabet-literal", re.compile(
+                r"(?P<quote>['\"])(?P<hash>" + "0123" + "4567" + "89ab" + "cdef" + r")(?P=quote)")),
+            ("rgba-colour-literal", re.compile(
+                r"(?P<quote>['\"])#(?P<hash>[0-9a-f]{8})(?P=quote)")),
+        ])
+    rules.append(("abbreviated-credential-specimen", re.compile(
+        r"\bsk-prod-(?P<hash>[0-9a-f]{8})…")))
+    if rel == "tui/tests/fixtures/fleet-doctor.json":
+        rules.append(("synthetic-doctor-version", re.compile(
+            r'"detail": "Hermes Agent v[0-9.]+ \([0-9.]+\) \\u00b7 upstream '
+            r'(?P<hash>[0-9a-f]{8})(?= \\u00b7 local [0-9a-f]{8} \(\+1 carried commit\)")')))
+        rules.append(("synthetic-doctor-version", re.compile(
+            r'"detail": "Hermes Agent v[0-9.]+ \([0-9.]+\) \\u00b7 upstream '
+            r'[0-9a-f]{8} \\u00b7 local (?P<hash>[0-9a-f]{8})(?= \(\+1 carried commit\)")')))
+    return [(m.start("hash"), m.end("hash"), name)
+            for name, pattern in rules for m in re.compile(pattern.pattern, pattern.flags | re.IGNORECASE).finditer(text)]
 
+
+def cited_hashes(text: str, rel: str = ""):
+    """Mixed hex citations from seven through forty characters, with explicit data forms removed.
+
+    STATED LIMIT: an all-digit or all-letter token is not recognized as a citation,
+    preserving the short-token reader's distinction from numbers and English words.
+    A full SHA-256 digest is outside Git's hash width; a labelled short SHA-256
+    prefix has no exemption here and must be reviewed if one is introduced.
+    """
+    exempt = {(a, b) for a, b, _rule in noncommit_hash_spans(text, rel)}
+    return sorted({m.group().lower() for m in _HASH.finditer(text) if m.span() not in exempt})
 
 def hash_mapping_rows(staging_readme: str):
     """The mapping table as (retired, replacement) pairs. BOTH halves matter: the left column is
     what excuses a citation from resolving, and the right column is where a reader is sent."""
-    return re.findall(r"^\|\s*`([0-9a-f]{7})`\s*\|\s*`([0-9a-f]{7})`\s*\|\s*$",
-                      staging_readme, re.MULTILINE)
+    return [(old.lower(), new.lower()) for old, new in re.findall(r"^\|\s*`([0-9a-f]{7,40})`\s*\|\s*`([0-9a-f]{7,40})`\s*\|\s*$",
+                      staging_readme, re.MULTILINE | re.IGNORECASE)]
 
 
 def _resolves(sha: str) -> bool:
-    return subprocess.run(["git", "-C", str(REPO), "merge-base", "--is-ancestor", sha, "HEAD"],
+    return subprocess.run(["git", "-C", str(REPO), "merge-base", "--is-ancestor", sha.lower(), "HEAD"],
                           capture_output=True).returncode == 0
 
 
 def parse_tracked(stdout_bytes: bytes):
     """Paths out of `git ls-files -z` output, with the filesystem's bytes intact.
 
-    THREE THINGS THIS GETS RIGHT AND THE VERSION BEFORE IT DID NOT (team review, gate 66, both
+    THREE THINGS THIS GETS RIGHT AND THE VERSION BEFORE IT DID NOT (team review, both
     reproduced against real subprocess output before being believed):
 
     BYTES, NOT TEXT. `text=True` applies universal-newline translation to the stream, so a path
@@ -12944,8 +12978,7 @@ def prose_files(paths):
 def citing_files():
     """Every tracked file that could carry a citation, from git rather than a hand-kept list.
 
-    The hand-kept list omitted the file carrying more citations than any other (team review,
-    gate 64). A list that must be remembered is a list that will be wrong."""
+    The hand-kept list omitted the file carrying more citations than any other (team review). A list that must be remembered is a list that will be wrong."""
     paths = tracked_paths()
     if paths is None:
         return []
@@ -12962,6 +12995,7 @@ def scan_citations(files, read_text, resolves, retired):
     is read as UTF-8. A tracked source declaring a different encoding is not decoded leniently and
     not skipped either — it arrives as UNREADABLE and turns the arm red, which is the honest
     outcome for a file this arm cannot read rather than one it read and found clean."""
+    retired = {sha.lower() for sha in retired}
     dangling, unreadable, unclassified = [], [], []
     for rel in files:
         suffix = Path(rel).suffix.lower()
@@ -12975,7 +13009,7 @@ def scan_citations(files, read_text, resolves, retired):
         except (OSError, UnicodeDecodeError) as exc:
             unreadable.append("%s (%s)" % (rel, type(exc).__name__))
             continue
-        for h in cited_hashes(text):
+        for h in cited_hashes(text, rel):
             if h not in retired and not resolves(h):
                 dangling.append("%s cited in %s" % (h, rel))
     return sorted(set(dangling)), sorted(set(unreadable)), sorted(set(unclassified))
@@ -13044,7 +13078,7 @@ def test_every_commit_hash_cited_in_prose_resolves_or_is_recorded() -> None:
         % (len(dangling), "\n  ".join(dangling)))
 
 
-def test_every_tracked_suffix_is_classified() -> None:
+def test_every_tracked_suffix_is_classified(tmp_path: Path) -> None:
     """CONTROL: the arm above excludes binaries by declaration. A suffix in neither set would be
     scanned or skipped by accident depending on which branch it fell through, so the classification
     is required to be total over what git actually tracks."""
@@ -13061,11 +13095,37 @@ def test_every_tracked_suffix_is_classified() -> None:
         "CONTROL: %s tracked in this repository and in neither the prose set nor the binary set. "
         "Add it to one, with the decision visible." % unclassified)
 
+    # Classification must agree with the real secret scanner, not merely cover the index.
+    rel = "docs/checksums.sha256"
+    assert rel in prose_files([rel]), "CONTROL: digest provenance is readable prose"
+    driver = make_tool(tmp_path)
+    plant = openai_plant()
+    clean_text = "0" * 64 + "  fixture.txt\n# provenance: synthetic fixture\n"
+    for mode in ("git", "export"):
+        staging = make_staging(tmp_path, "sha256_" + mode, git_repo=(mode == "git"))
+        write(staging / rel, clean_text)
+        if mode == "git":
+            commit_all(tmp_path, staging)
+        proc = scan(tmp_path, driver, staging)
+        assert proc.returncode == 0, f"CONTROL[{mode}]: clean digest provenance passes"
+        assert report(staging) == "scan_gate: CLEAN\n"
+        write(staging / rel, clean_text + "# provenance: " + plant + "\n")
+        if mode == "git":
+            commit_all(tmp_path, staging)
+            # The staged blob must be scanned even after the worktree becomes clean.
+            write(staging / rel, clean_text)
+        proc = scan(tmp_path, driver, staging)
+        assert_values_absent([plant], staging, proc)
+        assert proc.returncode == 1, f"CONTROL[{mode}]: a secret in digest provenance blocks"
+        assert hits_for(staging, rel) == {
+            hit("SECRET", "openai-style-key", "content", rel, 3)
+        }, f"CONTROL[{mode}]: report the exact digest provenance hit"
+
 
 def test_an_unreadable_file_is_reported_not_skipped() -> None:
     """CONTROL: the previous version caught OSError and UnicodeDecodeError and continued, so a file
     it could not read counted as a file with no citations and the arm still reported CLEAN (team
-    review, gate 65). This drives the same scanner with a reader that raises."""
+    review). This drives the same scanner with a reader that raises."""
     def raises(rel):
         raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "injected: not decodable")
 
@@ -13086,7 +13146,7 @@ def test_an_unreadable_file_is_reported_not_skipped() -> None:
 
 
 def test_the_mapping_table_sends_readers_somewhere_that_exists() -> None:
-    """REPAIRED (team review, gate 64): the left column excused a citation from resolving and
+    """REPAIRED (team review): the left column excused a citation from resolving and
     nothing ever asked about the right column, which is the half a reader actually follows. A table
     whose destinations are wrong is worse than no table: it answers the question incorrectly
     instead of leaving it open."""
@@ -13127,9 +13187,56 @@ def test_the_citation_readers_can_tell_a_hash_from_a_word() -> None:
         "reported dangling and the arm above would be red for the wrong reason.")
 
 
+def test_citation_mapping_reader_accepts_long_abbreviations():
+    short = "df87" + "c71"
+    longer = short + "a12b3"
+    full = longer + "0" * 28
+    assert len(longer) == 12 and len(full) == 40
+    assert cited_hashes("settled in " + longer) == [longer]
+    assert cited_hashes("settled in " + full) == [full]
+    dangling, unreadable, unclassified = scan_citations(
+        ["docs/citation.md"], lambda _: "settled in " + longer,
+        lambda _: False, set())
+    assert dangling == [longer + " cited in docs/citation.md"]
+    assert not unreadable and not unclassified
+    assert hash_mapping_rows("| `" + longer + "` | `" + full + "` |\n") == [(longer, full)]
+
+
+def test_citation_mapping_reader_noncommit_forms_have_narrow_controls():
+    action = "a1" * 20
+    alphabet = "0123" + "4567" + "89ab" + "cdef"
+    colour = "1234" + "56ff"
+    specimen = "9f8a" + "7b6c"
+    upstream, local = "a9b5" + "5989", "8ab7" + "246c"
+    doctor = ('"detail": "Hermes Agent v0.17.0 (2026.6.19) \\u00b7 upstream '
+              + upstream + ' \\u00b7 local ' + local + ' (+1 carried commit)"')
+    cells = [
+        ("external-action", ".github/workflows/check.yml",
+         " - uses: actions/checkout@" + action + " # pinned", [action],
+         "commit " + action, "README.md"),
+        ("hex-alphabet-literal", "tool.py", 'digits = "' + alphabet + '"', [alphabet],
+         'commit "' + alphabet + '"', "README.md"),
+        ("rgba-colour-literal", "fixture.py", "colour = '#" + colour + "'", [colour],
+         "commit '" + colour + "'", "fixture.py"),
+        ("abbreviated-credential-specimen", "skill.md", "sk-prod-" + specimen + "…", [specimen],
+         "sk-prod-" + specimen, "skill.md"),
+        ("synthetic-doctor-version", "tui/tests/fixtures/fleet-doctor.json", doctor, [upstream, local],
+         doctor, "docs/doctor.json"),
+    ]
+    for rule, rel, text, tokens, near, near_rel in cells:
+        assert cited_hashes(text, rel) == [], rule
+        spans = noncommit_hash_spans(text, rel)
+        assert {text[a:b] for a, b, name in spans if name == rule} == set(tokens), rule
+        assert cited_hashes(near, near_rel) == sorted(tokens), (rule, near)
+        # A neighbouring ordinary citation on the exempt line remains visible.
+        planted = "df87" + "c71"
+        assert planted in cited_hashes(text + " commit " + planted, rel), rule
+        print("CITATION_RULE_CONTROL " + rule + " exempt=yes near-citation=reported neighbour=reported")
+
+
 def test_the_citation_arm_reads_this_file_too() -> None:
     """CONTROL: the hand-kept file list left this module out, and a reviewer planted an unresolved
-    citation here that produced no lookup at all (team review, gate 64). The set is derived from
+    citation here that produced no lookup at all (team review). The set is derived from
     git now; this requires the file carrying the most citations to be in it."""
     if not (REPO / ".git").exists():
         pytest.skip("no git history here: the tracked file list comes from git")
@@ -13172,7 +13279,7 @@ def test_the_finally_checker_treats_a_class_as_a_scope_it_can_select(
         label: str, source: str, must_raise: bool) -> None:
     """CONTROL: a class was a boundary the walker refused to enter and NOT a scope the selector
     could choose, so a comment in a class body was judged against blocks that are not its own — in
-    both directions (team review, gate 65). The boundary set and the candidate set are one set."""
+    both directions (team review). The boundary set and the candidate set are one set."""
     try:
         check_no_unsupported_finally_claim(source)
     except AssertionError:
@@ -13185,7 +13292,7 @@ def test_the_finally_checker_treats_a_class_as_a_scope_it_can_select(
 
 
 def test_the_tracked_path_reader_keeps_the_bytes_git_gave_it() -> None:
-    """CONTROL, from a reviewer's two reproductions (team review, gate 66). Both were silent: the
+    """CONTROL, from a reviewer's two reproductions (team review). Both were silent: the
     planted citation received ZERO lookups and every assertion passed, which is the exact failure
     the read-failure repair had just closed one layer up.
 
@@ -13205,7 +13312,7 @@ def test_the_tracked_path_reader_keeps_the_bytes_git_gave_it() -> None:
 def test_a_whitespace_named_prose_file_is_scanned_not_skipped() -> None:
     """CONTROL: intake and scan together. The defect was at the boundary between them — passing the
     space-named file to the scanner directly always worked, and the enumeration never handed it
-    over (team review, gate 66). This drives the real path from git's bytes to the finding."""
+    over (team review). This drives the real path from git's bytes to the finding."""
     # A SINGLE SPACE, and no suffix — which is what made the old filter drop it. A name that kept
     # an extension survived `.strip()` and proved nothing; the fixture has to be the input the
     # defect actually discarded. An extensionless path is prose by declaration, so this file is
@@ -13278,3 +13385,28 @@ def test_a_shallow_checkout_is_recognised_as_unmeasurable(tmp_path: Path) -> Non
     assert (shallow / ".git").exists(), (
         "CONTROL: the fixture is only meaningful because `.git` EXISTS in a shallow clone — that "
         "is why the old `.git`-existence test passed straight through it.")
+
+
+def test_citation_case_forms_and_mapping_are_normalized():
+    lower = '1a58' + '640b'
+    full = lower + '0' * 32
+    for value in (lower, lower.upper(), lower[:-1] + lower[-1].upper(), full.upper()):
+        expected = value.lower()
+        assert cited_hashes('`' + value + '`') == [expected]
+        seen = []
+        dangling, unreadable, other = scan_citations(
+            ['README.md'], lambda _: '`' + value + '`',
+            lambda h: seen.append(h) or False, set())
+        assert seen == [expected] and dangling == [expected + ' cited in README.md']
+        assert not unreadable and not other
+        assert hash_mapping_rows('| `' + value + '` | `' + lower.upper() + '` |\n') == [(expected, lower)]
+        assert scan_citations(['README.md'], lambda _: '`' + value + '`', lambda _: False,
+                              {lower.upper(), full.upper()})[0] == []
+        print('CITATION_CASE_CONTROL', value, 'normalized=' + expected)
+    colour = 'a1b2' + 'c3d4'
+    # Markdown prose cannot distinguish an untyped #hex token from a hash citation;
+    # it is checked. Only a quoted Python colour literal is exempt.
+    for value in (colour, colour.upper(), colour[:-1] + colour[-1].upper()):
+        assert cited_hashes('#' + value, 'README.md') == [colour]
+        assert cited_hashes("'#" + value + "'", 'fixture.py') == []
+    print('MARKDOWN_RGBA_CONTROL reported; quoted-Python-RGBA exempt (both cases)')

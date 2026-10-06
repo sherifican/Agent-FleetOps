@@ -1,13 +1,30 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "fleet_tui"
 version = "4.0"
 description = "Lightweight Textual monitor/inbox/control window over a local/cloud model fleet"
 requires-python = ">=3.11"
-dependencies = ["textual>=0.60", "pyte>=0.8", "textual-serve>=1.1"]
+dependencies = ["rich", "textual>=0.60", "pyte>=0.8", "textual-serve>=1.1"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=1"]
+dev = ["pytest>=8.4", "pytest-asyncio>=1"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fleet_tui*"]
+exclude = ["specs*", "tests*"]
+namespaces = false
 
 [tool.pytest.ini_options]
+# Resolve from this config directory before importing the early isolation plugin.
+# Also prefer this checkout over an editable install from another checkout.
+# pytest 8.4 applies pythonpath before importing plugins named in addopts.
+pythonpath = ["."]
+addopts = "-p tests._isolation"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1

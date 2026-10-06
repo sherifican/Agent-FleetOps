@@ -105,7 +105,7 @@ this constant — that is the point: the extension becomes a deliberate, reviewa
    bans. Anywhere else it is a violation.
    A line-wise exclusion, which is what this rule used to be, excuses everything else on
    the line too, so a real prescription sharing a line with a later "instead of" reads clean. The
-   sibling scanner proved the narrower half already: `guard/tests/test_brief_scan.py:81-82` — "only
+   sibling scanner proved the narrower half already: `guard/tests/test_brief_scan.py::test_a_negated_leak_still_fires_when_the_negation_follows_it` — "only
    text BEFORE the match suppresses, so a leak whose sentence happens to contain a later 'not' is
    still a leak." Report as `preamble prescribes banned verb 'TRY'`.
 

@@ -78,6 +78,8 @@ def test_read_sidecars_parses_v1_models(monkeypatch):
             return _Resp('{"data":[{"id":"gemma4-e4b-q4-k-m"}]}')
         raise OSError("down")                         # :8090 asleep
     monkeypatch.setattr(modelstate.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(modelstate, "_sidecar_vram_mb", lambda port: 0)
+    monkeypatch.setattr(modelstate, "_sidecar_busy", lambda port: False)
     recs = modelstate.read_sidecars()
     assert any(r["name"] == "gemma4-e4b-q4-k-m" and r["port"] == 8336 for r in recs)
     assert all(r["port"] != 8090 for r in recs)      # the down endpoint contributes nothing

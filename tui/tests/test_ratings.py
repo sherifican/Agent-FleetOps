@@ -24,5 +24,8 @@ def test_corrupt_and_missing_safe(tmp_path):
     p.write_text('{"target":"x","up":true,"speed_s":5}\nnot json\n{"target":"x","up":false}\n')
     s = ratings.summary(str(p))
     assert s["x"]["up"] == 1 and s["x"]["down"] == 1        # bad line skipped, good ones counted
-    # rate to an unwritable path → False, never raises
-    assert ratings.rate("x", True, path="/no/such/dir/r.jsonl") is False
+    # A file cannot be a parent directory, even when the test runs as root.
+    parent = tmp_path / "not-a-directory"
+    parent.write_text("keep this file")
+    assert ratings.rate("x", True, path=str(parent / "r.jsonl")) is False
+    assert parent.read_text() == "keep this file"

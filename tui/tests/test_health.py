@@ -2,7 +2,7 @@
 
 import os
 import json
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 import pytest
 
@@ -169,14 +169,16 @@ def test_empty_services_environment_disables_probes(monkeypatch):
     health._cache.clear()
 
 
-def test_snapshot():
+def test_snapshot(monkeypatch):
     """Test the snapshot convenience function."""
+    monkeypatch.setattr(health.subprocess, "run", Mock(side_effect=FileNotFoundError("fixture command unavailable")))
     # This should not raise any exceptions
     snap = snapshot()
     assert isinstance(snap, HealthSnapshot)
 
 
-def test_read_disk():
+def test_read_disk(monkeypatch):
+    monkeypatch.setattr(health.subprocess, "run", Mock(side_effect=FileNotFoundError("fixture command unavailable")))
     health._cache.clear()
     d = health.read_disk("/")          # a path that always exists
     assert d and d["total_gb"] > 0 and d["free_gb"] >= 0

@@ -135,7 +135,7 @@ def test_archive_refuses_a_linked_companions_json_destination(monkeypatch, tmp_p
 
     The source passes an explicit leaf here rather than a directory, so the same walk that catches a
     linked image leaf catches this one. That is an argument from reading the code, and a guard nobody
-    exercises is a guard nobody knows the state of: the previous review round named this path and
+    exercises is a guard nobody knows the state of: an earlier review named this path and
     there was nothing to point at. This arm points at it.
     """
     primary, image, mount = _staged(tmp_path, monkeypatch)
@@ -163,7 +163,7 @@ def test_archive_refuses_a_linked_companions_json_destination(monkeypatch, tmp_p
 
 
 def test_archive_refuses_a_linked_synthesis_destination(monkeypatch, tmp_path):
-    """The round-1 blocker itself, which the repair shipped WITHOUT an arm of its own.
+    """The earlier blocker itself, which the repair shipped WITHOUT an arm of its own.
 
     A reviewer demonstrated the gap by reverting the one-line join back to the directory form and
     running the suite: it stayed green, so the headline fix of that commit was pinned by nothing.
@@ -200,7 +200,7 @@ def test_archive_refuses_a_linked_synthesis_destination(monkeypatch, tmp_path):
 
 
 def test_a_directory_named_like_the_file_is_not_a_usable_destination(monkeypatch, tmp_path):
-    """Round-2 review, F1: checking the leaf is not enough while copy2 can reinterpret it.
+    """Earlier review: checking the leaf is not enough while copy2 can reinterpret it.
 
     shutil.copy2 appends the source basename to ANY existing directory it is handed. Naming the leaf
     explicitly moved the problem one level down instead of removing it: if a DIRECTORY sits at the
@@ -299,7 +299,7 @@ def test_the_synthesis_copy_lands_at_its_own_leaf_inside_the_run_directory(monke
 
 
 def test_the_summary_does_not_claim_work_that_was_refused(monkeypatch, tmp_path, capsys):
-    """Round-3 review, F3: the closing line reports success the run did not achieve.
+    """Earlier review: the closing line reports success the run did not achieve.
 
     Every refusal added here prints its own warning and then falls through to one unconditional
     summary that says the manifest was copied and the primary was cleared. A reader who sees the
@@ -338,7 +338,7 @@ def test_the_summary_does_not_claim_a_cleared_primary_while_an_image_remains(mon
 
 
 def test_a_refusal_names_the_reason_it_actually_had(monkeypatch, tmp_path, capsys):
-    """Round-4 review: the refusal text named a cause that had not occurred.
+    """Earlier review: the refusal text named a cause that had not occurred.
 
     _file_destination_ok refuses for two different reasons — the destination escapes the mount, or
     something stands at the leaf that copy2 would write straight through. Both call sites printed

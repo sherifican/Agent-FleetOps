@@ -129,7 +129,7 @@ If `auto_fix_tier_1` config enabled, auto-execute Tier 1 fixes:
 - Add missing MEMORY.md index entries (append at logical position)
 - ⛔ **NOT auto-fixable: content drift between the canonical and secondary memory paths.** An earlier
   version of this list allowed copying "toward whichever copy is newer" when the secondary path was
-  confirmed to be a mirror. That contradicted Pitfall 1 below and the Tier 2 definition above, and it
+  confirmed to be a mirror. That contradicted the Tier 2 definition above, and it
   is unsafe on its own terms: confirming a path is a *mirror* establishes nothing about which copy is
   *authoritative*, and the newer file can easily be the wrong one. Recency is not authority.
   Surface it as Tier 2 and let the owner pick the winner.
@@ -143,7 +143,7 @@ Tier 2 + Tier 3 findings get surfaced to the owner as a structured questionnaire
 
 ## Pitfalls
 
-1. **Don't auto-fix content drift between the canonical and secondary memory paths.** Picking which version "wins" requires owner judgment (one path may have intentional newer content, and the secondary path may be a curated subset rather than a mirror). Surface as Tier 2.
+1. **Content-drift disposition:** we follow [Step 4 — Auto-fix Tier 1](#step-4--auto-fix-tier-1-optional-owner-configurable), which owns the rule for resolving drift between canonical and secondary memory paths.
 
 2. **Don't flag intentional version skips.** Some version segments are skipped legitimately (on the reference setup, one version was originally NOT supposed to have a VERSION_HISTORY entry per the project's version-suffix memory rule; it was backfilled as a stub later). Cross-reference against the suffix rule before flagging.
 
@@ -165,7 +165,7 @@ To test:
 4. If auto-fix enabled, verify MEMORY.md gains the entry; if disabled, verify Tier 1 surface only.
 5. Clean up: `rm <project-root>/memory/feedback_test_orphan.md` + remove the MEMORY.md entry.
 
-Manual fallback (no agent framework): a standalone `python3 tools/brain_audit.py` script triggered by an agent post-edit hook OR a git pre-commit hook (runs on staged brain-file edits).
+Manual fallback (no agent framework): `tools/brain_audit.py` is not shipped in this repository. We perform Step 1's inventory and the six checks described in Step 2 manually, then write Step 3's report. For any fixes, we follow [Step 4 — Auto-fix Tier 1](#step-4--auto-fix-tier-1-optional-owner-configurable) and Step 5's reporting procedure. The hook/cron integration mentioned above requires adopter setup; it is not supplied automation.
 
 ## Related memory rules (reference setup)
 
@@ -188,7 +188,7 @@ config:
   auto_fix_tier_1:
     type: bool
     default: false
-    description: If true, automatically apply Tier 1 fixes (MEMORY.md index adds, single-direction dual-write sync). Always logs to the audits dir.
+    description: If true, we apply only the fixes authorized by Step 4 — Auto-fix Tier 1, following its logging requirement.
   brain_edit_cooldown_minutes:
     type: int
     default: 5

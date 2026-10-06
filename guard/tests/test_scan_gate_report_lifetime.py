@@ -1,4 +1,4 @@
-"""GROUP 69 — the executed adversarial review of 3adf105 (round sixty, gate fifty-five).
+"""GROUP 69 — the executed adversarial review of 3adf105 (an earlier internal build).
 
 Four arms, all RED on 3adf105. Each one was proved bidirectional before it was reported: the
 module was changed so the arm's target behaviour holds, the arm went GREEN, and the change was
@@ -116,7 +116,7 @@ def _inject_at(driver: Path, func_name: str, lines, before=None):
 def _statements_between_the_stage_and_its_owner(driver: Path):
     """The statements ``write_report`` executes after ``_stage_report`` returns and before the
     ``try:`` whose ``finally`` closes the descriptor it returned. Computed from the AST, so the
-    arm asks about the SHAPE rather than about a line number that a later round will move."""
+    arm asks about the SHAPE rather than about a line number that a later revision will move."""
     tree = ast.parse(driver.read_text(encoding="utf-8"))
     fn = next(n for n in ast.walk(tree)
               if isinstance(n, ast.FunctionDef) and n.name == "write_report")
@@ -146,7 +146,7 @@ def _statements_between_the_stage_and_its_owner(driver: Path):
 
 
 def test_a_failure_while_the_findings_body_is_built_still_reaches_the_operator(tmp_path: Path) -> None:
-    """RED on 3adf105. The round wired the emission to the region that obtains the report directory
+    """RED on 3adf105. The earlier implementation wired the emission to the region that obtains the report directory
     and to the stage call, and its own commit calls that "every channel above the first durable
     byte". The BODY CONSTRUCTION sits between those two guards and is covered by neither: the join
     over the hits is above the first durable byte, and a failure there takes the findings with it —
@@ -238,8 +238,8 @@ def test_no_bare_statement_stands_between_the_stage_and_the_block_that_owns_it(t
 def test_preservation_owns_the_held_canonical_from_the_open(tmp_path: Path) -> None:
     """RED on 3adf105. ``_cfd, _cvia = _open_held_copy(...)`` opens the canonical findings report,
     and ``if _cfd is None:`` runs before the ``try:`` whose ``finally`` asks ``_cfd_still_ours``
-    and closes it. A cancellation at that guard leaks the descriptor — the same defect this round
-    closed one statement lower and the round before closed at the narrowing, at the one statement
+    and closes it. A cancellation at that guard leaks the descriptor — the same defect this repair
+    closed one statement lower and the earlier implementation closed at the narrowing, at the one statement
     above both of them. The module states the cost itself at that finally: the hold leaks to
     process exit and a name taken afterwards takes the findings with it.
 

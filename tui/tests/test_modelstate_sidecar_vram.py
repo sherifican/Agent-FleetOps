@@ -13,6 +13,7 @@ def test_read_sidecars_attaches_gb_from_process(monkeypatch):
                         lambda url, timeout=0: _R('{"data":[{"id":"gemma4-e4b-q4-k-m"}]}') if "8336" in str(url) else (_ for _ in ()).throw(OSError()))
     # stub the port->VRAM resolver to return 144 MiB for :8336
     monkeypatch.setattr(modelstate, "_sidecar_vram_mb", lambda port: 144 if port == 8336 else 0)
+    monkeypatch.setattr(modelstate, "_sidecar_busy", lambda port: False)
     recs = modelstate.read_sidecars()
     r = next(x for x in recs if x["port"] == 8336)
     assert r.get("gb", 0) > 0, "sidecar should carry real VRAM, not 0"

@@ -1,0 +1,4 @@
+# Explicit blank policy: U+2800, U+13441, U+13442, U+1D159.
+# Separate from Unicode category membership; includes the null-notehead policy.
+# Hash ASCII uppercase six-digit hexadecimal code points, each followed by LF.
+bc8e5c79da4aa48d2442733934134698772351a3e689f297fae18b7276429ba8

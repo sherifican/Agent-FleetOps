@@ -1,5 +1,7 @@
 """Gate for sources/network.py (authored by the orchestrator; the local lane implements the source to pass THIS).
 Bridge-status source: PC↔Fleet direct link + Telegram bridge. Pure build_network + safe readers."""
+from unittest.mock import Mock
+
 from fleet_tui.sources import network
 
 
@@ -33,7 +35,8 @@ def test_link_up_but_pc_down():
     assert d["pc"]["link_up"] is True and d["pc"]["reachable"] is False
 
 
-def test_readers_never_raise():
+def test_readers_never_raise(monkeypatch):
+    monkeypatch.setattr(network.subprocess, "run", Mock(side_effect=FileNotFoundError("fixture command unavailable")))
     assert isinstance(network.read_ip_addr(), str)
     assert network.read_pc_reachable("192.0.2.1") in (True, False)     # TEST-NET, unroutable → False, no raise
     assert network.read_gateway() in (True, False)
@@ -41,7 +44,8 @@ def test_readers_never_raise():
     assert network.read_telegram_seen_mtime("/no/such/file/xyz") == 0.0
 
 
-def test_status_shape():
+def test_status_shape(monkeypatch):
+    monkeypatch.setattr(network.subprocess, "run", Mock(side_effect=FileNotFoundError("fixture command unavailable")))
     s = network.status()
     assert isinstance(s, dict) and "pc" in s and "telegram" in s
     assert set(s["pc"]) == {"link_up", "reachable", "ip"}

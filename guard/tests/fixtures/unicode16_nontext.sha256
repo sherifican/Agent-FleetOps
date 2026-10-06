@@ -1,0 +1,7 @@
+# Unicode 16.0.0 category membership: Cc Cf Cs Zs Zl Zp Mn Me
+# Source: https://www.unicode.org/Public/16.0.0/ucd/UnicodeData.txt
+# Source SHA-256: ff58e5823bd095166564a006e47d111130813dcf8bf234ef79fa51a870edb48f
+# Expand First/Last records; select field 3 categories above; sort code points.
+# Hash ASCII uppercase six-digit hexadecimal code points, each followed by LF.
+# Membership count: 4335. Generated from the UCD file, not the gate table.
+567f9722160ccc7264bc9eda600a178a1c0e14a266b0f879a790f2dddec06f1f

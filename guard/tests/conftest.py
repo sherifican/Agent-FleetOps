@@ -24,6 +24,7 @@ import hashlib
 import os
 import pathlib
 import site
+import sys
 
 import pytest
 
@@ -75,11 +76,23 @@ def pytest_configure(config):
     This marker is the ONLY sanctioned way out of the clear-list.  A test
     using it takes responsibility for what it touches.
     """
+    # A new pytest.main session must not inherit a previous preflight result.
+    sys._fetch_gate_teeth_unmeasured = None
     config.addinivalue_line(
         "markers",
         "no_env_isolation: opt out of the ambient-environment clear-list; "
         "the test takes responsibility for what it touches",
     )
+
+def pytest_sessionfinish(session, exitstatus):
+    """UNMEASURED dominates failure, even with continued collection errors.
+
+    Only the teeth's pre-import environment check sets this marker. Ordinary
+    assertions/collection failures retain pytest's own exit status.
+    """
+    if getattr(sys, "_fetch_gate_teeth_unmeasured", None) is not None:
+        session.exitstatus = 2
+
 
 # ---------------------------------------------------------------------------
 # Per-test environment isolation

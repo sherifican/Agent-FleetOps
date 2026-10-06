@@ -166,4 +166,40 @@ The middle row is the dangerous one, and it is why adaptation is not a copy-past
 
 ## Install
 
-The hook is a standard Claude Code / agent **Stop hook**: register `guard/honesty_stop_gate.py` as a `Stop` hook in your agent's settings, adapt the config via the skill, run `--check-config` (it flags any verification command whose binary does not exist on your box — a stair to nowhere). It also contains a check for an empty required list, but that one cannot fire: the loader discards an empty required list and keeps the default before the validator ever sees it, so the branch is unreachable. Safe behaviour, unreachable check — do not read its silence as confirmation, and confirm `--self-test` passes on your machine. It emits a `{"decision": "block", "reason": …}` JSON object when it blocks and exits silently (0) otherwise; a config that is unreadable, invalid JSON, empty in a required list, or contains a malformed regex falls back to the built-in defaults rather than disabling the gate. The guarantee is not blanket, in two different directions. A `null` *inside* a required list raises `TypeError` in `compile_config` rather than falling back, because `try_compile` catches only `re.error`. That exception escapes to the top level: the hook exits **1** with a traceback and prints no block JSON at all, which for a Stop hook is the same as not running — it fails **open**, not closed, and it is *not* the `CANNOT CHECK` path (that path fires only when the transcript itself cannot be parsed). Measured: with `{"claim_patterns": [null]}` the hook exits 1 on a transcript whose unbacked claim the default config blocks. And a regex that is syntactically valid but matches nothing compiles cleanly and disables claim detection **silently** — the one shape `--check-config` will not catch.
+The hook uses a Claude Code / agent **Stop hook** contract: register `guard/honesty_stop_gate.py`, adapt the config via the skill, and run `--check-config`. A supported harness passes a `transcript_path` and honors the hook's `{"decision": "block", "reason": …}` response. The hook exits silently (0) when it finds no blocking claim. Verify this harness behavior end-to-end; a local self-test alone does not exercise installation.
+
+Configuration loading preserves defaults for omitted keys. The three required regex lists (`claim_patterns`, `verification_commands`, `subjects`) and the file-scan lists (`write_path_keys`, `heredoc_sinks`, `arg_sinks`) require nonempty lists of nonblank strings. `completion_pattern` requires a nonblank string; `non_subjects` requires a list of strings and may be empty. The hook and validator check the same fully wrapped regex expressions. Invalid fields retain their own built-in defaults without discarding valid sibling overrides. `--check-config` nevertheless refuses those overrides with a field-specific diagnostic and exit 1; runtime fallback is not configuration acceptance.
+
+A selected configuration that is unreadable, undecodable, malformed JSON or a nonobject JSON value retains the defaults and is reported as a configuration problem. An explicitly selected missing/nonfile path is also refused; ordinary absence of the default config is permitted. These checks close the earlier null-element crash and make empty-list fallback visible to the validator. They cover the named boundaries, not every optional-field policy or arbitrary runtime failure.
+
+`--check-config` also refuses any configured verification command whose binary cannot be found. It does not prove that an existing binary observes the subject, and a syntactically valid regex that matches nothing can still disable detection for that claim vocabulary. Wrong but well-typed harness field names can likewise leave file-written claims unseen. Run the built-in `--self-test` for its default fixtures, then prove both an unbacked block and a backed pass through the installed harness with the user's actual configuration. Neither syntax validation nor executable presence proves that a probe's output establishes the claimed state.
+
+### Stable Unicode configuration presence
+
+The presence check uses a frozen Unicode 16 table for controls, formats,
+separators, surrogates and bare nonspacing/enclosing marks, plus the embedded
+Unicode 14 Default_Ignorable_Code_Point ranges. It never consults the running
+interpreter's category table. Unassigned characters may be newer letters;
+private-use characters may have glyphs defined by private agreement. Both are
+accepted unless independently excluded. All 66 noncharacters are refused.
+U+2800 and U+FFFC remain excluded as a blank cell and external-content placeholder.
+This is a presence policy, not a font renderer; accepted strings remain unchanged.
+See [Unicode categories](https://www.unicode.org/versions/Unicode16.0.0/core-spec/chapter-4/)
+and [private use and special areas](https://www.unicode.org/versions/Unicode16.0.0/core-spec/chapter-23/).
+
+Egyptian full and half blanks U+13441/U+13442 are also refused: Unicode 16
+[section 11.4.4](https://www.unicode.org/versions/Unicode16.0.0/core-spec/chapter-11/)
+defines whitespace rendering. The shaded lost signs U+13443–U+13446 remain text.
+
+Unicode 16 §21.2 says U+1D159 NULL NOTEHEAD “has no distinct visual appearance
+of its own”. Its following rendering guidance also says “some indication of its
+presence, as for instance a dotted box glyph, should be shown” outside full
+musical rendering, and identifies it as not default ignorable. These excerpts
+cover both the intrinsic appearance and the required fallback indication.
+U+1D159 remains refused here because a config hint containing only a null
+notehead carries no readable text for an operator, even with that indication.
+Spacing marks (Mc), including U+1D165 MUSICAL SYMBOL COMBINING STEM, remain
+accepted. A category or name containing “blank” or “null” alone is insufficient:
+U+2400 SYMBOL FOR NULL, U+2422 BLANK SYMBOL and U+2205 EMPTY SET draw symbols.
+See [Unicode musical notation](https://www.unicode.org/versions/Unicode16.0.0/core-spec/chapter-21/)
+and [NamesList](https://www.unicode.org/Public/16.0.0/ucd/NamesList.txt).

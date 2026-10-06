@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-# This file encodes the authors' policy; adopters replace the policy table documented in guard/README.md.
+# Policy table: guard/README.md, Instance policy and external archive paths.
+# Operator procedure: that section's In-repository provenance (guard/README.md#in-repository-provenance).
 """wall_check.py — the never-publish classification as code.
 
-Refuses any staged file whose PROVENANCE or CONTENT matches a never-publish wall:
+Refuses any staged file whose PROVENANCE or CONTENT matches a never-publish wall.
+Preparation: guard/README.md, Instance policy and external archive paths — In-repository provenance:
   - provenance walls: files copied from the memory tree, curation data, hive content,
-    auth-adjacent files, env files (checked via the provenance manifest each copy-in
-    step must append to: _reports/provenance.tsv  "staged_path<TAB>source_path")
+    auth-adjacent files, env files (checked via the provenance manifest maintained by
+    copy-in or reviewed in-repository release preparation; see guard/README.md#in-repository-provenance:
+    _reports/provenance.tsv  "staged_path<TAB>source_path")
   - content walls: strings that identify never-publish material even without provenance
     (private repo name, memory-tree paths, auth file names)
 
@@ -40,7 +43,16 @@ def provenance(staging: str):
     if not os.path.isfile(man):
         return None
     m = {}
-    for ln in open(man, encoding="utf8"):
+    # A manifest that cannot be read or decoded is INVALID (-> None -> exit 2, UNMEASURED),
+    # not an empty manifest: an empty one would make every staged file a wall hit (exit 1),
+    # reporting a crash as a violation. Contract: a non-UTF-8 manifest used to escape
+    # as a UnicodeDecodeError traceback, which exits 1.
+    try:
+        with open(man, encoding="utf8") as fh:
+            lines = fh.readlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    for ln in lines:
         ln = ln.rstrip("\n")
         if not ln or ln.startswith("#"):
             continue
@@ -127,6 +139,11 @@ if __name__ == "__main__":
     rc, hits = check(staging)
     if rc == 0:
         print(f"wall_check: CLEAN ({sum(1 for _ in staged_files(staging))} staged files)")
+    elif rc == 2:
+        # Nothing was measured, so there is no hit count to report. Printing
+        # "0 hit(s)" here read as a measured zero behind an exit that means "could not check".
+        print("wall_check: UNMEASURED — the provenance manifest could not be used, so no file "
+              "was checked; there is no hit count. Fix _reports/provenance.tsv and rerun.")
     else:
         for rel, why in hits:
             print(f"WALL HIT  {rel}  ::  {why}")

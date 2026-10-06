@@ -51,7 +51,8 @@ async def test_warm_modal_lists_cold_models_and_launches(monkeypatch):
     assert argv[3] == "ok"                              # tiny prompt → loads resident (fleet-model's path)
 
 
-async def test_warm_action_opens_modal():
+async def test_warm_action_opens_modal(monkeypatch):
+    monkeypatch.setattr(modelstate, "list_models", lambda: [])
     app = FleetTUI()
     async with app.run_test() as pilot:
         await pilot.pause()

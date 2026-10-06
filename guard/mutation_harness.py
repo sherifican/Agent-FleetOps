@@ -124,7 +124,7 @@ def verify_anchors():
     if bad:
         print(f"STALE: {len(bad)} anchor(s) no longer bind once. Those mutations prove NOTHING.")
         return 1
-    print("  all anchors bind exactly once — every mutation still points at live code")
+    print("  all anchors bind exactly once")
     return 0
 
 
@@ -149,8 +149,21 @@ MUTATIONS = [
     # ── the two harness-backed guards ────────────────────────────────────────────────────────
     M("FG1", "fetch_gate", FG, "a scan error stops counting as a reason to withhold the payload",
       "verdict_blocks() withholds a payload whenever the verdict is poisoned OR the scan itself failed",
-      'BLOCKING_PREFIXES = ("POTENTIAL_POISON", "CERTAIN_POISON", "scan-error")',
-      'BLOCKING_PREFIXES = ("POTENTIAL_POISON", "CERTAIN_POISON")'),
+      'str.__str__(verdict) in ("CLEAN", "DATA_QUALITY")',
+      '(str.__str__(verdict) in ("CLEAN", "DATA_QUALITY")'
+      ' or str.__str__(verdict).startswith("scan-error"))'),
+    M("FG4", "fetch_gate", FG, "a supported response's type is formatted best-effort, so a detector metaclass's hook runs",
+      "no method of a detector object's type runs on the supported path of _interpret",
+      '    return text\n',
+      '    try:\n        repr(type(result))\n    except Exception:\n        pass\n    return text\n'),
+    M("FG3", "fetch_gate", FG, "a rejection diagnostic names the response's type, so a detector metaclass's hook runs",
+      "no method of a detector object's type runs on a rejection branch of _interpret",
+      '        raise InvalidVerdict("the response is not a dict")\n',
+      '        raise InvalidVerdict("the response is not a dict (%s)" % type(result).__name__)\n'),
+    M("FG2", "fetch_gate", FG, "a rejection diagnostic lists the response's keys, so a detector key's __repr__ runs",
+      "no method of the response, its keys or its values runs on a rejection branch of _interpret (C8i)",
+      '        raise InvalidVerdict("unsupported verdict %r" % text)\n',
+      '        raise InvalidVerdict("unsupported verdict %r (keys=%r)" % (text, list(dict.keys(result))))\n'),
     M("HS1", "honesty_stop_gate", HS, "unbacked claims are collected but never reported, so the turn passes",
       "scan_turn returns the unbacked claims it found, so the gate can block on them",
       "    return bad\n\n\ndef block_message",

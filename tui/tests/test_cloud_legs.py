@@ -115,6 +115,7 @@ def test_format_cloud_legs_never_raises_on_garbage():
 
 def test_cloud_snapshot_merges_and_dedups(monkeypatch):
     from fleet_tui.sources import cloud_legs
+    monkeypatch.setattr(cloud_legs, "_claude_cmdlines", lambda: [])
     monkeypatch.setattr(cloud_legs, "codex_status", lambda: [])   # hermetic
     monkeypatch.setattr(cloud_legs, "kimi_status", lambda: [])    # hermetic: a live kimi-cli leg previously leaked in as "kimi K3"
     monkeypatch.setattr(cloud_legs, "external_cloud_procs", lambda: [

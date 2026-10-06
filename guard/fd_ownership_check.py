@@ -2,8 +2,8 @@
 """fd_ownership_check.py — does anything stand between a descriptor acquisition and the ``try``
 whose ``finally`` releases it: a STATEMENT, or a BLOCK the interpreter has to leave?
 
-THAT IS THE WHOLE QUESTION, and the scope is deliberate. The block half was added in the
-sixty-fifth round, after two reviewers found by reading what this file passed by counting: an
+THAT IS THE WHOLE QUESTION, and the scope is deliberate. The block half was added in
+an earlier structural repair, after two reviewers found by reading what this file passed by counting: an
 acquisition in one ``try`` and its release in the ``finally`` of a different one has zero
 statements between the two and is still a window, because leaving the first block and entering
 the second is work done with the descriptor allocated and nothing registered to release it. An earlier draft of this checker tried to
@@ -79,7 +79,7 @@ REJECTED BY CONSTRUCTION — each of these is a shape that LOOKS like ownership 
     runs. The isolated spelling (``try: release(a) finally: release(b)``) is accepted.
   * A RELEASE OF A DIFFERENT SLOT than the one acquired.
   * AN ACQUISITION IN ONE ``try`` AND ITS RELEASE IN A DIFFERENT ONE — the ``cross-try`` verdict,
-    added in the sixty-fifth round because shape A above could not see it:
+    added to the structural checker because shape A above could not see it:
         try:
             fd = os.open(...)
         except OSError:
@@ -135,7 +135,7 @@ COVERAGE_DISCLOSURE = (
     "one, so an acquisition handed to a context manager is listed unowned, and statements standing "
     "between such an acquisition and its `with` are outside everything above. Every site of that "
     "shape is in the list below, reported unowned; this sentence does not count them, because the "
-    "version that did said three where the module had two (team review, gate 61) and a hand-kept "
+    "version that did said three where the module had two (team review) and a hand-kept "
     "number beside the thing it counts drifts the moment that thing changes. The unqualified "
     "version of this sentence was false for those sites, and a coverage claim in a coverage "
     "instrument is the last place a false one belongs (team review, 51a4686). This also does NOT close the window between the acquiring "

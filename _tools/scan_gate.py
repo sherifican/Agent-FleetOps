@@ -243,7 +243,7 @@ def _index_selected(staging):
     This test used to be made independently in two places — once to choose where the payload comes
     from and once to choose where the exemption policy comes from — which is a check-then-act on the
     MODE itself. A writer removing the marker between the two calls got the payload out of the index
-    and the policy out of the working tree: the same snapshot mismatch the previous round closed,
+    and the policy out of the working tree: the same snapshot mismatch the earlier repair closed,
     reachable again through a narrower door (team review, 169e8de). One probe, one answer, passed to
     both, so there is no interval for the answer to change in.
     """
@@ -565,6 +565,8 @@ def _scan_into(staging: str, hits):
                         _close_quietly(_in_fd)
             except OSError:
                 raise ScanRefused(f"unreadable-input {rel!r}") from None
+            # No suffix exemption: .sha256 digests and their provenance are text and
+            # receive these secret-scanned views, just like other prose (and binary blobs).
             lines = ((i, ln) for view in _text_views(raw, rel)
                      for i, ln in enumerate(view.split("\n"), 1))
             prev_ln = None
@@ -601,7 +603,7 @@ ACL_DEFAULT_XATTR = "system.posix_acl_default"
 
 # THE published mode of a report, and the only one. Not a cap, not a candidate, not a term in an
 # intersection — the number the file lands with on every branch. See _install_posix_acl_policy for
-# why the seventeenth round replaced an intersection with a constant.
+# why the policy uses a constant rather than a staged-mode intersection.
 _REPORT_MODE = 0o600
 
 # The mode a report directory is CREATED with. Publishing needs write and traverse, not owner
@@ -647,8 +649,7 @@ def _strip_acl_by_fd(fd, xattr=ACL_XATTR):
     kernel's descriptor directory — /proc/self/fd on Linux, /dev/fd on the BSDs — which is the
     same indirection _harden_report_dir uses to read the mode of an O_PATH directory handle.
 
-    THE PATHNAME FALLBACK IS GONE. It joined a name onto the report directory, and round eighteen
-    exists because a name joined onto that directory can be made to resolve somewhere else. Where
+    THE PATHNAME FALLBACK IS GONE. It joined a name onto the report directory; a name joined onto that directory can be made to resolve somewhere else. Where
     neither descriptor directory exists this raises ENOSYS instead, which the caller turns into a
     refusal: publishing a report while an inherited ACL is still on it would satisfy the mode
     contract and break the access one, and refusing is loud where a silent widening is not. No
@@ -684,8 +685,8 @@ def _install_posix_acl_policy(dirfd, src_name, dst_fd, dst_name):
     write; nothing for group, nothing for other; whatever the umask masked and whatever stood at
     the canonical name before.
 
-    THE SEVENTEENTH ROUND REVERSED AN INTERSECTION INTO A CONSTANT, and the reversal is the part
-    worth reading. Rounds ten to sixteen narrowed by INTERSECTING the staged inode's own mode, so
+    A CONSTANT MODE REPLACES AN INTERSECTION. Earlier implementations narrowed by
+    INTERSECTING the staged inode's own mode, so
     that a stricter local policy would still win and nothing could loosen. A cold review leg then
     measured what actually flows in through that intersection on this platform: not operator
     intent, but the umask removing the OWNER's bits. At umask 0400 the staged mkstemp inode is
@@ -699,19 +700,19 @@ def _install_posix_acl_policy(dirfd, src_name, dst_fd, dst_name):
     — for a restriction that was never enforceable. Group and other are what the confidentiality
     argument was always about, and they are cleared unconditionally.
 
-    Five earlier rules this replaces, each of which left one audience behind:
+    Earlier policies left access or availability gaps:
 
-      round ten     capped "other" on new reports, arguing group access expressed a sharing
+      An other-only cap on new reports treated group access as a sharing
                     decision. It does not: an ordinary create grants the process's primary group
                     access with no setgid directory, no default ACL, and nobody deciding anything.
-      round eleven  made new reports owner-only and left the REPLACEMENT path uncapped, where a
+      An owner-only new-report policy left the REPLACEMENT path uncapped, where a
                     planted 0644 republished the findings at 0644.
-      round fourteen capped group WRITE on replacement and kept group READ, reasoning that the
+      A group-WRITE cap on replacement kept group READ, reasoning that the
                     demonstrated attack was a write. Both legs refused that: a planted 0640 hands
                     the file's group the class, path and line of every secret found, and "there
                     was an existing file" is not a sharing decision by anyone who matters when the
                     existing file came out of the untrusted tree.
-      round sixteen intersected BOTH branches with the staged inode — except that the existing
+      A staged-mode intersection covered BOTH branches — except that the existing
                     branch computed that value and then discarded it, so under umask 0277 a
                     replacement published 0600 beside a new report at 0400, under one docstring
                     claiming both branches implemented one rule.
@@ -843,8 +844,8 @@ def _staged_holds_evidence(fd, hits):
     preceded the write and answers False. Everything else answers True — including the case where
     the size cannot be read at all.
 
-    THAT LAST CLAUSE IS THE WHOLE POINT, and it is the second time this file has needed it. Round
-    nineteen fixed `_preserve_superseded` treating an lstat error as "the file is absent"; this
+    THAT LAST CLAUSE IS THE WHOLE POINT, and it is the second time this file has needed it. An earlier implementation
+    fixed `_preserve_superseded` treating an lstat error as "the file is absent"; this
     helper then converted an fstat error into False, and its caller reads False as "nothing worth
     keeping" and unlinks. The gate named it exactly — unknown metadata authorizes deletion — and
     measured one injected EIO destroying a staged findings report that a no-injection control
@@ -910,7 +911,7 @@ def _link_held_inode(fd, candidate, dirfd):
     quarantine re-asks the stage name at once and copies out only if it is gone; preservation,
     whose link was a retry away, moves to the next reserved name on this answer and takes its
     rescue when it LEAVES the link phase — which is not always after every name has been tried,
-    since an unconfirmed custody breaks out of the loop early (team review, gate 72).
+    since an unconfirmed custody breaks out of the loop early (team review).
 
     Returns True on success. Raises FileNotFoundError when no custody was taken — the kernel refused, or the check below did (the
     caller's rescue path); `_CustodyUnconfirmed` when the link was made and the check after it
@@ -958,7 +959,7 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
     file's identity — but it carries the findings, and the alternative measured by review is that
     the next close frees them.
 
-    THE SAME RULE AS EVERY OTHER RESERVED NAME THIS MODULE TAKES, since round thirty-nine, with
+    THE SAME RULE AS EVERY OTHER RESERVED NAME THIS MODULE TAKES, since an earlier revision, with
     one platform difference stated where it bites: a reserved name is refused when
     the access policy could not be installed on the file behind it. An earlier shape took an
     exception here ("it may be the only remaining copy") — written when a refused name meant a
@@ -992,7 +993,7 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
     # THE SOURCE IS READ THROUGH THE DESCRIPTOR DIRECTORY, OR FROM THE HELD DESCRIPTOR ITSELF.
     # The reopen needs owner-read on the mode, which the narrowing above installs best-effort
     # and does not verify; when it is refused, a descriptor that was opened for reading — the
-    # scanner's own stages are O_RDWR since round forty-six — is read with pread, which depends
+    # scanner's own stages are O_RDWR since an earlier revision — is read with pread, which depends
     # on no mode at all (cold leg, e1c1404). What stays unreadable is a write-only or path-only
     # descriptor whose reopen is refused: the "readable source" half of the limit stated above.
     _src_off = 0
@@ -1007,7 +1008,7 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
         # open left, and a `return` from inside runs it.
         try:
             # O_NONBLOCK, LIKE THE PREFIX READ ON THIS SAME DIRECTORY. Without it, opening the
-            # read end of a FIFO waits for a writer, and the identity-failure arm added last round
+            # read end of a FIFO waits for a writer, and the identity-failure arm added an earlier repair
             # can hand this question a descriptor whose type was never verified — so a function
             # documented never to block could wait forever (cold leg, aca6e8a; the wait was
             # measured directly on this box). On a regular file the flag changes nothing.
@@ -1024,7 +1025,7 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
             stage_fd = None
             keep_stage = True                 # set before the open, with `written`, so the acquisition
             written = 0                       # try below hands straight to the try that owns the fd
-            # RETENTION IS THE DEFAULT FROM THE MOMENT A STAGE EXISTS. Round thirty set keep_stage only on
+            # RETENTION IS THE DEFAULT FROM THE MOMENT A STAGE EXISTS. An earlier revision set keep_stage only on
             # the error paths it thought of, and a KeyboardInterrupt between two writes took none of
             # them: the finally saw False and deleted three bytes of evidence. The flag now starts True
             # and is cleared only where the stage holds nothing worth keeping — no byte reached it,
@@ -1059,7 +1060,7 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                     # because nothing else named the descriptor yet. The enclosing block names it
                     # now, from the moment the open returns, so closing here as well would be the
                     # double close the lint has a rejection fixture for — and clearing the slot to
-                    # avoid that is the pattern round sixty measured as defeating a handler when a
+                    # avoid that is the pattern an earlier revision measured as defeating a handler when a
                     # cancellation lands AT the clearing. One owner, one close.
                     raise
                 try:
@@ -1083,7 +1084,7 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                     # by identity whether or not retention was released — a cancellation here
                     # releases nothing, and the stage is removed because it is measured empty (an
                     # executed review of d7e4a3c found the first-read failure keeping one forever;
-                    # gate 41 found this comment claiming the release for the cancellation too).
+                    # an earlier check found this comment claiming the release for the cancellation too).
                     try:
                         while True:
                             if src is not None:
@@ -1137,7 +1138,7 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                         # the stage keeps the bytes. Nothing more is done HERE: the finally below asks
                         # once whether the stage name still reaches the stage and copies out only if
                         # it does not. This arm used to make its own further copy first, and with the
-                        # finally's re-ask added in round forty-eight a taken stage name produced two
+                        # finally's re-ask added in an earlier revision a taken stage name had produced two
                         # copies of the same findings (invariant leg, e71e440).
                         keep_stage = True
                         raise _Answer(True)           # complete bytes, kept; the finally re-asks the name
@@ -1150,7 +1151,7 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                         # it) rather than freed (inventory trace, 4e0be0a).
                         keep_stage = True
                         # The re-ask of the stage name happens in the finally below, for this exit
-                        # and every other retention exit alike, one level deep. Round forty-seven
+                        # and every other retention exit alike, one level deep. An earlier revision
                         # asked it here through a helper that dropped the depth, so every level
                         # restarted at zero and a racer who kept taking names drove the chain until
                         # the reserved names, or the descriptors, ran out (invariant leg, cold leg
@@ -1173,14 +1174,14 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                 # this block, an exhausted name loop reaches this finally with nothing opened, and
                 # `_close_quietly` takes a descriptor rather than None — its own except is OSError,
                 # which a None would sail straight past as a TypeError.
-                # THE CLOSE IS UNDER ITS OWN FINALLY. Round thirty-two put the identity cleanup before the
+                # THE CLOSE IS UNDER ITS OWN FINALLY. An earlier revision put the identity cleanup before the
                 # close (it needs the descriptor) and left the close after it unprotected; a cancellation
                 # inside the cleanup's lstat leaked the descriptor at three sites (invariant leg, 0829b97).
                 try:
                     if stage_name is not None:
                         # EMPTINESS IS MEASURED ON THE STAGE, NOT INFERRED FROM THE COUNTER. A
                         # cancellation inside a write lands after the bytes are on disk and before
-                        # `written` advances (the mid-copy arm of round thirty); the counter says
+                        # `written` advances (the mid-copy arm of an earlier revision); the counter says
                         # nothing reached the stage, the stage says otherwise, and the stage is
                         # what is believed. Unreadable: keeping is the direction that cannot lose.
                         try:
@@ -1189,7 +1190,7 @@ def _copy_out_unpublished(dirfd, fd, depth=0):
                             _empty = False
                         if _empty:
                             # AN EMPTY STAGE HOLDS NOTHING, and has only ever had one name — the
-                            # nlink rule below would keep it forever (gate 37). Identity alone
+                            # nlink rule below would keep it forever. Identity alone
                             # authorizes removing it, and retention does not apply to it:
                             # retention keeps BYTES through a cancellation, and there are none
                             # (executed review, 4632326 — an interrupt before the first read
@@ -1266,7 +1267,7 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
     It is not proof that no reserved name attached: the `_CustodyUnconfirmed` arm below answers
     False after a link that MAY have landed, and declines a second name for exactly that reason. The
     heading used to read "DID NOT TAKE CUSTODY", which the arm beside it already contradicted
-    (two reviewers, gate 73).
+    (two reviewers).
     Custody is a reserved name that still reaches the inode after the stage is released, or a
     complete copy kept under the temporary prefix by the copy-out (the release helper's and
     the copy-out's answers are passed through unchanged). It
@@ -1346,7 +1347,7 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
                     # reserved name anyway reports compliance that was never installed — the gate
                     # measured exactly that, an ACL-bearing retained file at 0600 presented as
                     # retained. Answering False keeps the BYTES only while the staged name is
-                    # still this inode — so that is re-asked first (round 40).
+                    # still this inode — so that is re-asked first.
                     return _false_or_rescue(dirfd, tmp_name, fd)
         os.fchmod(fd, _REPORT_MODE)
         # VERIFIED BEFORE A RESERVED NAME ASSERTS IT. A reserved name means "retained evidence,
@@ -1400,7 +1401,7 @@ def _quarantine_unpublished(dirfd, tmp_name, fd, hits):
         # once shared with this one was removed when a status line proved not to be the evidence
         # the count protects (inventory, aca6e8a, on the wording here). A leftover
         # stage is harmless; a nameless inode is the loss this whole path exists to prevent.
-        # AND, SINCE ROUND FORTY-NINE, THE LINK COUNT IS RE-READ AFTER THE UNLINK: a reserved name
+        # AND, SINCE AN EARLIER REVISION, THE LINK COUNT IS RE-READ AFTER THE UNLINK: a reserved name
         # ended inside the helper's own four-syscall window made that unlink the last one, and
         # the helper now copies the bytes out before this function answers and the caller closes.
         return _remove_stage_if_another_name_remains(dirfd, tmp_name, fd)
@@ -1412,7 +1413,7 @@ def _superseded_slot_names(include_unpublished=False):
 
     Basenames, not paths: the publication path names everything relative to the validated
     directory descriptor, so a path joined onto `reports_dir` would be exactly the re-resolution
-    round eighteen exists to remove.
+    descriptor-relative access prevents.
 
     include_unpublished adds the quarantine name, which is NOT a preservation slot and is never
     linked into — it is only ever swept. Preservation must not try to link findings into it,
@@ -1456,10 +1457,10 @@ def _harden_report_dir(reports_dir, restore_owner=False, parent_fd=None):
     directory rather than anything it was asked to scan.
 
     THE OWNER'S rwx IS RESTORED ONLY ON A DIRECTORY THIS TOOL JUST CREATED (restore_owner), which
-    the seventeenth round added. os.mkdir is umask-masked, so mode=0o700 arrived as 0500 at umask
+    the earlier revision added. os.mkdir is umask-masked, so mode=0o700 arrived as 0500 at umask
     0277 and as 0100 at umask 0600, and the very next mkstemp raised EACCES inside the scanner's
     OWN output directory — a tree whose owner can write it perfectly well, refused by the
-    publication path. That is round fourteen's availability regression again, moved out of the
+    publication path. That is the earlier availability regression again, moved out of the
     hardening and into the creation.
 
     The restriction to a just-created directory is the point, and the first draft of this fix did
@@ -1475,7 +1476,7 @@ def _harden_report_dir(reports_dir, restore_owner=False, parent_fd=None):
 
     # O_RDONLY first, then O_PATH. A directory at 0300 — WRITE and TRAVERSE but not READ — lets
     # its owner create and traverse named entries perfectly well, and an O_RDONLY open of it
-    # fails. Round fourteen used O_RDONLY alone and turned that into a refusal: gate review
+    # fails. An earlier revision used O_RDONLY alone and turned that into a refusal: gate review
     # measured the parent publishing normally in exactly that fixture while this code refused,
     # with a control confirming the owner could still create there. That is an availability
     # regression introduced by the hardening, not a filesystem limit.
@@ -1497,7 +1498,7 @@ def _harden_report_dir(reports_dir, restore_owner=False, parent_fd=None):
     try:
         target = "/proc/self/fd/%d" % fd if via_proc else fd
         mode = stat.S_IMODE(os.stat(target).st_mode if via_proc else os.fstat(fd).st_mode)
-        # RESTORATION IS AUTHORIZED BY CREATION, AND BY NOTHING ELSE. Round nineteen added an
+        # RESTORATION IS AUTHORIZED BY CREATION, AND BY NOTHING ELSE. An earlier revision added an
         # emptiness probe on top, reasoning that it confined widening to a directory with nothing
         # in it. The gate refuted that: the probe fell back to st_nlink when the directory could
         # not be listed, and a populated directory has the same link count as an empty one, so the
@@ -1528,7 +1529,7 @@ def _harden_report_dir(reports_dir, restore_owner=False, parent_fd=None):
             if now & 0o022:
                 raise ScanRefused("report-dir-writable '_reports'")
             if _restore and now & _REPORT_DIR_MODE != _REPORT_DIR_MODE:
-                # Only when restoration was actually REQUESTED. Round seventeen checked against a
+                # Only when restoration was actually REQUESTED. An earlier revision checked against a
                 # fixed 0700 either way, which made this a regression rather than a guard: a
                 # pre-existing 0322 directory is narrowed by this very function to 0300 and was
                 # then refused for lacking owner read, while a directory already AT 0300 skipped
@@ -1543,7 +1544,7 @@ def _harden_report_dir(reports_dir, restore_owner=False, parent_fd=None):
     except BaseException:
         _close_quietly(fd)
         raise
-    # THE DESCRIPTOR IS RETURNED OPEN, and it is the whole point of round eighteen. Closing it
+    # THE DESCRIPTOR IS RETURNED OPEN, and it keeps the directory identity bound until its caller closes it. Closing it
     # here and then naming the directory again is what let a substitution between the hardening
     # and the publish redirect everything that followed onto an attacker's directory: the gate
     # reproduced a report published OUTSIDE the scanned tree, over a file it did not own, with a
@@ -1558,7 +1559,7 @@ def _open_dir_nofollow(name, parent_fd):
     """Open a directory relative to a held parent, never following a symlink at the last name.
 
     Returns (fd, via_proc). The O_PATH fallback exists for a directory with write and search but
-    no read — round fourteen's availability case — and its mode is reached through the kernel's
+    no read — the earlier availability case — and its mode is reached through the kernel's
     descriptor directory because an O_PATH handle cannot be fchmod'd.
     """
     nofollow = getattr(os, "O_NOFOLLOW", 0)
@@ -1630,7 +1631,7 @@ def _makedirs_owner_only(path):
                 # used to say "not ours to re-mode" and then execution fell straight through to
                 # the chmod anyway — the gate injected a competing mkdir that left an operator's
                 # POPULATED 0500 directory here, and the remaining code took it to 0700. A comment
-                # is not a control-flow statement, which is the whole lesson of this round.
+                # is not a control-flow statement, which is the whole lesson of this repair.
                 if made:
                     # A DIRECTORY THIS CALL CREATED INHERITS ITS PARENT'S DEFAULT ACL, and the
                     # mode change below does not remove it. That default is then handed to every
@@ -1728,7 +1729,7 @@ def _stage_report(dirfd, body, evidence=False):
                 # EVIDENCE IS NOT WRITTEN INTO A CONTAINER THIS SCANNER READS AS TOO OPEN. The mode
                 # has to be READ for that: where the read itself fails the write still goes ahead,
                 # so this heading says what the check does, not what it would like to promise
-                # (two reviewers, gate 72).
+                # (two reviewers).
                 # The narrowing above is best effort and was never verified here, so where it did
                 # not stick — a report directory carrying a default ACL, or one left at 0755 whose
                 # group read the hardening keeps — the findings went into a file group could open,
@@ -1774,7 +1775,7 @@ def _stage_report(dirfd, body, evidence=False):
             #
             # The gate fault-injected an EFBIG partway through a findings body — 128 bytes on
             # disk, removed by this handler, no surviving copy. The cold leg had traced the same
-            # path statically five rounds earlier and said it had not fault-injected it; a traced
+            # path statically earlier and said it had not fault-injected it; a traced
             # defect with no reproduction attached is still a defect, and it read as lower
             # priority only because it arrived without a measurement.
             #
@@ -1805,7 +1806,7 @@ def _stage_report(dirfd, body, evidence=False):
                         # THE NAME IS RE-CHECKED AFTER THE NARROWING AND BEFORE THE CLOSE, IN
                         # CLEANUP A CANCELLATION INSIDE THE NARROWING CANNOT SKIP. The narrowing
                         # is several syscalls on the descriptor with no eye on the name.
-                        # write_report's handler learnt in round forty to look again before its
+                        # write_report's handler learnt in an earlier revision to look again before its
                         # close; this handler — the one holder of a partial body the caller
                         # never sees — narrowed and closed without looking (cold leg, d7e4a3c),
                         # and the re-check then sat after the narrowing where an interrupt
@@ -1869,8 +1870,8 @@ def _emit_unwritten_findings(hits, header=None):
     to wrap the call, and both callers are already unwinding when they read it.
     That first line used to promise it never raises, flat and with no carve-out, while the code
     below already re-raised KeyboardInterrupt and SystemExit — a contradiction introduced by the
-    round that added the boundary and caught by a cold leg one round later (c0917eb). It is the same defect this module keeps finding in its own older
-    comments, written this time by the round that was fixing them. The boundary is deliberate and
+    round that added the boundary and caught by a cold leg later (c0917eb). It is the same defect this module keeps finding in its own older
+    comments, written this time by the repair that was fixing them. The boundary is deliberate and
     matches `_write_refusal_report`: an ordinary failure to print is swallowed so it cannot displace
     the failure already on its way out; a cancellation is passed on, because a cancellation is not a
     refusal to report.
@@ -1934,8 +1935,8 @@ def write_report(staging, hits):
         if os.path.islink(reports_dir):
             raise ScanRefused("report-path-unsafe '_reports'")
 
-        # THE REPORT DIRECTORY IS CREATED AND OPENED RELATIVE TO A HELD PARENT DESCRIPTOR. Round
-        # eighteen anchored everything INSIDE the report directory and left its creation resolving by
+        # THE REPORT DIRECTORY IS CREATED AND OPENED RELATIVE TO A HELD PARENT DESCRIPTOR. An earlier implementation
+        # anchored everything INSIDE the report directory and left its creation resolving by
         # pathname, which the gate then reproduced: a hook that renamed the just-created directory
         # aside and left a symlink at the name made the following pathname chmod land on a directory
         # outside the supplied tree, and publication followed it there. Holding the parent and
@@ -1949,8 +1950,8 @@ def write_report(staging, hits):
         # this function's to make.
         try:
             # Through the same helper the report directory uses, which carries the O_PATH fallback.
-            # A 0300 directory — create and traverse, no read — fails an O_RDONLY open, and round
-            # fourteen built that fallback for exactly this case. It was wired to `_reports` and not
+            # A 0300 directory — create and traverse, no read — fails an O_RDONLY open, and an earlier implementation
+            # built that fallback for exactly this case. It was wired to `_reports` and not
             # to the root above it, so a 0300 `_reports` published while a 0300 scan root could not
             # publish at all and the refusal writer left no artifact either.
             parent_fd, _ = _open_dir_nofollow(staging, None)
@@ -1976,7 +1977,7 @@ def write_report(staging, hits):
         _emit_unwritten_findings(hits)
         raise
     try:
-        # EVERY NAME FROM HERE IS RELATIVE TO dirfd, and that is the whole of round eighteen. The
+        # EVERY NAME FROM HERE IS RELATIVE TO dirfd, to keep the selected directory identity bound. The
         # directory this descriptor refers to is the one that was validated; the pathname
         # `reports_dir` may by now resolve somewhere else entirely. The gate reproduced exactly
         # that: a substitution immediately after the hardening published the findings OVER a file
@@ -1994,7 +1995,7 @@ def write_report(staging, hits):
         # sat between the emitting guard and the try whose handlers own the staged descriptor, and a
         # cancellation delivered at either one left the stage on disk with nobody asking whether to
         # quarantine it under a reserved name, and nothing on the error stream (cold leg, 3adf105).
-        # `_copy_out_unpublished` was given the same shape in round fifty-five for the same reason:
+        # `_copy_out_unpublished` was given the same shape in an earlier revision for the same reason:
         # moving the assignments up needs no new handler, because the try below already owns
         # everything the stage call returns.
         _staged_ctime_ns = None           # unknown age until read: no reference stamp means no sweep
@@ -2022,7 +2023,7 @@ def write_report(staging, hits):
         # block put TWO deciders on the stage-failure path: the handler beside the call, which knows
         # whether the stage kept the bytes, and the question in the finally, which sees an empty slot
         # and concludes the findings are nowhere. Both fired, so a run whose partial stage had been
-        # retained printed the hits anyway — the exact double publication round sixty-two removed.
+        # retained printed the hits anyway — the exact double publication an earlier revision removed.
         # The handler decides, and says so; the finally decides only when it was never reached.
         _emitted = False
         # SET BEFORE THE BLOCK, NOT INSIDE IT. A slot assigned as the first statement of the very
@@ -2141,7 +2142,7 @@ def write_report(staging, hits):
             # What it removes is the case that needs nobody to be hostile.
             # NO REFERENCE TIMESTAMP MEANS NO SWEEP. The previous shape short-circuited the age
             # test to "not newer" when the staged fstat had failed, and swept — the second of the
-            # two metadata inputs the age guard depends on, repaired one round after the first.
+            # two metadata inputs the age guard depends on, repaired after the first repair.
             # A question this code cannot answer never authorizes destruction; that has to hold
             # for the reference side of the comparison too.
             for _name in (_superseded_slot_names(include_unpublished=True)
@@ -2179,7 +2180,7 @@ def write_report(staging, hits):
                         # this same reasoning; the sweep had kept the old direction.
                         continue
                     # THE SWEEP IS AN AGE RULE INSIDE A SCANNER-OWNED NAMESPACE — the README's reserved
-                    # names — and, since round thirty-five, it is applied to the inode that was aged
+                    # names — and, since an earlier revision, it is applied to the inode that was aged
                     # and to nothing else: the entry is held open above, and the removal below is by
                     # identity — through that descriptor for a file; for a directory, which rmdir can only
                     # take by name, by an lstat of the name immediately before the rmdir compared with the
@@ -2210,13 +2211,13 @@ def write_report(staging, hits):
                 # handler beside the stage call has already decided what the operator hears. This
                 # is the UnboundLocalError a reviewer predicted two gates ago and I refuted, because
                 # the structure then made it unreachable; nesting the acquisition made it reachable,
-                # and the arm for the stage-failure path caught it in the same round.
+                # and the arm for the stage-failure path caught it in the same repair.
                 raise
             if _published:
                 # ALREADY PUBLISHED. A cancellation or error in the post-publish sweep reaches
                 # this handler with the stage already renamed onto the canonical name; the
                 # descriptor-based quarantine then copied the published report out again under
-                # a reserved name — a duplicate, no loss (executed review, gate 37). Nothing here
+                # a reserved name — a duplicate, no loss (executed review). Nothing here
                 # is unpublished; re-raise and let the finally close the descriptor.
                 raise
             # KEEP THE FINDINGS if there are any and they made it to disk. Unlinking here
@@ -2234,7 +2235,7 @@ def write_report(staging, hits):
                 # a creatable temporary name and a readable source — the limit
                 # `_copy_out_unpublished` states.
                 # IDENTITY-CHECKED, like every other unlink of a name this file created. This
-                # was the CLEAN twin of the refusal writer's round-31 defect: a staged status
+                # was the CLEAN twin of the refusal writer's earlier defect: a staged status
                 # line's cleanup unlinked the NAME, and the name had become findings report B's
                 # last one (cold leg, f153122).
                 if not _staged_holds_evidence(fd, hits):
@@ -2248,7 +2249,7 @@ def write_report(staging, hits):
                     # 24 and 25) — and later with its inherited entries (cold leg, 3c075f0). Best
                     # effort, through the held descriptor; the stage still promises nothing.
                     # THE RE-CHECK RUNS IN CLEANUP AN INTERRUPT INSIDE THE NARROWING CANNOT SKIP — the
-                    # same composition `_stage_report` was given in round forty-five; here the pair sat as
+                    # same composition `_stage_report` was given in an earlier revision; here the pair sat as
                     # two statements and a cancellation inside the first jumped the second (cold leg, 4632326).
                     try:
                         _narrow_leftover(fd)
@@ -2304,8 +2305,7 @@ def _open_held_copy(dirfd, name, expect):
     """Open NAME and return a descriptor ONLY if it still refers to the inode we preserved.
 
     This is the hold that preservation never had. Three review legs, across two providers and
-    with no shared premise, arrived at the same sentence about this path: rounds eighteen to
-    twenty-three moved every metadata operation onto a held descriptor so that a name in the
+    with no shared premise, arrived at the same sentence about this path: earlier implementations moved every metadata operation onto a held descriptor so that a name in the
     report directory could not be the object of a chmod or a replace, and preservation went on
     asking a NAME whether the policy was on "the inode we actually hold". A name lookup is not a
     hold, and the legs reproduced what that costs — a planted file narrowed and reported as our
@@ -2341,7 +2341,7 @@ def _open_held_copy(dirfd, name, expect):
     # happens inside, and the acquisition's own handler stays nested where it was. THE OWNER HERE IS
     # AN `except BaseException`, NOT A `finally`: on success this function hands the descriptor back
     # and the caller's finally owns it from there. The sentence said "finally" for two rounds,
-    # copied from the two sites repaired beside it, which do have one (team review, gate 61). The
+    # copied from the two sites repaired beside it, which do have one (team review). The
     # interval is covered either way -- the try is entered before the open -- but a comment naming
     # a construct this block does not have is the defect this module refuses in its own source.
     fd = None
@@ -2458,7 +2458,7 @@ def _narrow_held_copy(fd, via_proc):
     # THE ANSWER IS WHETHER THE POLICY IS VERIFIED ON THE INODE, not whether chmod returned —
     # and where it cannot be verified (no xattr API: the early return above) the answer is
     # False, which is the platform limit the README states. The publish
-    # path has verified its fchmod by fstat since round seventeen; this path answered True on
+    # path has verified its fchmod by fstat since an earlier revision; this path answered True on
     # the return code alone, and a chmod that returns without taking effect (a filesystem that
     # ignores mode bits) would then record a slot and authorize the replace while the preserved
     # copy stayed group- or other-readable — the leak preservation exists to close.
@@ -2477,7 +2477,7 @@ def _narrow_kept_copy(dirfd, name):
     report sitting at a planted 0644 is replaced owner-only at the canonical name while the
     preserved copy stays group- and other-readable beside it.
 
-    THE STRIP AND THE CAP ARE INDEPENDENT, which they were not until round seventeen. They shared
+    THE STRIP AND THE CAP ARE INDEPENDENT, which they were not until an earlier revision. They shared
     one try block, so an ACL removal that failed for any reason other than "there is no ACL here"
     skipped the chmod entirely and left the preserved copy at the mode it was planted with. Both
     review legs reached that independently — one ruled it blocking, the other ranked it MED — and
@@ -2494,7 +2494,7 @@ def _narrow_kept_copy(dirfd, name):
     asked to scan. Narrowing is the only direction it moves, an owner can undo it with one chmod,
     and the alternative is publishing the findings to whoever holds the other name.
 
-    RETURNS WHETHER THE POLICY IS ACTUALLY ON THE INODE, which is the whole of round twenty-six.
+    RETURNS WHETHER THE POLICY IS ACTUALLY ON THE INODE, so a True result must reflect the actual inode policy.
     Every step here is still best effort in the sense that no ordinary I/O error raises (a
     cancellation still propagates through the finally) and nothing is deleted —
     but "best effort" was being read by the caller as "done". A denied strip was swallowed, this
@@ -2541,9 +2541,9 @@ def _narrow_kept_copy(dirfd, name):
 def _replace_canonical_guarded(dirfd, tmp_name, fd, slot_guard):
     """THE ONE PLACE A REFUSAL REPLACES THE CANONICAL NAME. Both refusal branches call this.
 
-    Round twenty-nine put the spent-authorization re-check before the ordinary replace and not
+    An earlier revision put the spent-authorization re-check before the ordinary replace and not
     before the fallback one, and the gate reproduced the fallback spending a stale authorization
-    the very next round. That is the third time this file has fixed one branch and left its
+    in a later check. That is the third time this file has fixed one branch and left its
     sibling. The review leg's structural advice was to put the shared preconditions in one
     publication path, so that there is no second branch to forget — this is that path.
 
@@ -2552,7 +2552,7 @@ def _replace_canonical_guarded(dirfd, tmp_name, fd, slot_guard):
     longer refers to the inode preservation classified. Raises when the staged name has stopped
     naming the staged inode, which is the caller's existing refusal reason.
 
-    The second refusal is round thirty-one's. The authorization used to say only "the copy of
+    The second refusal protects spent authorization. The authorization used to say only "the copy of
     what I saw is still there"; it never said WHAT it had seen. So a findings report B that
     arrived at the canonical name after report A was preserved was replaced on A's authority —
     nobody had preserved B, and the guard for A could not tell. The gate substituted B during
@@ -2566,7 +2566,7 @@ def _replace_canonical_guarded(dirfd, tmp_name, fd, slot_guard):
     if not _canonical_still_classified(dirfd, slot_guard):
         return False
     # THE NAME LOOKUP FOR THE REPLACE SOURCE IS THE SYSCALL BEFORE THE RENAME, and nowhere
-    # earlier; the held side is read before it, since a descriptor cannot change under us. Round thirty-one had it first and the two guards after it, which put two lstat
+    # earlier; the held side is read before it, since a descriptor cannot change under us. An earlier revision had it first and the two guards after it, which put two lstat
     # round-trips between "the staged name is our inode" and the rename that acts on that name;
     # the cold leg planted a 0644 file at the staged name during the second guard and the rename
     # published the plant under the canonical name, mode and all. What remains after this
@@ -2625,7 +2625,7 @@ def _false_or_rescue(dirfd, tmp_name, fd, depth=0):
     The strip, the fchmod and the mode verify each used to `return False` on failure, trusting the
     identity check made three syscalls earlier. An executed on-box review renamed a decoy onto the
     staged name during the failing call: the caller then kept "the name" — the decoy — and its
-    close freed the findings (round 40). The pre-check twin of this was closed in rounds 37–38.
+    close freed the findings. The pre-check twin of this was closed earlier.
     """
     try:
         held = os.fstat(fd)               # the held side first — it cannot change under us —
@@ -2642,7 +2642,7 @@ def _false_or_rescue(dirfd, tmp_name, fd, depth=0):
         # them deletes on it, and a status line is not evidence to keep. The stages are opened
         # for reading, so the prefix is read from the descriptor itself.
         return False
-    return _copy_out_unpublished(dirfd, fd, depth)   # the depth travels with the rescue (gate 43)
+    return _copy_out_unpublished(dirfd, fd, depth)   # the depth travels with the rescue
 
 
 def _remove_stage_if_another_name_remains(dirfd, name, fd, depth=0):
@@ -2948,7 +2948,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
     # and the "already preserved" scan ran only when no name was free — so every refusal over a
     # report whose policy could not be installed (a denied strip; no xattr API at all) linked
     # the same inode into a fresh slot, and eight refusals of one report exhausted the capacity
-    # the README calls finite (gate 38, measured: three refusals, three slots). A slot that
+    # the README calls finite (measured: three refusals, three slots). A slot that
     # already holds this inode and CAN BE READ is used as-is; a free name is taken when none does —
     # or when a slot that does could not be read, which is the exception this paragraph opens with
     # and this sentence used to drop (team review).
@@ -2991,7 +2991,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             # it now runs on the held descriptor first, so every reserved name this call creates is
             # born at 0600 with the strip done. Where the policy cannot be installed on the held
             # inode, NO reserved name is taken — a reserved name asserts the policy, and the copy-out
-            # has declined one in that state since round twenty-three — and the replacement is
+            # has declined one in that state since an earlier revision — and the replacement is
             # declined below unless the report is a status line, which may always be replaced.
         if _cfd is not None:
             # NARROWED INSIDE THE BLOCK THAT CLOSES IT. This had its own handler, which asked and
@@ -3024,7 +3024,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             # through the descriptor to an unpublished name: the same copy-out the stage paths
             # get, except that this descriptor is path-only, so the copy-out's narrowing reaches
             # it through the descriptor directory rather than fchmod, and its bytes are read by
-            # the reopen rather than pread (round forty-seven; the sentence here used to say
+            # the reopen rather than pread (an earlier revision; the sentence here used to say
             # "the same rescue", which a cold leg measured as false for a mode-000 report).
             # Still at its name: nothing to do, and the replacement is declined below. The
             # question and the close are both in the finally now, for every exit of this block.
@@ -3058,10 +3058,10 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
                 # earlier one whose slot the pre-scan found). Either something replaced that name
                 # between the link and this open, or the open or the check itself failed — a None
                 # here does not distinguish them, and the sentence used to name only the first
-                # (two reviewers, gate 72). Everything downstream — the narrowing, the
+                # (two reviewers). Everything downstream — the narrowing, the
                 # classification, the decision to release the slot — would be describing a file this
                 # scan never preserved, which is exactly the sequence three legs reproduced. Nothing
-                # is unlinked (the name is not ours to remove now, and round twenty-six is why that
+                # is unlinked (the name is not ours to remove now, and an earlier revision is why that
                 # matters) and the replacement is declined, so the findings stay where they are.
                 return False
 
@@ -3097,7 +3097,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         # branch below opens the name bound by identity to the recorded inode, and that is the only
         # way it reads it). The two names described the same inode at link
         # time, and the link is the name LESS likely to be replaced under us — not, as this comment
-        # said until round twenty-seven, a name nobody else is replacing. The gate landed a rename
+        # said until an earlier revision, a name nobody else is replacing. The gate landed a rename
         # into the reserved slot between the link and this read and the classification then described
         # the wrong inode; reading through a pathname is not reading through a held descriptor. That
         # WAS the defect (past tense): an os.replace onto report_path between the link and a by-name
@@ -3133,7 +3133,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             # compared before any read, and a FIFO is not the regular inode that was recorded.
             # ACQUIRED INSIDE THE BLOCK THAT RELEASES IT. The open and its own None-guard used to
             # stand above this try, so a cancellation between them left a descriptor on the canonical
-            # report with nothing to close it. Sibling of the gap fixed one round earlier in the
+            # report with nothing to close it. Sibling of the gap fixed earlier in the
             # other branch of this same function, found by a lint over the whole module rather than
             # by reading (c0917eb). The slot is set first so the finally can name it either way; the
             # early return still runs the finally, which finds nothing recorded and does nothing.
@@ -3160,7 +3160,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
         if is_status_line:
             # A CLEAN or REFUSED report is not worth a slot, and parking one there was measured
             # blocking a real findings report from ever being kept. Give the slot back — INCLUDING
-            # when this slot has become the only name. Round twenty-six refused to destroy a file to
+            # when this slot has become the only name. An earlier revision refused to destroy a file to
             # reclaim a name, and that refusal is about EVIDENCE: the slot is linked before the report
             # is classified, so a status line whose canonical name went during the read stayed parked
             # under a reserved name saying this tree passed, beside an exit status of two (inventory,
@@ -3193,12 +3193,12 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
                     guard_out.append(("slot", linked, previous.st_dev, previous.st_ino))
                 return True
             # THE POLICY WAS DENIED ON THE INODE WE JUST RESERVED A NAME FOR, so the replacement is
-            # refused. Round twenty-three settled the shape for quarantine and preservation was left
+            # refused. An earlier revision settled the shape for quarantine and preservation was left
             # behind: a reserved name means "retained evidence, carrying the report's access policy",
             # and a successful link was authorizing the caller to replace the canonical report while
             # that retained inode still carried an ACL.
             #
-            # THE NAME IS KEPT, and that half was wrong in this round's first shape. It gave the name
+            # THE NAME IS KEPT, and that half was wrong in this repair's first shape. It gave the name
             # back too, on the reasoning that a link is a second NAME for the report's own inode and
             # so removing it removes no bytes. That sentence holds only while the canonical name still
             # REACHES that inode, and this module exists because it may stop reaching it at any
@@ -3216,7 +3216,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             # call opened. After a successful write_report the sweep attempts cleanup of the older
             # entries in both reserved families; newer or unreadable-age entries are left.
             #
-            # "ORDINARILY" IS DOING REAL WORK IN THAT SENTENCE, and the round that wrote it said it
+            # "ORDINARILY" IS DOING REAL WORK IN THAT SENTENCE, and the author who wrote it said it
             # unconditionally. The gate's own probe removed the canonical entry during preservation
             # and left this reserved link as the SOLE name for the findings. That does not weaken the
             # decision — it is the strongest argument for it, because under that schedule giving the
@@ -3245,12 +3245,11 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
                 # failed that time — stayed wide for every run afterwards. The gate ruled it blocking,
                 # and it is the same defect as the one below in a place the eye skips: the publish
                 # about to happen is owner-only, and the second name beside it was not.
-                # THROUGH A HELD DESCRIPTOR, like the other branch. Round twenty-eight anchored the
+                # THROUGH A HELD DESCRIPTOR, like the other branch. An earlier revision anchored the
                 # fresh-link path and left this one comparing an lstat and then handing the NAME to a
                 # helper that opens it again — so the identity test and the narrowing could describe
                 # two different files. A leg reproduced it: True returned after stripping and
-                # chmodding one inode having checked another. The same defect in a second place, two
-                # rounds later; the sibling of a fixed branch is where it goes to live.
+                # chmodding one inode having checked another. The same defect in a second place; the sibling of a fixed branch is where it goes to live.
                 # ACQUIRED INSIDE THE BLOCK THAT RELEASES IT, for the same reason as above and in
                 # the same function: the open and its None-guard stood outside the try whose finally
                 # rescues and closes, and a cancellation in that gap stranded a descriptor on a
@@ -3290,7 +3289,7 @@ def _preserve_superseded(dirfd, report_name, guard_out=None):
             # ASKED OF THE DESCRIPTOR, NOT OF A NAME. Clearing a local name under a finally stops a
             # double close, but a cancellation delivered AT the rescue call — before the callee's
             # own arms run — cleared the name over a descriptor nobody had closed, and this handler
-            # then saw None and never fired (executed review, 8c2ca89: a regression from the round
+            # then saw None and never fired (executed review, 8c2ca89: a regression from the earlier repair
             # that installed the clearing). The descriptor itself answers all three cases: already
             # closed by the callee is EBADF; a number reused by an unrelated open is a different
             # inode; still ours and still open is the one that needs this handler. The name is kept
@@ -3325,7 +3324,7 @@ def _write_refusal_report(staging, refusal):
     satisfies — it was os.path.lexists when the note was written — so at
     a report name pointing nowhere this function publishes a regular file holding a REFUSED line
     OVER the link, where write_report would have refused the same state outright. It no longer
-    unlinks the link first: round twenty-seven removed that step, because os.replace does not
+    unlinks the link first: an earlier revision removed that step, because os.replace does not
     follow a symlink at its destination and the preliminary unlink was the one place the canonical
     name could go missing — and, under a concurrent rename, the one place this writer could delete
     a real findings file on the strength of an lstat taken a moment earlier. The two writers still
@@ -3352,7 +3351,7 @@ def _write_refusal_report(staging, refusal):
     them as one: a symlinked _reports DIRECTORY is not unlinked and nothing is written; a
     symlinked report FILE is replaced as a directory entry by the refusal report — os.replace
     swaps the entry and never follows it. The preliminary unlink that once left the name missing
-    between unlink and replace was removed in round twenty-seven, so "the canonical name is never
+    between unlink and replace was removed in an earlier revision, so "the canonical name is never
     unlinked" is true on both branches. What the function does NOT do is write through a link.
 
     "NEVER RAISES" IS NOW THE WIDE CLAIM, and the paragraph that stood here said the opposite for
@@ -3360,7 +3359,7 @@ def _write_refusal_report(staging, refusal):
     UnicodeError, and that an unexpected type — a refusal whose __str__ raised — would propagate
     and replace the refusal being reported. It also recorded a deliberate decision NOT to widen
     the catch, on the grounds that swallowing would hide the defects this file exists to surface.
-    That trade WAS later made, by a different round, and nobody came back to this paragraph. The
+    That trade WAS later made, by a later repair, and nobody came back to this paragraph. The
     gate found the contradiction between it and the code eight lines below it.
 
     What is true: the guard is `except Exception`, so no ordinary error out of the publication
@@ -3376,7 +3375,7 @@ def _write_refusal_report(staging, refusal):
     other than the owner, which is the property that matters here, and the earlier blanket
     "never wider" was wrong."""
     # "NEVER RAISES" STARTS AT THE FIRST LINE. os.path.join on a staging value that is not a
-    # path raised TypeError before any guard below was reached; a leg traced it in round 27 and
+    # path raised TypeError before any guard below was reached; a leg traced it in an earlier review and
     # the ledger carried it unfixed for five rounds. A refusal writer with nothing to write into
     # returns, as it does for every other unreachable directory.
     try:
@@ -3402,7 +3401,7 @@ def _write_refusal_report(staging, refusal):
         # function offers is bounded by the exit code, which no plant can forge.
         return
     # The refusal path publishes into the same directory and needs the same container guarantee.
-    # Round fourteen hardened it in write_report ONLY, which the gate caught: a refusal wrote an
+    # An earlier revision hardened it in write_report ONLY, which the gate caught: a refusal wrote an
     # owner-only report into a directory group or other could still rewrite, so the hardening
     # covered the path that usually succeeds and not the one that runs when something is already
     # wrong. Failure to harden is swallowed here rather than raised, because this function must not
@@ -3417,7 +3416,7 @@ def _write_refusal_report(staging, refusal):
     try:
         parent_fd, _ = _open_dir_nofollow(staging, None)
     except Exception:
-        return                            # OSError in practice; the contract is whole-function (gate 48)
+        return                            # OSError in practice; the contract is whole-function
     try:
         dirfd = _harden_report_dir(reports_dir, parent_fd=parent_fd)
     except Exception:
@@ -3432,7 +3431,7 @@ def _write_refusal_report(staging, refusal):
         # and classification USED TO call str() on the refusal object, which runs arbitrary code.
         # A cold review leg raised ValueError from an exception's __str__ and watched it escape
         # the one function in this file that is not allowed to raise, taking the original refusal
-        # with it. That rendering is gone as of round twenty-three; this catch remains because a
+        # with it. That rendering is gone as of an earlier revision; this catch remains because a
         # publication body can still fail in ordinary ways, and it is the catch, not the removal,
         # that keeps such a failure from displacing the refusal.
         # The exit code still carries the refusal, which is the channel that actually matters;
@@ -3447,7 +3446,7 @@ def _write_refusal_report(staging, refusal):
 def _publish_refusal(dirfd, refusal):
     """The refusal writer's body, with the validated directory descriptor already in hand.
 
-    Split out at round eighteen so the descriptor has exactly one owner and one close, rather
+    Split out in an earlier revision so the descriptor has exactly one owner and one close, rather
     than a return path through the middle of a function that must never raise.
     """
     try:
@@ -3530,7 +3529,7 @@ def _publish_refusal(dirfd, refusal):
     except (OSError, UnicodeError):
         # The replacement could not be published under the old report's access policy. The previous
         # revision UNLINKED the canonical report here, reasoning that a stale "CLEAN" beside an
-        # rc 2 is the worst outcome. Round-5 review found that wrong in two directions at once.
+        # rc 2 is the worst outcome. An earlier review found that wrong in two directions at once.
         #
         # Not every old report says CLEAN. One carrying HITS is evidence, and deleting it is a loss
         # no refusal justifies. And an attacker able to provoke both a refusal and a policy failure
@@ -3548,7 +3547,7 @@ def _publish_refusal(dirfd, refusal):
         #
         #   "No window exists" is now true of BOTH branches. It used to be true of this one
         #   only, because the symlinked-report branch above unlinked the canonical name before
-        #   its replace and a failure in between left the name missing. Round twenty-seven
+        #   its replace and a failure in between left the name missing. An earlier revision
         #   removed that unlink; a symlink at the report name now routes here and is replaced
         #   atomically like everything else.
         #
@@ -3587,10 +3586,10 @@ def _publish_refusal(dirfd, refusal):
                         if exc.errno not in _ACL_ABSENT:
                             raise
                 os.fchmod(fd, _REPORT_MODE)
-                # VERIFIED, as the ordinary path's policy install has been since round seventeen.
+                # VERIFIED, as the ordinary path's policy install has been since an earlier revision.
                 # Under a umask that masks owner read the stage is created 0200; an fchmod that
                 # returned without effect then published an owner-unreadable refusal (the ledger's
-                # oldest open item, from round 23's cold leg). Raising here lands in this
+                # oldest open item, from an earlier independent review). Raising here lands in this
                 # fallback's own except, which publishes nothing — the original stays.
                 if stat.S_IMODE(os.fstat(fd).st_mode) != _REPORT_MODE:
                     raise OSError(errno.EIO, "report-mode-verification-failed")
@@ -3622,11 +3621,11 @@ def self_test():
         ok_clean = not hits
         # MUTATION 1: planted secret
         open(os.path.join(tmp, "skills", "m1.md"), "w").write(
-            'cfg = {"api_' + 'key": "abcDEF123456789xyzKLMNO"}\n')
+            'cfg = {"api_' + 'key": "ghiJKL123456789xyzKLMNO"}\n')
         # Bare hyphenated keys must trip their own arm, without an assignment as a backstop.
         for family in ("proj", "prod"):
             with open(os.path.join(tmp, "skills", f"m1-{family}.md"), "w") as _h:
-                _h.write("sk-" + family + "-" + "abcDEF123456789xyzKLMNO" + "\n")
+                _h.write("sk-" + family + "-" + "ghiJKL123456789xyzKLMNO" + "\n")
         # MUTATION 2: planted identity — drawn FROM the loaded terms file, never hardcoded,
         # so the self-test stays red-capable for any user's terms (a fresh-clone run with a
         # different terms file exposed the hardcoded version as unable to fail)

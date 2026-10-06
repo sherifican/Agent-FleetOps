@@ -1,10 +1,11 @@
 # OSS export staging — one-way curated export target
 Purpose: explain how curated exports are checked before publication and which checks an adopter can run.
-Pipeline: copy-in → sanitize.py (audit report per file) → wall_check.py (never-publish refusal, mutation-proven) → readme_guard.sh (refuses a tree that DELETED critical README content — the inverse question; deletion passes every other gate)
+Pipeline: copy-in or reviewed in-repository release preparation (see [Instance policy and external archive paths — In-repository provenance](guard/README.md#in-repository-provenance)) → sanitize.py (staging-side tooling outside this repository; audit report per file) → wall_check.py (never-publish refusal, mutation-proven) → readme_guard.sh (refuses a tree that DELETED critical README content — the inverse question; deletion passes every other gate)
 → scan gate (secrets + personal data, zero-hit) → review against the export policy →
 OWNER GATE per batch → push to the NEW public repo → fresh-clone verify + public CI green.
-Rules: no .git is ever copied in; this tree's history begins at its own init; the private backup repo is
-never a remote here. Reports land in _reports/.
+Copy-in rules: no .git is ever copied in; this tree's history begins at its own init. In-repository
+history follows the linked provenance procedure. The private backup repo is never a remote here.
+Reports land in _reports/.
 
 ## What the scan report is, and what it is not
 
@@ -73,12 +74,11 @@ scanner's staged `.scan_report_` name, which promises nothing.
 
 A SUPERSEDED file is a second NAME for the report that was about to be replaced, and there the
 denial **declines the replacement** instead: the findings stay at `scan_report.txt`, where they
-already were, and the refusal reaches the caller through the exit status. Since round fifty-three
-the policy is installed on the held inode BEFORE any link, so a denial ordinarily means no
+already were, and the refusal reaches the caller through the exit status. The policy is installed on the held inode BEFORE any link, so a denial ordinarily means no
 reserved name is taken at all (a cold leg measured the earlier order publishing a 0644 report
 under a reserved second name for the width of the link). Where the verification after the link
 fails even though the narrowing before it succeeded, the reserved name is **kept**,
-deliberately. Removing it was this round's first shape, and it is wrong for a reason
+deliberately. Removing it was this repair's first shape, and it is wrong for a reason
 worth stating: a link is a second name only while the canonical name still reaches the inode, and
 in a hostile tree it may stop doing so between the link and the removal — at which point giving
 the name back destroys the findings. POSIX cannot express "remove this name only if it is not the
@@ -92,7 +92,7 @@ Neither case costs a byte. Preserving evidence outranks labelling it; claiming a
 not have does not.
 
 The mode cap is applied to the inode either way. The cap and the strip have been independent since
-the seventeenth round, and a denied strip must not take the cap with it — that is a separate
+the access-policy repair, and a denied strip must not take the cap with it — that is a separate
 property from this one, and this rule does not weaken it.
 
 **Any POSIX ACL on the published report is REMOVED, never carried** — whether inherited from the
@@ -310,7 +310,7 @@ open, and its handler's ask reaches the copy-out again with the depth it started
 bound the chain reached — so another copy may be attempted, subject to that copy-out's own
 preconditions (a descriptor directory, a readable source, a creatable name), none of which this
 count establishes either way. The sentence used to end "wins on the third one", which stated an
-outcome the depth checks do not support (two reviewers disagreed on the direction, gate 74), and a preservation or stage
+outcome the depth checks do not support (two reviewers disagreed on the direction), and a preservation or stage
 cleanup that reached the bound closes what it holds (cold leg, 2fb1625).
 
 Two more things were measured after that paragraph was written, and both belong here. First, the
@@ -348,7 +348,7 @@ the unpublished family. So a previous-generation report CAN appear under `scan_r
 a family this document otherwise describes as holding only this run's staged findings, and one
 preservation can consume a name from each family for the same inode; two runs preserving the same report at the same moment can each take one, which is the concurrent same-UID writer limit above — what that costs is slot capacity, never the findings.
 
-**The by-descriptor rescue needs a descriptor directory and a creatable temporary name.** When a staged or held name has stopped naming the bytes the scanner holds, the last resort copies them out through `/proc/self/fd/N` (or `/dev/fd/N`) into a fresh temporary name. On a system with neither directory, or when no temporary name can be created, that copy cannot be made, the function says so by answering False, and the close that follows frees the descriptor's inode. That, and a source the descriptor cannot read back (a read or write error before the first byte lands), are two of the ways bytes this scanner held are not on disk afterwards — a cancellation inside the re-check or the copy-out itself, and a `MemoryError` or `RecursionError` raised inside the copy-out's stream, are others, both named earlier in this document (the scanner's own stages are opened for reading, so a stage is read back from the descriptor it holds even when the reopen by mode is refused; a path-only descriptor still needs the reopen); they are stated here because two comments used to read as if the copy-out were unconditional, and this paragraph first said "the one case", then "the two cases", and was still counting short. The same directory is how the ACL strip reaches a held descriptor, so without it a kept leftover stays at mode 0600 with any inherited entries masked rather than removed, and quarantine takes no reserved name at all (an executed review measured both on a module with the directory unset). Preservation links through the same directory since round forty-six, so without it a stale FINDINGS report is not preserved and therefore not replaced. The access-policy install strips through it as well, so on a platform that has the xattr API but no descriptor directory no refusal lands at the canonical name at all — not even over a stale CLEAN. The report directory is not necessarily as it was found: the hardening that runs before the refusal writer may already have changed it, and only the refusal itself is missing; the safe direction, at the cost of the refusal being visible only in the exit status. Where the xattr API is absent too there is nothing to strip, and a refusal still replaces a stale CLEAN there (gate 43 caught the previous sentence claiming otherwise).
+**The by-descriptor rescue needs a descriptor directory and a creatable temporary name.** When a staged or held name has stopped naming the bytes the scanner holds, the last resort copies them out through `/proc/self/fd/N` (or `/dev/fd/N`) into a fresh temporary name. On a system with neither directory, or when no temporary name can be created, that copy cannot be made, the function says so by answering False, and the close that follows frees the descriptor's inode. That, and a source the descriptor cannot read back (a read or write error before the first byte lands), are two of the ways bytes this scanner held are not on disk afterwards — a cancellation inside the re-check or the copy-out itself, and a `MemoryError` or `RecursionError` raised inside the copy-out's stream, are others, both named earlier in this document (the scanner's own stages are opened for reading, so a stage is read back from the descriptor it holds even when the reopen by mode is refused; a path-only descriptor still needs the reopen); they are stated here because two comments used to read as if the copy-out were unconditional, and this paragraph first said "the one case", then "the two cases", and was still counting short. The same directory is how the ACL strip reaches a held descriptor, so without it a kept leftover stays at mode 0600 with any inherited entries masked rather than removed, and quarantine takes no reserved name at all (an executed review measured both on a module with the directory unset). Preservation links through the same directory since an earlier revision, so without it a stale FINDINGS report is not preserved and therefore not replaced. The access-policy install strips through it as well, so on a platform that has the xattr API but no descriptor directory no refusal lands at the canonical name at all — not even over a stale CLEAN. The report directory is not necessarily as it was found: the hardening that runs before the refusal writer may already have changed it, and only the refusal itself is missing; the safe direction, at the cost of the refusal being visible only in the exit status. Where the xattr API is absent too there is nothing to strip, and a refusal still replaces a stale CLEAN there (an earlier check caught the previous sentence claiming otherwise).
 
 Also not a concurrency limit: **a leftover whose ACL strip was denied keeps its inherited entries.**
 Findings the scanner could not publish or reserve are left under the temporary `.scan_report_*`
@@ -373,8 +373,10 @@ and a non-cooperating writer would ignore it.
 `ref_gate.py` and `readme_guard.sh` only. `wall_check.py` and `scan_gate.py` run here, before a
 batch is pushed — that is the point: a secret is caught before it lands, not after. `wall_check.py`
 additionally reads the provenance ledger at `_reports/provenance.tsv`, which is gitignored and
-deliberately NOT published (it records private source paths). So `wall_check.py` is present in a
-clone but cannot pass from one — it is not a check a downstream user is expected to run.
+deliberately NOT published (it can record private source paths). A fresh clone lacks that ledger
+until a maintainer performs reviewed preparation for copy-in or an in-repository release under
+[Instance policy and external archive paths — In-repository provenance](guard/README.md#in-repository-provenance).
+The tool is present in a clone; the private preparation evidence is not.
 
 Two scanners ship in this repo, and they do not have the same reach. guard/scrub_arm.py reads the
 bytes of each file (UTF-8, then UTF-16 in both byte orders when NUL bytes are present, then

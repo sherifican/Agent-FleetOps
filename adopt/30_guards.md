@@ -14,6 +14,11 @@ python3 guard/teeth_prover.py
 
 ## Step 2 — check vocabulary agreement and hermetic guard tests
 
+Use CPython 3.12 or newer for the fetch-gate teeth and the `guard/tests` run below.
+Point `python3` at that interpreter and install pytest there. Follow the
+[canonical C8 scope and invocation rules](../guard/README.md#fetch-gate-c8-scope-clarification)
+and retain the printed result together with the exit status.
+
 **ADOPTER COMMAND:**
 
 ```bash

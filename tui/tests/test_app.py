@@ -21,6 +21,8 @@ def test_gather_data(monkeypatch):
     monkeypatch.setattr("fleet_tui.app._net_cache", {"t": 0.0, "v": None})   # bypass the 20s cache
     monkeypatch.setattr("fleet_tui.app.boxes.read_boxes", lambda: [FleetBox()])
 
+    monkeypatch.setattr("fleet_tui.app.codex_link.read_status", lambda: {})
+
     # Call the function
     result = gather_data()
 

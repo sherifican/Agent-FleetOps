@@ -3,7 +3,34 @@ name: fleet-ops checks
 on:
   push: { branches: [main] }
   pull_request: { branches: [main] }
+permissions:
+  contents: read
 jobs:
+  python-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with: { python-version: "3.11" }
+      - name: Parse every tracked TUI Python file at the declared Python floor
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          import subprocess
+          tracked = subprocess.check_output(['git', 'ls-files', '-z', '--', 'tui/'])
+          paths = [Path(name.decode()) for name in tracked.split(b'\0') if name.endswith(b'.py')]
+          for path in paths:
+              ast.parse(path.read_bytes(), filename=str(path))
+          print(f"PYTHON_FLOOR_PARSE_OK: {len(paths)} tracked TUI Python files")
+          PY
+      - name: Install TUI dependencies
+        run: python -m pip install -r tui/requirements.txt
+      - name: Collect the TUI suite at the declared Python floor
+        working-directory: tui
+        run: python -m pytest --collect-only -q
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -14,9 +41,9 @@ jobs:
       # package dangling on the first run after publication. They skip on a shallow checkout now
       # rather than lie, and this line is what keeps them from skipping forever: a guard that
       # always stands down is the decoration this repository argues against.
-      - uses: actions/checkout@v7
-        with: { fetch-depth: 0 }
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with: { python-version: "3.12" }
       - name: Install
         run: |
@@ -44,9 +71,9 @@ jobs:
       # fetch-depth: 0 is critical — the ref gate scans FULL reachable history.
       # At the default depth of 1 it would scan one commit and report "clean", which is
       # the check-that-cannot-fail failure mode this repo exists to argue against.
-      - uses: actions/checkout@v7
-        with: { fetch-depth: 0 }
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with: { python-version: "3.12" }
       - name: Ref gate — mutation proof, then the real scan
         run: |

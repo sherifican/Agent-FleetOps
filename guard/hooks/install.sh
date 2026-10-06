@@ -6,6 +6,7 @@
 #
 #   install.sh                                  legacy: install every guard/hooks/* (except this
 #                                               script) after the identity-config and scanner self-test preflight
+#                                               Refuse differing existing hooks; identical reruns are allowed.
 #   install.sh --pre-push-config [--replace]    install ONLY guard/hooks/pre-push at Git's
 #                                               effective hook path via the git-config identity
 #                                               route; --replace backs up and replaces a
@@ -280,12 +281,22 @@ do_legacy() {
   esac
   hooks_abs=$(git rev-parse --path-format=absolute --git-path hooks 2>/dev/null) ||
     hooks_abs=$hooks_unresolved
-  mkdir -p "$hooks_abs"
+  # Check every destination before copying any hook, so a later conflict cannot leave a
+  # partially installed set. Legacy mode never replaces a differing user hook.
   for h in guard/hooks/*; do
     n=$(basename "$h"); [ "$n" = "install.sh" ] && continue
     if [ -L "$hooks_unresolved/$n" ]; then
       refuse "destination is a symlink (ambiguous ownership): $hooks_unresolved/$n — remove the link yourself, then rerun"
     fi
+    if [ -e "$hooks_abs/$n" ]; then
+      if [ ! -f "$hooks_abs/$n" ] || ! cmp -s "$h" "$hooks_abs/$n"; then
+        refuse "a different hook already exists at $hooks_abs/$n; legacy mode preserves it. Use --pre-push-config --replace to back up and replace only pre-push; handle any other hook yourself. No hooks were copied"
+      fi
+    fi
+  done
+  mkdir -p "$hooks_abs"
+  for h in guard/hooks/*; do
+    n=$(basename "$h"); [ "$n" = "install.sh" ] && continue
     install -m 755 "$h" "$hooks_abs/$n"
     d=$(digest "$hooks_abs/$n")
     if [ "$d" != "$(digest "$h")" ] || ! cmp -s "$h" "$hooks_abs/$n" || [ ! -x "$hooks_abs/$n" ]; then

@@ -24,7 +24,7 @@ signal is even stronger: the third backbone introduces a tiebreaker on splits an
 a fresh coverage angle. Running all backbones and reconciling produces a more
 reliable finalized report than any single model alone.
 
-The governing principle: **the human coordinator must never act on a claim that is
+The governing principle: **the user coordinator must never act on a claim that is
 actually a single-model artifact, a vendor self-report dressed as fact, or an
 unresolved disagreement.** Every finding in the finalized report carries its source,
 which model(s) produced it, and a clear act/provisional/hold status.
@@ -67,8 +67,9 @@ After ALL backbone models return their individual reports for the same task.
    - ✅ **AGREE / UNANIMOUS** — all backbones, same verdict. If all cite *independent*
      sources → 🟢 highest confidence. **Agreement is still not verification** — it is exactly
      what a shared unchecked premise produces: correlated error. ACT additionally requires the
-     shared premise to pass a verifier that CAN fail, wherever one can exist
-     (`guard/reconcile_gate.py` refuses an ACT whose shared premises are unverified).
+     shared premise to pass a verifier that CAN fail. If we cannot verify a premise, we follow
+     [research-team protocol — Failure handling](../../specs/research-team-protocol.md#failure-handling)
+     and record HOLD; `guard/reconcile_gate.py` is the executable consumer.
    - ⚠️ **SPLIT** — different verdicts or conflicting evidence. **RESOLVE to ground
      truth:** do an independent lookup, pick the correct verdict, record the trail
      AND which model(s) were right. **Never** let a split silently default to one
@@ -80,12 +81,12 @@ After ALL backbone models return their individual reports for the same task.
      UNANIMOUS; treat as 🟢 once resolved, 🟡 if resolution is ambiguous.
 
 3. **CONFIDENCE MAP** (at-a-glance for the coordinator):
-   - 🟢 **ACT** — all agree + independent sources + every shared premise verified (where no
-     verifier can exist, the record says so explicitly), OR a resolved majority under the same
-     premise rule.
+   - 🟢 **ACT** — all agree + independent sources + every shared premise verified, OR a
+     resolved majority under the same premise rule. When verification is unavailable, we use
+     the HOLD disposition in [research-team protocol — Failure handling](../../specs/research-team-protocol.md#failure-handling).
    - 🟡 **PROVISIONAL** — single-model, vendor self-report, or partial.
    - 🔴 **HOLD** — unresolved split or unsubstantiated → do NOT act; explicitly flagged
-     for the human.
+     for the user.
 
 4. **PER-MODEL RELIABILITY LOG** — for each resolved split, record who was right. Append
    to a running scorecard (e.g. `_backbone_reliability_log.md` in your research-output
@@ -112,7 +113,7 @@ either highly contested or poorly documented — flag it explicitly.
   retrieved this run (real content, not a 404).
 - **Anti-fabrication** throughout — never invent a source, verdict, or "which model said it."
 - A SPLIT is not resolved until a ground-truth source settles it OR it's explicitly marked
-  🔴 HOLD (unresolved) for the human.
+  🔴 HOLD (unresolved) for the user.
 - **Record TWO verdicts per resolved claim — the CONCLUSION verdict and the MECHANISM verdict**
   (is the reason sound?), separately. A true conclusion protects a false reason from scrutiny;
   keeping them apart stops a right-answer-wrong-mechanism claim from banking credibility for
@@ -123,10 +124,16 @@ either highly contested or poorly documented — flag it explicitly.
   pattern list, so the structural isolation (separate briefs, no first-leg output in the
   second) stays mandatory. The patterns match leak SHAPES, not keywords: the bare word
   "hypothesis" appears in every instruction telling you not to leak one — including this
-  bullet — so a scanner keyed to it flags the rule as a violation of itself. A match is also
-  suppressed when a negation precedes it on the line, or when it sits inside a quoted or
-  inline-code span, because a brief that FORBIDS a phrasing has to be able to write it down.
-  That last suppression is an evasion route, and naming it is the honest form of a tripwire.
+  bullet — so a scanner keyed to it flags the rule as a violation of itself. An occurrence is
+  also suppressed when an unquoted negation precedes it in the same sentence or clause with
+  no intervening clause-joining mark, or when that occurrence sits inside a quoted or
+  inline-code span, because a brief that FORBIDS a phrasing
+  has to be able to write it down. See the canonical negation window and residual limitation
+  in the `guard/brief_scan.py` module docstring (`_negated` / `scan_text`).
+  Quote a forbidden phrasing when citing it. The exact intervening-mark class and
+  its position relative to negation and occurrence are defined in that docstring.
+  That quoted-span suppression is an evasion route, and naming it is the honest
+  form of a tripwire.
 
 ## Who runs it
 Currently the **coordinator (the orchestrating agent with full system context)** — reconciliation
