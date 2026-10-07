@@ -23,8 +23,9 @@ Rules enforced:
      blob, fails like any stray ref.
   2. NO NEVER-PUBLISH CONTENT ON ANY REACHABLE REF — scans objects reachable from
      `--all`, not just the checked-out tree.
-  3. NO AI-ATTRIBUTION TRAILERS on any reachable commit or in any tag annotation reachable
-     from any ref, nested annotations included.
+  3. NO AI CO-AUTHOR TRAILERS (Co-Authored-By naming a model or assistant) on any
+     reachable commit or in any tag annotation reachable from any ref, nested
+     annotations included.
 
 fleetops.publishRef is trimmed; an absent, empty, or whitespace-only value defaults
 to refs/heads/main. A configured value must start with refs/ and pass
@@ -106,24 +107,19 @@ def publish_commit(repo, ref):
     Returns (sha or None, reason) where reason is "ok", "absent", or "not-a-commit".
     Raises RuntimeError on unexpected git failures.
     """
-    result = subprocess.run(
-        GIT + ["rev-parse", "--verify", "--quiet", ref],
-        cwd=repo, capture_output=True, text=True
-    )
-    if result.returncode == 1:
+    out = git(["for-each-ref", "--format=%(refname) %(objectname)", ref], repo)
+    sha = None
+    for line in out.splitlines():
+        name, _, objectname = line.partition(" ")
+        if name == ref:
+            sha = objectname.strip()
+            break
+    if sha is None:
         return None, "absent"
-    if result.returncode != 0:
-        raise RuntimeError(f"cannot resolve {ref}: rc={result.returncode} {result.stderr.strip()}")
-
-    result = subprocess.run(
-        GIT + ["rev-parse", "--verify", "--quiet", ref + "^{commit}"],
-        cwd=repo, capture_output=True, text=True
-    )
-    if result.returncode == 0:
-        return result.stdout.strip(), "ok"
-    if result.returncode == 1:
-        return None, "not-a-commit"
-    raise RuntimeError(f"cannot resolve {ref}: rc={result.returncode} {result.stderr.strip()}")
+    final, kind, _ = tag_chain(repo, sha)
+    if kind == "commit":
+        return final, "ok"
+    return None, "not-a-commit"
 
 
 def publish_anchor(repo, ref):

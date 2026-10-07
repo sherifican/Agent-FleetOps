@@ -181,6 +181,45 @@ def test_a_pull_request_checkout_judges_tags_against_origin_main(tmp_path):
     assert gate.check(str(repo), quiet=True) == 1
 
 
+def test_a_pull_request_head_off_main_does_not_anchor_tags(tmp_path):
+    gate = _gate()
+    repo, git, commits = _repo(tmp_path)
+    _pr_checkout(git, commits)
+    tree = git("rev-parse", "HEAD^{tree}")
+    pr_head = git("commit-tree", tree, "-p", commits["B"], "-m", "P")
+    git("checkout", "-q", "--detach", pr_head)
+    git("tag", "v0.1.1", commits["B"])
+    assert gate.check(str(repo), quiet=True) == 0
+    git("tag", "on-pr-head", pr_head)  # reachable from HEAD, not from origin/main
+    assert gate.check(str(repo), quiet=True) == 1
+
+
+def test_a_tag_named_like_the_publishing_ref_cannot_become_the_anchor(tmp_path):
+    gate = _gate()
+    repo, git, commits = _repo(tmp_path)
+    _pr_checkout(git, commits)
+    git("tag", "refs/heads/main", commits["U"])  # refs/tags/refs/heads/main
+    assert gate.check(str(repo), quiet=True) == 1
+
+
+def test_an_impostor_tag_on_published_history_does_not_shift_the_anchor(tmp_path):
+    gate = _gate()
+    repo, git, commits = _repo(tmp_path)
+    _pr_checkout(git, commits)
+    git("tag", "refs/heads/main", commits["A"])
+    git("tag", "v0.1.1", commits["B"])  # on origin/main; must not be judged against A
+    assert gate.check(str(repo), quiet=True) == 0
+
+
+def test_an_impostor_tag_cannot_stand_in_for_a_missing_anchor(tmp_path):
+    gate = _gate()
+    repo, git, commits = _repo(tmp_path)
+    git("checkout", "-q", "--detach", commits["B"])
+    git("update-ref", "-d", "refs/heads/main")
+    git("tag", "refs/heads/main", commits["B"])
+    assert gate.check(str(repo), quiet=True) == 2
+
+
 def test_tags_without_any_publishing_anchor_refuse(tmp_path):
     gate = _gate()
     repo, git, commits = _repo(tmp_path)
@@ -190,14 +229,17 @@ def test_tags_without_any_publishing_anchor_refuse(tmp_path):
     assert gate.check(str(repo), quiet=True) == 2
 
 
-def test_a_git_failure_resolving_the_anchor_refuses(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stage", ["for-each-ref", "cat-file"])
+def test_a_git_failure_at_any_anchor_stage_refuses(tmp_path, monkeypatch, stage):
     gate = _gate()
     repo, git, commits = _repo(tmp_path)
     git("tag", "v0.1.1", commits["B"])
     real_run = subprocess.run
+    calls = {"n": 0}
 
     def run(argv, *args, **kwargs):
-        if argv[:1] == ["git"] and "rev-parse" in argv and "--verify" in argv:
+        if argv[:1] == ["git"] and stage in argv and calls["n"] == 0:
+            calls["n"] += 1
             return subprocess.CompletedProcess(argv, 128, "", "fatal: injected failure")
         return real_run(argv, *args, **kwargs)
 
