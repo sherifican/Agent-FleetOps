@@ -230,6 +230,11 @@ HUMAN_LINES = [
     "Co-Authored-By: Kimi\u0302 Jones <k4@example.invalid>",
     "Co-Authored-By: Gemm\u00e1lia Jones <g3@example.invalid>",
     "Co-Authored-By: Gemma\u0301lia Jones <g4@example.invalid>",
+    # Marks with no precomposed form: normalizing to NFC and then using plain word boundaries
+    # would refuse these people, so the rule must be the mark itself, not normalization.
+    "Co-Authored-By: Grok\u1ab0 Ivanova <g5@example.invalid>",
+    "Co-Authored-By: Ma\u1ab0kimi Ortiz <m3@example.invalid>",
+    "Co-Authored-By: Gemma\u20d7 Ruiz <g6@example.invalid>",
     "Co-Authored-By: Qwen\u1ab0a Lee <q2@example.invalid>",
     "Reviewed-by: Claude <r@example.invalid>",
     "Delegated-to: a local code model wrote the change from a written spec",
@@ -386,9 +391,13 @@ def test_a_configured_publishing_ref_that_is_not_utf8_is_reported_escaped(tmp_pa
 
 
 # `git config --get` ends its value with one LF. Stripping more than that also removes a trailing
-# U+0085, U+2028 or U+2029 (str.strip treats them as whitespace) and a quoted trailing space, so a
-# configured name that is NOT refs/heads/main was read as refs/heads/main and main was allowed.
-CONFIGURED_TAILS = {"nel": "\u0085", "ls": "\u2028", "ps": "\u2029", "newline": "\n"}
+# U+0085, U+2028 or U+2029 (str.strip treats them as whitespace), and reading git's output in
+# universal-newline text mode turns a quoted trailing CR plus that LF into one LF, so a configured
+# name that is NOT refs/heads/main was read as refs/heads/main and main was allowed.
+# U+0085, U+2028 and U+2029 are legal in a ref name: the configured ref stays that name, and
+# refs/heads/main is reported as a stray. LF and CR are not: the value is refused.
+CONFIGURED_TAILS = {"nel": "\u0085", "ls": "\u2028", "ps": "\u2029", "newline": "\n", "cr": "\r"}
+REFUSED_TAILS = {"\n", "\r"}
 
 
 @pytest.mark.parametrize("tail", CONFIGURED_TAILS.values(), ids=CONFIGURED_TAILS.keys())
@@ -398,8 +407,13 @@ def test_a_configured_publishing_ref_with_a_trailing_character_is_not_read_as_ma
     _configure_publish_ref(repo, "refs/heads/main" + tail)
     result = _run_strict(repo)
     assert "Traceback" not in result.stdout + result.stderr, result.stderr
-    # The configured ref does not exist, so refs/heads/main is a stray, not the publishing ref.
     assert result.returncode == 1, result.stdout + result.stderr
+    if tail in REFUSED_TAILS:
+        assert "ref_gate: REFUSED fleetops.publishRef must name a valid full ref" in result.stdout, result.stdout
+    else:
+        shown = "refs/heads/main" + tail.encode("unicode_escape").decode("ascii")
+        assert f"publishable allow-list: ['{shown}']" in result.stdout, result.stdout
+        assert "         refs/heads/main @ " in result.stdout, result.stdout
 
 
 # ASCII space and tab can never be part of a ref name, so padding at either end is trimmed
@@ -474,6 +488,9 @@ def test_a_report_on_an_ascii_stream_gets_a_verdict(tmp_path):
     out = (result.stdout + result.stderr).decode("ascii", "replace")
     assert b"Traceback" not in result.stdout + result.stderr, out
     assert result.returncode == 1, out
+    # The report itself reaches the stream, with the characters ASCII cannot hold escaped.
+    assert b"refs/heads/caf\\xe9 @ " in result.stdout, out
+    assert b"=> VIOLATIONS" in result.stdout, out
 
 
 def test_a_configuration_refusal_holding_undecodable_bytes_is_reported(tmp_path, monkeypatch):
@@ -544,8 +561,8 @@ def test_the_self_test_catches_a_prose_scanner_that_reads_only_the_checked_out_b
 
 # Category-M characters that are also Default_Ignorable_Code_Point (Unicode 18.0.0
 # DerivedCoreProperties.txt): the combining grapheme joiner, Khmer inherent vowels, Mongolian free
-# variation selectors and variation selectors 1-256. They do not change the letters a reader sees,
-# so unlike a diacritic they must not continue a model name on either side.
+# variation selectors and variation selectors 1-256. They are default-ignorable, so unlike a
+# diacritic they must not continue a model name on either side.
 IGNORABLE_MARK_RANGES = [(0x034F, 0x034F), (0x17B4, 0x17B5), (0x180B, 0x180D), (0x180F, 0x180F),
                          (0xFE00, 0xFE0F), (0xE0100, 0xE01EF)]
 IGNORABLE_MARKS = [chr(c) for low, high in IGNORABLE_MARK_RANGES for c in range(low, high + 1)]
@@ -573,7 +590,7 @@ IGNORABLE_END_TO_END = {
 
 
 @pytest.mark.parametrize("where", IGNORABLE_END_TO_END.values(), ids=IGNORABLE_END_TO_END.keys())
-def test_an_ignorable_mark_after_a_model_name_still_fails_the_gate(tmp_path, where):
+def test_an_ignorable_mark_after_a_model_name_still_fails_the_gate(tmp_path, where, capsys):
     gate = _gate()
     repo, git = _repo(tmp_path)
     line = "Co-Authored-By: Grok\ufe00 <x@example.invalid>"
@@ -586,4 +603,32 @@ def test_an_ignorable_mark_after_a_model_name_still_fails_the_gate(tmp_path, whe
         # A real diacritic elsewhere in the message must not switch the ignorable mark on.
         git("commit", "-q", "--allow-empty", "-m",
             f"change\n\nCo-Authored-By: Kim\u0131\u0302 Jones <k5@example.invalid>\n{line}")
-    assert gate.check(str(repo), quiet=True) == 1
+    assert gate.check(str(repo)) == 1
+    # The refusal must be for the model line, not for the person beside it.
+    flagged = [l for l in capsys.readouterr().out.splitlines() if "Co-Authored-By" in l]
+    assert any("Grok" in l for l in flagged), flagged
+    assert not any("Jones" in l for l in flagged), flagged
+
+
+def test_the_self_test_reports_on_an_ascii_stream():
+    path = Path(__file__).resolve().parents[2] / "_tools" / "ref_gate.py"
+    env = dict(os.environ, PYTHONIOENCODING="ascii:strict", PYTHONUTF8="0")
+    result = subprocess.run([sys.executable, str(path), "--self-test"], capture_output=True, env=env)
+    out = (result.stdout + result.stderr).decode("ascii", "replace")
+    assert b"Traceback" not in result.stdout + result.stderr, out
+    assert result.returncode == 0, out
+    assert b"ref_gate --self-test: PASSED" in result.stdout, out
+
+
+def test_a_self_test_failure_is_reported_on_an_ascii_stream(monkeypatch):
+    import io
+    gate = _gate()
+    # A gate that never goes green makes the baseline checks fail; their messages hold an em dash.
+    monkeypatch.setattr(gate, "check", lambda *a, **k: 1)
+    sink = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
+    monkeypatch.setattr(sys, "stdout", sink)
+    assert gate.self_test() == 1
+    sink.flush()
+    out = sink.buffer.getvalue().decode("ascii")
+    assert "ref_gate --self-test: FAILED" in out, out
+    assert "BASELINE" in out, out

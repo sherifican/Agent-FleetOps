@@ -33,6 +33,10 @@ Rules enforced:
      the word, except the default-ignorable marks in DEFAULT_IGNORABLE_MARK_RANGES,
      so a person whose name is also a model's name
      (Gemma, Kimi) is refused too; the report shows the whole line.
+     A name split by an invisible character inside it (a default-ignorable mark such as
+     U+FE00, or a format character such as U+200B), and a trailer that begins after a
+     Unicode line separator (U+2028) rather than an LF, are not caught: a trailer is
+     an LF-delimited line, matched as a contiguous name.
 
 fleetops.publishRef loses git config's one final LF, then ASCII space and tab
 are trimmed from both ends; every other character stays. An absent or empty value defaults to refs/heads/main.
@@ -118,13 +122,13 @@ def git_bytes(args, cwd, input=None):
 def publishable_refs(repo):
     """An adopter may select one publishing ref; absent config preserves the CI default."""
     result = subprocess.run(GIT + ["config", "--get", "fleetops.publishRef"],
-                            cwd=repo, capture_output=True, encoding="utf-8", errors="surrogateescape")
+                            cwd=repo, capture_output=True)
     if result.returncode == 1:
         return {DEFAULT_PUBLISH_REF}
     if result.returncode != 0:
         stderr = result.stderr.decode(errors="replace") if isinstance(result.stderr, bytes) else result.stderr
         raise RuntimeError(f"cannot read fleetops.publishRef: {stderr.strip()}")
-    ref = result.stdout.removesuffix("\n").strip(" \t")
+    ref = result.stdout.removesuffix(b"\n").strip(b" \t").decode("utf-8", "surrogateescape")
     if not ref:
         return {DEFAULT_PUBLISH_REF}
     if not ref.startswith("refs/"):
@@ -376,12 +380,17 @@ def display_value(value):
     return value if value.isprintable() else repr(value)
 
 
+def _stdout(*a):
+    """Write a report line, escaping characters the stdout encoding cannot hold."""
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    line = " ".join(str(value) for value in a)
+    print(line.encode(encoding, errors="backslashreplace").decode(encoding))
+
+
 def check(repo, quiet=False):
     def say(*a):
         if not quiet:
-            encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-            line = " ".join(str(value) for value in a)
-            print(line.encode(encoding, errors="backslashreplace").decode(encoding))
+            _stdout(*a)
 
     if not os.path.isdir(os.path.join(repo, ".git")):
         sys.stderr.write(f"ref_gate: {repo} is not a git repo — refusing to emit a verdict\n")
@@ -538,11 +547,11 @@ def self_test():
             failures.append("DISCRIMINATION: a commit MESSAGE mentioning __pycache__ was read as a path")
 
     if failures:
-        print("ref_gate --self-test: FAILED")
+        _stdout("ref_gate --self-test: FAILED")
         for f in failures:
-            print(f"  - {f}")
+            _stdout(f"  - {f}")
         return 1
-    print("ref_gate --self-test: PASSED — all 3 rules provably go red; tags exempt only on published history; prose/path discrimination holds")
+    _stdout("ref_gate --self-test: PASSED — all 3 rules provably go red; tags exempt only on published history; prose/path discrimination holds")
     return 0
 
 
