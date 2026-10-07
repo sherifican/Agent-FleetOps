@@ -626,6 +626,12 @@ def test_the_self_test_reports_on_an_ascii_stream():
     assert b"Traceback" not in result.stdout + result.stderr, out
     assert result.returncode == 0, out
     assert b"ref_gate --self-test: PASSED \\u2014 " in result.stdout, out
+    # On a stream that can hold it, the line carries the em dash itself, not an escape.
+    env = dict(os.environ, PYTHONIOENCODING="utf-8:strict", PYTHONUTF8="0")
+    result = subprocess.run([sys.executable, str(path), "--self-test"], capture_output=True, env=env)
+    out = (result.stdout + result.stderr).decode("utf-8", "replace")
+    assert result.returncode == 0, out
+    assert "ref_gate --self-test: PASSED \u2014 ".encode() in result.stdout, out
 
 
 def test_a_self_test_failure_is_reported_on_an_ascii_stream(monkeypatch):
@@ -640,4 +646,6 @@ def test_a_self_test_failure_is_reported_on_an_ascii_stream(monkeypatch):
     out = sink.buffer.getvalue().decode("ascii")
     assert "ref_gate --self-test: FAILED" in out, out
     assert "BASELINE" in out, out
-    assert "\\u2014" in out, out
+    # Each baseline message reaches the stream with its em dash escaped.
+    assert "BASELINE: a clean single-main repo was not green \\u2014 gate is over-firing" in out, out
+    assert "BASELINE: a release tag on main's tip was not green \\u2014 tag exemption is over-firing" in out, out
