@@ -625,13 +625,16 @@ def test_the_self_test_reports_on_an_ascii_stream():
     out = (result.stdout + result.stderr).decode("ascii", "replace")
     assert b"Traceback" not in result.stdout + result.stderr, out
     assert result.returncode == 0, out
-    assert b"ref_gate --self-test: PASSED \\u2014 " in result.stdout, out
+    assert (b"ref_gate --self-test: PASSED \\u2014 all 3 rules provably go red; "
+            b"tags exempt only on published history; prose/path discrimination holds") in result.stdout, out
     # On a stream that can hold it, the line carries the em dash itself, not an escape.
     env = dict(os.environ, PYTHONIOENCODING="utf-8:strict", PYTHONUTF8="0")
     result = subprocess.run([sys.executable, str(path), "--self-test"], capture_output=True, env=env)
     out = (result.stdout + result.stderr).decode("utf-8", "replace")
+    assert b"Traceback" not in result.stdout + result.stderr, out
     assert result.returncode == 0, out
-    assert "ref_gate --self-test: PASSED \u2014 ".encode() in result.stdout, out
+    assert ("ref_gate --self-test: PASSED \u2014 all 3 rules provably go red; "
+            "tags exempt only on published history; prose/path discrimination holds").encode("utf-8") in result.stdout, out
 
 
 def test_a_self_test_failure_is_reported_on_an_ascii_stream(monkeypatch):
@@ -649,3 +652,11 @@ def test_a_self_test_failure_is_reported_on_an_ascii_stream(monkeypatch):
     # Each baseline message reaches the stream with its em dash escaped.
     assert "BASELINE: a clean single-main repo was not green \\u2014 gate is over-firing" in out, out
     assert "BASELINE: a release tag on main's tip was not green \\u2014 tag exemption is over-firing" in out, out
+    # On a stream that can hold it, each message carries the em dash itself, not an escape.
+    sink = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", errors="strict")
+    monkeypatch.setattr(sys, "stdout", sink)
+    assert gate.self_test() == 1
+    sink.flush()
+    out = sink.buffer.getvalue().decode("utf-8")
+    assert "BASELINE: a clean single-main repo was not green \u2014 gate is over-firing" in out, out
+    assert "BASELINE: a release tag on main's tip was not green \u2014 tag exemption is over-firing" in out, out
