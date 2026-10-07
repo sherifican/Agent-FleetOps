@@ -12,9 +12,11 @@ Every test below except the two controls fails by assertion on 3857c81 (or, for 
 bounded-runner test, by its own watchdog), never by a missing interface; the controls pass there
 and must keep passing. Written BEFORE the fix.
 """
+import errno
 import importlib.util
 import os
 import pathlib
+import sys
 import threading
 import time
 
@@ -158,11 +160,31 @@ def _alive(pid):
     try:
         with open("/proc/%d/stat" % pid, "rb") as fh:
             return fh.read().rsplit(b")", 1)[1].split()[0] != b"Z"
-    except OSError:
+    except FileNotFoundError:
         return False
+    except OSError:
+        return True
     except (ValueError, IndexError):
         # The pid entry exists; an unreadable survivor must not look like successful cleanup.
         return True
+
+
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (FileNotFoundError(errno.ENOENT, "no such process"), False),
+        (PermissionError(errno.EACCES, "stat unreadable"), True),
+        (OSError(errno.EIO, "stat read failed"), True),
+    ],
+    ids=["missing-entry-is-gone", "permission-error-is-not-gone", "io-error-is-not-gone"],
+)
+def test_alive_treats_only_a_missing_stat_entry_as_gone(monkeypatch, error, expected):
+    # A failed read is not evidence that the process exited, so only ENOENT may report it gone.
+    def failing_open(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(sys.modules[__name__], "open", failing_open, raising=False)
+    assert _alive(os.getpid()) is expected
 
 
 def _kill(pid):
