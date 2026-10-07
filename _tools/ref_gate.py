@@ -18,9 +18,13 @@ Rules enforced:
   1. PUBLISHABLE REFS ONLY — every ref in a pushable namespace must be allow-listed.
      A `filter-branch` leftover (`refs/original/*`) or a rewrite backup branch is a
      FAIL, not a warning: it is one flag away from being published.
+     A tag is exempt only when its annotation chain ends at a commit that is an ancestor of
+     (or equal to) the publishing ref's commit; a tag on unpublished history, or on a tree or
+     blob, fails like any stray ref.
   2. NO NEVER-PUBLISH CONTENT ON ANY REACHABLE REF — scans objects reachable from
      `--all`, not just the checked-out tree.
-  3. NO AI-ATTRIBUTION TRAILERS on any reachable commit.
+  3. NO AI-ATTRIBUTION TRAILERS on any reachable commit or in any tag message,
+     nested annotations included.
 
 fleetops.publishRef is trimmed; an absent, empty, or whitespace-only value defaults
 to refs/heads/main. A configured value must start with refs/ and pass
@@ -37,6 +41,7 @@ ref carrying a banned blob and a banned trailer, and asserts the gate goes RED o
 rule. A gate that cannot be made to fail is indistinguishable from a gate that passes.
 
 Exit: 0 = clean · 1 = violations · 2 = refused to run (cannot produce a trustworthy verdict)
+A shallow clone refuses with 2: missing history would make every rule look clean.
 """
 
 import os
@@ -87,18 +92,73 @@ def publishable_refs(repo):
     return {ref}
 
 
+def publish_commit(repo, ref):
+    """Resolve a ref to its commit sha, or None if the ref does not exist."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", ref + "^{commit}"],
+        cwd=repo, capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        return result.stdout.strip()
+    return None
+
+
+def tag_chain(repo, sha):
+    """Follow an annotated-tag chain to its final object.
+
+    Returns (final_object_sha, final_object_type, [(tag_sha, message), ...]).
+    """
+    obj = sha
+    messages = []
+    for _ in range(32):
+        kind = git(["cat-file", "-t", obj], repo).strip()
+        if kind != "tag":
+            return obj, kind, messages
+        body = git(["cat-file", "tag", obj], repo)
+        header, _, message = body.partition("\n\n")
+        messages.append((obj, message))
+        obj = None
+        for line in header.splitlines():
+            if line.startswith("object "):
+                obj = line[len("object "):].strip()
+                break
+        if obj is None:
+            raise RuntimeError(f"tag chain malformed at {sha}")
+    raise RuntimeError(f"tag chain too deep at {sha}")
+
+
 def stray_refs(repo):
     """Rule 1 — every ref a push could carry must be allow-listed."""
     out = git(["for-each-ref", "--format=%(refname) %(objectname)"], repo)
     strays = []
+    allowed = publishable_refs(repo)
+    target = None
+    for ref in allowed:
+        target = publish_commit(repo, ref)
+        if target is not None:
+            break
     for line in out.splitlines():
         if not line.strip():
             continue
         name, _, sha = line.partition(" ")
         if not name.startswith(PUSHABLE_PREFIXES):
             continue  # refs/remotes/* etc — not publishable
-        if name not in publishable_refs(repo):
-            strays.append((name, sha[:9]))
+        if name in allowed:
+            continue
+        if name.startswith("refs/tags/"):
+            final, kind, _ = tag_chain(repo, sha)
+            if kind == "commit" and target is not None:
+                mb = subprocess.run(
+                    ["git", "merge-base", "--is-ancestor", final, target],
+                    cwd=repo, capture_output=True, text=True
+                )
+                if mb.returncode == 0:
+                    continue  # exempt: tag peels to a published commit
+                elif mb.returncode == 1:
+                    pass  # not an ancestor -> stray
+                else:
+                    raise RuntimeError(f"merge-base failed rc={mb.returncode}: {mb.stderr.strip()}")
+        strays.append((name, sha[:9]))
     return strays
 
 
@@ -117,7 +177,7 @@ def banned_objects(repo):
 
 
 def banned_trailers(repo):
-    """Rule 3 — AI-attribution trailers on any reachable commit."""
+    """Rule 3 — AI-attribution trailers on any reachable commit or tag message."""
     out = git(["log", "--all", "--format=%H%x00%B%x00%x00"], repo)
     hits = []
     for rec in out.split("\x00\x00"):
@@ -126,6 +186,18 @@ def banned_trailers(repo):
         sha, _, body = rec.partition("\x00")
         for m in BANNED_TRAILER.finditer(body):
             hits.append((sha.strip()[:9], m.group(0).strip()))
+
+    # Also scan every annotated tag message (outer and nested inner tags).
+    tags_out = git(["for-each-ref", "--format=%(refname) %(objectname)", "refs/tags/"], repo)
+    for line in tags_out.splitlines():
+        if not line.strip():
+            continue
+        _, _, sha = line.partition(" ")
+        _, _, messages = tag_chain(repo, sha)
+        for tag_sha, message in messages:
+            for m in BANNED_TRAILER.finditer(message):
+                hits.append(("tag " + tag_sha[:9], m.group(0).strip()))
+
     return hits
 
 
@@ -138,15 +210,30 @@ def check(repo, quiet=False):
         sys.stderr.write(f"ref_gate: {repo} is not a git repo — refusing to emit a verdict\n")
         return 2
 
+    shallow_result = subprocess.run(
+        ["git", "rev-parse", "--is-shallow-repository"],
+        cwd=repo, capture_output=True, text=True
+    )
+    if shallow_result.returncode != 0:
+        sys.stderr.write(f"ref_gate: cannot tell whether {repo} is shallow — refusing to emit a verdict\n")
+        return 2
+    if shallow_result.stdout.strip() == "true":
+        sys.stderr.write(f"ref_gate: {repo} is a shallow clone — history is incomplete, so ancestry and reachable-object checks cannot be judged; fetch full history (fetch-depth: 0) — refusing to emit a verdict\n")
+        return 2
+
     try:
         allowed = publishable_refs(repo)
     except RuntimeError as error:
         say(f"ref_gate: REFUSED {error}")
         return 1
 
-    strays = stray_refs(repo)
-    objs = banned_objects(repo)
-    trailers = banned_trailers(repo)
+    try:
+        strays = stray_refs(repo)
+        objs = banned_objects(repo)
+        trailers = banned_trailers(repo)
+    except RuntimeError as error:
+        sys.stderr.write(f"ref_gate: {error} — refusing to emit a verdict\n")
+        return 2
 
     say(f"ref_gate: {repo}")
     say(f"  publishable allow-list: {sorted(allowed)}")
@@ -201,6 +288,20 @@ def self_test():
         if check(repo, quiet=True) != 0:
             failures.append("BASELINE: a clean single-main repo was not green — gate is over-firing")
 
+        # Tag exemption: a lightweight tag at main's tip must be GREEN.
+        git(["tag", "v0.0.1"], repo)
+        if check(repo, quiet=True) != 0:
+            failures.append("BASELINE: a release tag on main's tip was not green — tag exemption is over-firing")
+
+        # Mutation 4 — a tag on an orphan commit (unreachable from main) must FAIL.
+        tree = git(["rev-parse", "HEAD^{tree}"], repo).strip()
+        orphan = git(["-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", tree, "-m", "orphan"], repo).strip()
+        git(["tag", "v9.9.9", orphan], repo)
+        if check(repo, quiet=True) != 1:
+            failures.append("MUTATION 4: a tag on a commit unreachable from the publishing ref did NOT trip rule 1")
+        git(["tag", "-d", "v9.9.9"], repo)
+        git(["tag", "-d", "v0.0.1"], repo)
+
         # Mutation 1 — a stray ref (the exact filter-branch leftover shape).
         git(["update-ref", "refs/original/refs/heads/main", "refs/heads/main"], repo)
         if not stray_refs(repo):
@@ -243,7 +344,7 @@ def self_test():
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("ref_gate --self-test: PASSED — all 3 rules provably go red; prose/path discrimination holds")
+    print("ref_gate --self-test: PASSED — all 3 rules provably go red; tags exempt only on published history; prose/path discrimination holds")
     return 0
 
 
