@@ -257,6 +257,16 @@ Keep agent working directories and test scratch on a disk with room to spare, wa
 before it runs out, and review old outputs on a schedule. Archive or summarise evidence before
 considering deletion, and review any automatic cleanup policy before enabling it.
 
+A second drive is one way to keep that growth off the system disk. Pytest's temporary directories
+can go there: pass `--basetemp` with a path on that drive, or set `TMPDIR` for the run. The TUI
+suite still creates its isolated home under `/tmp` on purpose, so an inherited `TMPDIR` cannot
+place it inside your real home directory. Agent working directories, receipts and logs can live on
+that drive too; point each tool's output path at a directory there. If you copy existing files
+over, check each copy's size and sha256 hash before deleting anything from the system disk. A drive
+that has shown read or write errors should not hold the only copy of evidence you cannot
+regenerate; keep a second copy elsewhere. In my own setup, I keep many small files on a second
+drive and keep very large files off it.
+
 Some explicit operations remove or replace files: `vision_ingest.py extract` clears temporary
 JPEGs, `gc` deletes recorded `_temp` frames that are neither selected nor reserve, and
 `reprune` removes kept frames that no longer qualify. `archive` replaces same-named files at
