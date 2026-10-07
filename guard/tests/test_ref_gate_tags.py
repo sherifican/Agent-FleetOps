@@ -229,22 +229,78 @@ def test_tags_without_any_publishing_anchor_refuse(tmp_path):
     assert gate.check(str(repo), quiet=True) == 2
 
 
-@pytest.mark.parametrize("stage", ["for-each-ref", "cat-file"])
-def test_a_git_failure_at_any_anchor_stage_refuses(tmp_path, monkeypatch, stage):
+IMPOSTOR_SPELLINGS = [
+    "refs/tags/refs/heads/main",
+    "refs/remotes/refs/heads/main",
+    "refs/heads/refs/heads/main",
+    "refs/refs/heads/main",
+    "refs/heads/main/extra",
+]
+
+
+@pytest.mark.parametrize("impostor", IMPOSTOR_SPELLINGS)
+def test_no_spelling_of_the_publishing_ref_stands_in_for_it(tmp_path, impostor):
+    """rev-parse would resolve each of these for refs/heads/main; the gate must not."""
     gate = _gate()
     repo, git, commits = _repo(tmp_path)
-    git("tag", "v0.1.1", commits["B"])
-    real_run = subprocess.run
-    calls = {"n": 0}
+    git("checkout", "-q", "--detach", commits["B"])
+    git("update-ref", "-d", "refs/heads/main")
+    git("update-ref", impostor, commits["U"])
+    git("tag", "on-orphan", commits["U"])
+    assert gate.check(str(repo), quiet=True) == 2
 
-    def run(argv, *args, **kwargs):
-        if argv[:1] == ["git"] and stage in argv and calls["n"] == 0:
-            calls["n"] += 1
-            return subprocess.CompletedProcess(argv, 128, "", "fatal: injected failure")
+
+@pytest.mark.parametrize("shape", ["push", "pull-request"])
+def test_a_git_failure_at_any_call_refuses(tmp_path, capsys, shape):
+    """Every git call the gate makes is failed in turn; none may turn into a verdict."""
+    gate = _gate()
+    repo, git, commits = _repo(tmp_path)
+    _annotated(git, "v0.1.1", commits["B"], "v0.1.1")
+    git("tag", "v0.1.0", commits["A"])
+    if shape == "pull-request":
+        _pr_checkout(git, commits)
+    real_run = subprocess.run
+    calls = []
+
+    def record(argv, *args, **kwargs):
+        if argv[:1] == ["git"]:
+            calls.append(list(argv))
         return real_run(argv, *args, **kwargs)
 
-    monkeypatch.setattr(gate.subprocess, "run", run)
-    assert gate.check(str(repo), quiet=True) == 2
+    gate.subprocess.run = record
+    try:
+        assert gate.check(str(repo), quiet=True) == 0
+    finally:
+        gate.subprocess.run = real_run
+    seen = {" ".join(argv) for argv in calls}
+    assert any("cat-file tag" in argv for argv in seen)
+    assert any("merge-base --is-ancestor" in argv for argv in seen)
+    capsys.readouterr()
+
+    for target in range(len(calls)):
+        count = [0]
+
+        def run(argv, *args, **kwargs):
+            if argv[:1] == ["git"]:
+                count[0] += 1
+                if count[0] == target + 1:
+                    return subprocess.CompletedProcess(argv, 128, "", "fatal: injected failure")
+            return real_run(argv, *args, **kwargs)
+
+        gate.subprocess.run = run
+        try:
+            rc = gate.check(str(repo), quiet=False)
+        finally:
+            gate.subprocess.run = real_run
+        out = capsys.readouterr()
+        argv = " ".join(calls[target])
+        assert count[0] > target, argv
+        if "config" in calls[target]:
+            assert rc == 1 and "REFUSED" in out.out, argv  # documented config refusal
+        elif "--is-shallow-repository" in calls[target]:
+            assert rc == 2, argv
+        else:
+            assert rc == 2 and "injected failure" in out.err, argv
 
 
 def test_a_shallow_clone_with_tags_refuses_instead_of_judging(tmp_path):

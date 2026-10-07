@@ -4,8 +4,8 @@ ref_gate.py — the publishing gate's REF layer.
 
 The content gates (wall_check.py, scan_gate.py) answer "is the working tree safe to
 publish?". Neither can answer "what would a push actually publish?" — because a push
-publishes REFS, not a worktree, and `git push --all` / `git push --mirror` publishes
-EVERY local ref, including ones a history rewrite left behind.
+publishes REFS, not a worktree: `git push --all` publishes every local branch and
+`git push --mirror` every local ref, including ones a history rewrite left behind.
 
 This is not hypothetical. After this repo's history rewrite, `refs/heads/main` was clean
 (0 AI-attribution trailers, 0 `__pycache__` blobs) while `refs/original/refs/heads/main`
@@ -21,11 +21,12 @@ Rules enforced:
      A tag is exempt only when its annotation chain ends at a commit that is an ancestor of
      (or equal to) the publishing ref's commit; a tag on unpublished history, or on a tree or
      blob, fails like any stray ref.
-  2. NO NEVER-PUBLISH CONTENT ON ANY REACHABLE REF — scans objects reachable from
-     `--all`, not just the checked-out tree.
-  3. NO AI CO-AUTHOR TRAILERS (Co-Authored-By naming a model or assistant) on any
-     reachable commit or in any tag annotation reachable from any ref, nested
-     annotations included.
+  2. NO NEVER-PUBLISH CONTENT ON ANY REACHABLE REF — every entry name of every tree
+     reachable from `--all`, not just the checked-out tree, and not only the one name
+     rev-list prints for an object that sits under several names.
+  3. NO AI CO-AUTHOR TRAILERS (Co-Authored-By naming a model, a model vendor or an
+     assistant, as a whole word) on any reachable commit or in any tag annotation
+     reachable from any ref, nested annotations included.
 
 fleetops.publishRef is trimmed; an absent, empty, or whitespace-only value defaults
 to refs/heads/main. A configured value must start with refs/ and pass
@@ -33,13 +34,13 @@ git check-ref-format. Invalid values refuse with one message and status 1.
 refs/original/ is reserved for rewrite leftovers and cannot be configured for publication.
 Tags are judged against the publishing ref's commit. When that branch is absent locally
 (a pull-request checkout has only refs/remotes/origin/*), its refs/remotes/origin counterpart
-is the anchor; with neither present, any tag makes the gate refuse with 2. A configured
-publishing ref that does not point at a commit is refused with 1. Every git call runs with
---no-replace-objects: a push publishes real objects, so a local replace ref must not change
-a verdict.
+is the anchor; with neither present, any ref under refs/tags/ makes the gate refuse with 2.
+A configured publishing ref that does not point at a commit is refused with 1. Every git call
+runs with --no-replace-objects: a push publishes real objects, so a local replace ref cannot
+stand in for them (objects that only a replace ref reaches are still scanned).
 
-Note rule 2 and 3 deliberately query the OBJECT layer (`rev-list --objects`,
-`log --format=%B`) rather than grepping rendered `git log` output: a text search over a
+Note rule 2 and 3 deliberately query the OBJECT layer (tree entries via
+`cat-file --batch`, `log --format=%B`) rather than grepping rendered `git log` output: a text search over a
 log matches the log's own prose about a thing (a commit *subject* saying "untrack root
 __pycache__" is not a path), which produces confident false positives in both directions.
 
@@ -60,12 +61,18 @@ import tempfile
 # Refs that are legitimately publishable. Anything else in a pushable namespace fails.
 DEFAULT_PUBLISH_REF = "refs/heads/main"
 
-# Namespaces a push can actually reach. refs/remotes/* is local bookkeeping, never pushed.
-# refs/original/ remains a refusal target for rewrite leftovers, never an allowance.
+# Namespaces this gate judges: what a branch or tag push (`--all`, `--tags`) sends, plus
+# refs/original/ as a refusal target for rewrite leftovers, never an allowance.
+# `push --mirror` also sends refs/remotes/* and every other namespace; this gate does not
+# judge a mirror push.
 PUSHABLE_PREFIXES = ("refs/heads/", "refs/tags/", "refs/original/")
 
 BANNED_PATH = re.compile(r"(^|/)__pycache__(/|$)|\.pyc$|\.pyo$")
-BANNED_TRAILER = re.compile(r"(?im)^(Co-Authored-By|Co-authored-by):\s*.*(claude|gpt|codex|gemini|copilot|assistant|\bai\b)")
+BANNED_TRAILER = re.compile(
+    r"(?im)^co-authored-by:[^\n]*?"
+    r"(?:\b(?:claude|anthropic|chatgpt|gpt|openai|codex|gemini|gemma|grok|xai|qwen|deepseek"
+    r"|llama|mistral|kimi|moonshot|glm|copilot|assistant)\b|\b(?-i:AI)\b)"
+)
 
 GIT = ["git", "--no-replace-objects"]
 
@@ -77,6 +84,17 @@ def git(args, cwd):
     )
     if p.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed rc={p.returncode}: {p.stderr.strip()}")
+    return p.stdout
+
+
+def git_bytes(args, cwd, input=None):
+    """Run a git command on bytes (tree bodies and file names are not text)."""
+    p = subprocess.run(GIT + args, cwd=cwd, capture_output=True, input=input)
+    if p.returncode != 0:
+        stderr = p.stderr.decode(errors='replace') if isinstance(p.stderr, bytes) else p.stderr
+        raise RuntimeError(
+            f"git {' '.join(args)} failed rc={p.returncode}: "
+            f"{stderr.strip()}")
     return p.stdout
 
 
@@ -204,16 +222,73 @@ def stray_refs(repo, allowed=None, target=None):
 
 
 def banned_objects(repo):
-    """Rule 2 — never-publish paths among objects reachable from ANY ref."""
-    out = git(["rev-list", "--all", "--objects"], repo)
+    """Rule 2 — never-publish names in any tree reachable from ANY ref.
+
+    Every entry of every reachable tree is read, because rev-list names each object
+    only once and a banned name can share its object with an allowed one.
+    """
+    out = git(["rev-list", "--all", "--objects", "--no-object-names"], repo)
+    ids = [line.strip() for line in out.splitlines() if line.strip()]
+    if not ids:
+        return []
+    fmt = git(["rev-parse", "--show-object-format"], repo).strip()
+    if fmt == "sha1": hash_len = 20
+    elif fmt == "sha256": hash_len = 32
+    else: raise RuntimeError(f"unknown object format {fmt!r}")
+
+    checks = git_bytes(["cat-file", "--batch-check=%(objectname) %(objecttype)"], repo,
+                       input=("\n".join(ids) + "\n").encode())
+    lines = checks.decode().splitlines()
+    if len(lines) != len(ids):
+        raise RuntimeError("object type batch truncated")
+    trees = []
+    for obj, line in zip(ids, lines):
+        parts = line.split(" ")
+        if (len(parts) != 2 or parts[0] != obj or
+                parts[1] not in ("commit", "tree", "blob", "tag")):
+            raise RuntimeError(f"cannot read object type: {line!r}")
+        if parts[1] == "tree":
+            trees.append(parts[0])
+    if not trees:
+        return []
+
+    body = git_bytes(["cat-file", "--batch"], repo, input=("\n".join(trees) + "\n").encode())
     hits = []
-    for line in out.splitlines():
-        parts = line.split(" ", 1)
-        if len(parts) != 2:
-            continue  # a bare commit/tree sha with no path
-        sha, path = parts
-        if BANNED_PATH.search(path):
-            hits.append((sha[:9], path))
+    seen = set()
+    pos = 0
+    for tree in trees:
+        header_end = body.find(b"\n", pos)
+        if header_end == -1:
+            raise RuntimeError("tree batch truncated")
+        header = body[pos:header_end].decode().split(" ")
+        if len(header) != 3 or header[:2] != [tree, "tree"]:
+            raise RuntimeError(f"unexpected batch header {header!r}")
+        try:
+            size = int(header[2])
+        except ValueError:
+            raise RuntimeError(f"unexpected batch header {header!r}") from None
+        if size < 0:
+            raise RuntimeError(f"unexpected batch header {header!r}")
+        content = body[header_end + 1:header_end + 1 + size]
+        if len(content) != size:
+            raise RuntimeError("tree batch truncated")
+        pos = header_end + 1 + size
+        if body[pos:pos + 1] != b"\n":
+            raise RuntimeError("tree batch truncated")
+        pos += 1
+        i = 0
+        while i < len(content):
+            space = content.find(b" ", i)
+            nul = content.find(b"\0", space + 1) if space != -1 else -1
+            if space == -1 or nul == -1 or nul + 1 + hash_len > len(content):
+                raise RuntimeError(f"tree {tree[:9]} malformed")
+            name = os.fsdecode(content[space + 1:nul])
+            i = nul + 1 + hash_len
+            if BANNED_PATH.search(name) and (tree, name) not in seen:
+                seen.add((tree, name))
+                hits.append((tree[:9], name))
+    if pos != len(body):
+        raise RuntimeError("unexpected trailing tree batch data")
     return hits
 
 
