@@ -214,6 +214,12 @@ HUMAN_LINES = [
     "Co-Authored-By: Gemma\u00eblle Martin <g2@example.invalid>",
     "Co-Authored-By: Kimi\u0107 Novak <k2@example.invalid>",
     "Co-Authored-By: Llama\u00f1o Ruiz <l2@example.invalid>",
+    # The same names composed and decomposed: a combining mark continues the word too.
+    "Co-Authored-By: Kim\u00ee Jones <k3@example.invalid>",
+    "Co-Authored-By: Kimi\u0302 Jones <k4@example.invalid>",
+    "Co-Authored-By: Gemm\u00e1lia Jones <g3@example.invalid>",
+    "Co-Authored-By: Gemma\u0301lia Jones <g4@example.invalid>",
+    "Co-Authored-By: Qwen\u1ab0a Lee <q2@example.invalid>",
     "Reviewed-by: Claude <r@example.invalid>",
     "Delegated-to: a local code model wrote the change from a written spec",
     "Authored-directly: the spec, the tests and the count updates",
@@ -327,3 +333,74 @@ def test_a_branch_name_that_is_not_utf8_is_reported_escaped(tmp_path):
     assert "Traceback" not in result.stdout + result.stderr, result.stderr
     assert result.returncode == 1, result.stdout + result.stderr
     assert "'refs/heads/caf\\udcff'" in result.stdout, result.stdout
+
+
+def _run_strict(repo):
+    path = Path(__file__).resolve().parents[2] / "_tools" / "ref_gate.py"
+    env = dict(os.environ, PYTHONIOENCODING="utf-8:strict", PYTHONUTF8="0")
+    return subprocess.run([sys.executable, str(path), str(repo)], capture_output=True,
+                          text=True, errors="replace", env=env)
+
+
+def _configure_publish_ref(repo, ref):
+    subprocess.run(["git", "config", "fleetops.publishRef", ref], cwd=repo, check=True,
+                   capture_output=True)
+
+
+CONFIGURED_REF_CASES = {
+    # A configured publishing ref that is absent, with no tags to judge.
+    "absent": (None, "refs/heads/caf\\udcff", 1),
+    # One that names a tree, not a commit.
+    "not-a-commit": (b"refs/tags/caf\xff", "refs/tags/caf\\udcff", 1),
+    # One that is absent locally but present as a remote-tracking ref.
+    "remote-anchor": (b"refs/remotes/origin/caf\xff", "refs/remotes/origin/caf\\udcff", 1),
+}
+
+
+@pytest.mark.parametrize("case", CONFIGURED_REF_CASES.values(), ids=CONFIGURED_REF_CASES.keys())
+def test_a_configured_publishing_ref_that_is_not_utf8_is_reported_escaped(tmp_path, case):
+    plant, shown, expected = case
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    if plant is not None:
+        target = git("rev-parse", "HEAD^{tree}") if plant.startswith(b"refs/tags/") else git("rev-parse", "HEAD")
+        subprocess.run(["git", "update-ref", plant, target], cwd=repo, check=True, capture_output=True)
+    _configure_publish_ref(repo, b"refs/heads/caf\xff" if plant is None or b"remotes" in plant else plant)
+    result = _run_strict(repo)
+    assert "Traceback" not in result.stdout + result.stderr, result.stderr
+    assert result.returncode == expected, result.stdout + result.stderr
+    assert f"'{shown}'" in result.stdout, result.stdout
+
+
+def test_the_self_test_catches_a_scanner_that_reads_commit_prose_as_a_path(monkeypatch):
+    # A `git log | grep` scanner reports the name a commit message mentions. The self-test says
+    # it proves prose/path discrimination, so it must go red on exactly that scanner.
+    gate = _gate()
+    real = gate.banned_objects
+
+    def reads_prose(repo):
+        hits = real(repo)
+        log = subprocess.run(["git", "log", "--all", "--format=%B"], cwd=repo,
+                             capture_output=True, text=True, check=True).stdout
+        if "untrack root __pycache__" in log:
+            hits = hits + [("0" * 40, "__pycache__")]
+        return hits
+
+    monkeypatch.setattr(gate, "banned_objects", reads_prose)
+    assert gate.self_test() == 1
+
+
+DECOMPOSED_HUMAN_LINES = [
+    "Co-Authored-By: Kimî Jones <k4@example.invalid>",
+    "Co-Authored-By: Gemmália Jones <g4@example.invalid>",
+]
+
+
+@pytest.mark.parametrize("line", DECOMPOSED_HUMAN_LINES)
+def test_a_decomposed_human_name_in_a_tag_annotation_stays_clean(tmp_path, line):
+    # Tag annotations are scanned by their own loop; the combining-mark rule must hold there too.
+    gate = _gate()
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    git("tag", "-a", "v1", "-m", f"v1\n\n{line}")
+    assert gate.check(str(repo), quiet=True) == 0

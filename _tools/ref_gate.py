@@ -61,6 +61,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
 
 # Refs that are legitimately publishable. Anything else in a pushable namespace fails.
 DEFAULT_PUBLISH_REF = "refs/heads/main"
@@ -307,6 +308,20 @@ def banned_objects(repo):
     return hits
 
 
+def trailer_matches(body):
+    """Extend the name guard with category-M characters present in this message.
+
+    Python's re has no Unicode category escape. Inspect only this message's unique
+    characters, avoiding a full Unicode table on every module import.
+    """
+    marks = "".join(sorted(c for c in set(body) if unicodedata.category(c).startswith("M")))
+    pattern = BANNED_TRAILER
+    if marks:
+        guard = rf"(?![^\W\d_]|[{re.escape(marks)}])"
+        pattern = re.compile(BANNED_TRAILER.pattern.replace(r"(?![^\W\d_])", guard))
+    return pattern.finditer(body)
+
+
 def banned_trailers(repo):
     """Rule 3 — AI-attribution trailers on any reachable commit or tag message."""
     out = git(["log", "--all", "--format=%H%x00%B%x00%x00"], repo)
@@ -315,7 +330,7 @@ def banned_trailers(repo):
         if not rec.strip():
             continue
         sha, _, body = rec.partition("\x00")
-        for m in BANNED_TRAILER.finditer(body):
+        for m in trailer_matches(body):
             hits.append((sha.strip()[:9], m.group(0).strip()))
 
     # Scan tag annotations reachable from EVERY ref, not only refs/tags/.
@@ -332,7 +347,7 @@ def banned_trailers(repo):
             if tag_sha in seen_tags:
                 continue
             seen_tags.add(tag_sha)
-            for m in BANNED_TRAILER.finditer(message):
+            for m in trailer_matches(message):
                 hits.append(("tag " + tag_sha[:9], m.group(0).strip()))
 
     return hits
@@ -376,7 +391,7 @@ def check(repo, quiet=False):
         anchor_ref, target, reason = publish_anchor(repo, ref)
 
         if reason == "not-a-commit":
-            say(f"ref_gate: REFUSED fleetops.publishRef {ref} does not point at a commit")
+            say(f"ref_gate: REFUSED fleetops.publishRef {display_value(ref)} does not point at a commit")
             return 1
 
         if reason == "absent":
@@ -384,10 +399,10 @@ def check(repo, quiet=False):
             if tags_out.strip():
                 sys.stderr.write(f"ref_gate: publishing ref {ref} is absent (and no refs/remotes/origin counterpart) — tags cannot be judged; refusing to emit a verdict\n")
                 return 2
-            say(f"  publishing ref {ref} absent; no tags to judge")
+            say(f"  publishing ref {display_value(ref)} absent; no tags to judge")
 
         if reason == "remote":
-            say(f"  anchor: {anchor_ref} (local {ref} absent, as in a pull-request checkout)")
+            say(f"  anchor: {display_value(anchor_ref)} (local {display_value(ref)} absent, as in a pull-request checkout)")
 
         strays = stray_refs(repo, allowed=allowed, target=target)
         objs = banned_objects(repo)
@@ -494,10 +509,11 @@ def self_test():
         # Prose-vs-path discrimination: a commit whose MESSAGE says __pycache__ but which
         # adds no such path must NOT trip rule 2. This is the false-positive that a
         # `git log | grep` implementation would produce.
+        before_prose = set(banned_objects(repo))
         git(["checkout", "-q", "-b", "prose"], repo)
         _plant(repo, "clean.txt", "y\n", "fix: untrack root __pycache__ (swept in by add -A)")
         git(["checkout", "-q", "main"], repo)
-        prose_hits = [h for h in banned_objects(repo) if "clean.txt" in h[1]]
+        prose_hits = set(banned_objects(repo)) - before_prose
         if prose_hits:
             failures.append("DISCRIMINATION: a commit MESSAGE mentioning __pycache__ was read as a path")
 
