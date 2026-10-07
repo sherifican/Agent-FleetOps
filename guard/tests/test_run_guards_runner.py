@@ -12,16 +12,83 @@ forever, which carries exactly as much information as always reporting clean.
 
 The runner runs the unit gates, so this file would recurse: GUARD_RUNNER_NESTED marks the inner
 run and these tests step aside there.
+The nested runner also narrows its pytest step to the cheap seam; the outer suite
+still collects the full tree. Every `bash guard/run_guards.sh` call goes through the bounded
+helper, which has a process-group deadline; the `_roll` prologue runs under plain bash.
 """
 import os
+import signal
 import subprocess
 
 import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 NESTED = "GUARD_RUNNER_NESTED"
+RUNNER_TIMEOUT_S = 300
 OPTIONAL = ("PASSBACK_OUTBOX", "PASSBACK_TEETH_TARGET", "SCRUB_OVERLAY", "SCRUB_PROFILE",
             "COMMS_ROOT", "RUN_MUTATION_HARNESS")
+
+
+def _bounded_runner(args, env, timeout):
+    """Bound the bash call and stop its process group on a timeout."""
+    command = ["bash", "guard/run_guards.sh", *args]
+    proc = subprocess.Popen(command, cwd=REPO, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, start_new_session=True)
+    pgid = proc.pid  # start_new_session makes this child the process-group leader.
+
+    def kill_group(sig):
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError):
+            # ESRCH: no member is left, so nothing is sent. EPERM: the id names a group this user
+            # may not signal, so nothing is sent either. After the leader is reaped its id could
+            # name another group only if the kernel reused that number in between, which needs the
+            # pid space to wrap within that gap; that residual is accepted.
+            pass
+
+    try:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            kill_group(signal.SIGTERM)
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                kill_group(signal.SIGKILL)
+                try:
+                    stdout, stderr = proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired as exc:
+                    # A child outside the group (e.g. setsid) still holds the pipes.
+                    for stream in (proc.stdout, proc.stderr):
+                        try:
+                            stream.close()
+                        except OSError:
+                            pass
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    out = exc.stdout if exc.stdout is not None else ""
+                    err = exc.stderr if exc.stderr is not None else ""
+                    if isinstance(out, bytes):
+                        out = out.decode(errors="replace")
+                    if isinstance(err, bytes):
+                        err = err.decode(errors="replace")
+                    stdout, stderr = out, err
+            tail = (stdout + stderr)[-4000:]
+            pytest.fail("TIMEOUT: bash guard/run_guards.sh exceeded %ss\n%s" % (timeout, tail))
+        return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+    finally:
+        # An interrupt or a normal exit must not leave the runner's group alive;
+        # start_new_session keeps a terminal Ctrl-C from reaching it.
+        kill_group(signal.SIGKILL)
+        if proc.poll() is None:
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
 
 
 def _run_the_runner(extra_env=None):
@@ -38,8 +105,7 @@ def _run_the_runner(extra_env=None):
     if probe.returncode == 77 and probe.stdout.startswith(unavailable):
         pytest.skip(probe.stdout.strip())
     assert probe.returncode == 0, (probe.returncode, probe.stdout, probe.stderr)
-    proc = subprocess.run(["bash", "guard/run_guards.sh"], cwd=REPO, env=env,
-                          capture_output=True, text=True)
+    proc = _bounded_runner((), env, RUNNER_TIMEOUT_S)
     return proc, proc.stdout + proc.stderr
 
 
@@ -157,8 +223,7 @@ def _stubbed_runner(tmp_path, args=(), abnormal=None, count_seam=False, extra_en
     if count_seam:
         env["COUNT_MEASUREMENT_SEAM"] = COUNT_SEAM
     env.update(extra_env or {})
-    proc = subprocess.run(["bash", "guard/run_guards.sh", *args], cwd=REPO, env=env,
-                          capture_output=True, text=True)
+    proc = _bounded_runner(args, env, 120)
     invocations = log.read_text().splitlines() if log.exists() else []
     return proc, proc.stdout + proc.stderr, invocations
 

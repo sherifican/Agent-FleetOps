@@ -48,6 +48,30 @@ def _run_harness_main():
     return rc, buf.getvalue()
 
 
+_HARNESS_CHECK_LISTS = ("VERDICT_ENVELOPE_CHECKS", "TRAILING_WHITESPACE_CHECKS", "STORED_VALUE_CHECKS")
+# Capture the real registration order before any witness patches the lists.
+_HARNESS_CHECK_NAMES = [fn.__name__ for attr in _HARNESS_CHECK_LISTS for fn in getattr(_mod, attr)]
+
+
+def _plant_dispatch_failure(monkeypatch, victim_list, victim_idx, marker):
+    """Replace every teeth slot with a recorder, with one named failure."""
+    calls = []
+
+    def sentinel(name, fails):
+        def check():
+            calls.append(name)
+            if fails:
+                raise AssertionError(marker)
+        check.__name__ = name
+        return check
+
+    for attr in _HARNESS_CHECK_LISTS:
+        checks = [sentinel(fn.__name__, attr == victim_list and idx == victim_idx)
+                  for idx, fn in enumerate(getattr(_mod, attr))]
+        monkeypatch.setattr(_mod, attr, checks)
+    return calls
+
+
 def test_control_the_untouched_harness_reports_all_pass():
     rc, out = _run_harness_main()
     assert rc == 0 and _mod.MARKER in out, (rc, out)
@@ -56,17 +80,15 @@ def test_control_the_untouched_harness_reports_all_pass():
 def test_a_failing_trailing_whitespace_check_makes_the_harness_entry_point_report_not_sound(monkeypatch):
     victim = _mod.TRAILING_WHITESPACE_CHECKS[0]
 
-    def planted_failure():
-        raise AssertionError("harness_wiring planted failure in %s" % victim.__name__)
-    planted_failure.__name__ = victim.__name__
-
-    monkeypatch.setattr(_mod, "TRAILING_WHITESPACE_CHECKS", [planted_failure] + list(_mod.TRAILING_WHITESPACE_CHECKS[1:]))
+    marker = "harness_wiring planted failure in %s" % victim.__name__
+    calls = _plant_dispatch_failure(monkeypatch, "TRAILING_WHITESPACE_CHECKS", 0, marker)
     rc, out = _run_harness_main()
     assert _mod.MARKER not in out, (
         "the harness printed the all-pass marker while a regression check was failing — the entry "
         "point does not run the regression checks:\n" + out)
     assert rc != 0, "the harness exited 0 with a failing regression check:\n" + out
     assert "harness_wiring planted failure" in out, "the failing check's message must reach the output:\n" + out
+    assert calls == _HARNESS_CHECK_NAMES, "each sentinel must run exactly once, in registration order: %r" % calls
 
 
 # =============================================================================================
@@ -89,19 +111,14 @@ def test_a_failure_planted_in_any_trailing_whitespace_check_makes_the_harness_re
     victim = _mod.TRAILING_WHITESPACE_CHECKS[idx]
     marker = "harness_each_check planted failure in %s" % victim.__name__
 
-    def planted_failure():
-        raise AssertionError(marker)
-    planted_failure.__name__ = victim.__name__
-
-    checks = list(_mod.TRAILING_WHITESPACE_CHECKS)
-    checks[idx] = planted_failure
-    monkeypatch.setattr(_mod, "TRAILING_WHITESPACE_CHECKS", checks)
+    calls = _plant_dispatch_failure(monkeypatch, "TRAILING_WHITESPACE_CHECKS", idx, marker)
     rc, out = _run_harness_main()
     assert _mod.MARKER not in out, (
         "the harness printed the all-pass marker while trailing-whitespace check #%d (%s) was failing — the "
         "entry point does not run that check:\n%s" % (idx, victim.__name__, out))
     assert rc != 0, "the harness exited 0 with trailing-whitespace check #%d failing:\n%s" % (idx, out)
     assert marker in out, "the failing check's message must reach the output:\n" + out
+    assert calls == _HARNESS_CHECK_NAMES, "each sentinel must run exactly once, in registration order: %r" % calls
 
 
 # =============================================================================================
@@ -123,19 +140,14 @@ def test_stored_value_a_failure_planted_in_any_check_makes_the_harness_report_no
     victim = _mod.STORED_VALUE_CHECKS[idx]
     marker = "stored_value_witness planted failure in %s" % victim.__name__
 
-    def planted_failure():
-        raise AssertionError(marker)
-    planted_failure.__name__ = victim.__name__
-
-    checks = list(_mod.STORED_VALUE_CHECKS)
-    checks[idx] = planted_failure
-    monkeypatch.setattr(_mod, "STORED_VALUE_CHECKS", checks)
+    calls = _plant_dispatch_failure(monkeypatch, "STORED_VALUE_CHECKS", idx, marker)
     rc, out = _run_harness_main()
     assert _mod.MARKER not in out, (
         "the harness printed the all-pass marker while stored-value check #%d (%s) was failing:\n%s"
         % (idx, victim.__name__, out))
     assert rc != 0, "the harness exited 0 with stored-value check #%d failing:\n%s" % (idx, out)
     assert marker in out, "the failing check's message must reach the output:\n" + out
+    assert calls == _HARNESS_CHECK_NAMES, "each sentinel must run exactly once, in registration order: %r" % calls
 
 
 # =============================================================================================

@@ -95,7 +95,14 @@ echo "   And the published voice is a surface: this repo is written by one perso
 python3 guard/voice_check.py; roll $? guard/voice_check.py
 
 note "3. GUARD UNIT GATES — do the guards themselves still behave?"
-PYTEST_ADDOPTS= python3 -m pytest guard/tests/ -q; roll $? "pytest guard/tests/"
+# Four live runner calls come from the outer suite; it and the workflow already run
+# the full tree once. Nested children exercise only the cheap pytest seam.
+if [ "${GUARD_RUNNER_NESTED:-}" = 1 ]; then
+  echo "   GUARD_RUNNER_NESTED=1: pytest narrowed to guard/tests/test_runner_nested_seam.py"
+  PYTEST_ADDOPTS= python3 -m pytest guard/tests/test_runner_nested_seam.py -q; roll $? "pytest guard/tests/"
+else
+  PYTEST_ADDOPTS= python3 -m pytest guard/tests/ -q; roll $? "pytest guard/tests/"
+fi
 
 note "4. GUARD SELF-TESTS — every proof-carrying tool must prove itself"
 python3 guard/honesty_stop_gate.py --self-test; roll $? guard/honesty_stop_gate.py

@@ -13,6 +13,8 @@ Public CI does not replace the private prepublication checks for secrets, person
 
 Dependency lower bounds allow CI resolution to vary between runs. A green run describes its resolved environment; it does not establish reproducibility through a dependency lock.
 
+After the `test` job on `3857c81` reached GitHub's six-hour cancellation limit while its guard step was running (20,682 s), the job is bounded at 100 minutes and its hermetic and guard steps at 45 minutes each. The same guard step on `ee18a1d` took 584 s on the hosted runner and 423 s on a local machine (1.38×). On that local machine the bounded suite's whole guard step took 676 s, of which its `pytest guard/tests/` took 670 s, so the 45-minute guard deadline leaves about three times the expected hosted time. The hermetic step took 970 s on `3857c81`, so its 45-minute deadline leaves about 2.8 times that. The `python-floor` and `ref-gate` jobs are bounded at 10 minutes each. Preserve these deadlines when editing the workflow.
+
 ## Verification
 Parse workflow YAML and review the exact diff. Confirm both `test` and `ref-gate` pass in GitHub Actions for the published commit; local syntax checks do not prove hosted execution.
 

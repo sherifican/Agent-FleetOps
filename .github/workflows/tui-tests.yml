@@ -8,6 +8,7 @@ permissions:
 jobs:
   python-floor:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with: { persist-credentials: false }
@@ -33,6 +34,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 100
     steps:
       # fetch-depth: 0 here too, for the same reason the ref-gate job gives below. The guard suite
       # now contains arms that ask whether a commit hash cited in prose resolves in this
@@ -50,9 +52,11 @@ jobs:
           python -m pip install -U pip
           pip install -r tui/requirements.txt
       - name: Run the hermetic suite
+        timeout-minutes: 45
         working-directory: tui
         run: python -m pytest -q
       - name: Guard layer — teeth-prover, contract agreement, unit gates
+        timeout-minutes: 45
         run: |
           python3 guard/teeth_prover.py
           python3 guard/mutation_harness.py --verify-anchors
@@ -67,6 +71,7 @@ jobs:
 
   ref-gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       # fetch-depth: 0 is critical — the ref gate scans FULL reachable history.
       # At the default depth of 1 it would scan one commit and report "clean", which is
