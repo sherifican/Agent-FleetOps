@@ -10,8 +10,9 @@ publishes REFS, not a worktree: `git push --all` publishes every local branch an
 This is not hypothetical. After this repo's history rewrite, `refs/heads/main` was clean
 (0 AI-attribution trailers, 0 `__pycache__` blobs) while `refs/original/refs/heads/main`
 and a `pre-rewrite-backup` branch both still carried 10 trailers and 40 `__pycache__`
-paths. The remote held only `main`, so nothing had leaked — but a single `push --all`
-would have re-published precisely what the rewrite removed, and no gate here was looking.
+paths. The remote held only `main`, so nothing had leaked — but one `push --all` would
+have re-published the backup branch, one `push --mirror` both leftovers, and no gate here
+was looking.
 A rewrite is only true of the branch you rewrote.
 
 Rules enforced:
@@ -27,6 +28,7 @@ Rules enforced:
   3. NO AI CO-AUTHOR TRAILERS (Co-Authored-By naming a model, a model vendor or an
      assistant, as a word, versioned spellings such as Qwen3-Coder included) on any reachable commit or in any tag annotation
      reachable from any ref, nested annotations included.
+     The names are a fixed list of model, vendor and assistant names, so a model the list does not name is not caught.
      Names are matched as words, so a person whose name is also a model's name
      (Gemma, Kimi) is refused too; the report shows the whole line.
 
@@ -75,7 +77,7 @@ BANNED_PATH = re.compile(r"(^|/)__pycache__(/|\Z)|\.pyc\Z|\.pyo\Z")
 BANNED_TRAILER = re.compile(
     r"(?im)^co-authored-by:[^\n]*?"
     r"(?:\b(?:claude(?:code)?|anthropic|chatgpt|gpt|openai|codex|gemini|gemma|grok|xai|qwen|deepseek"
-    r"|llama|mistral|kimi|moonshot|glm|copilot|assistant)(?![a-z])|\b(?-i:AI)\b)[^\n]*"
+    r"|llama|mistral|kimi|moonshot|glm|copilot|assistant|cursor|ornith)(?![^\W\d_])|\bx\.ai\b|\b(?-i:AI)\b)[^\n]*"
 )
 
 GIT = ["git", "--no-replace-objects"]
@@ -84,7 +86,7 @@ GIT = ["git", "--no-replace-objects"]
 def git(args, cwd):
     """Run a git command, returning stdout. Never masks a failure behind a pipe."""
     p = subprocess.run(
-        GIT + args, cwd=cwd, capture_output=True, text=True
+        GIT + args, cwd=cwd, capture_output=True, encoding="utf-8", errors="surrogateescape"
     )
     if p.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed rc={p.returncode}: {p.stderr.strip()}")
@@ -105,7 +107,7 @@ def git_bytes(args, cwd, input=None):
 def publishable_refs(repo):
     """An adopter may select one publishing ref; absent config preserves the CI default."""
     result = subprocess.run(GIT + ["config", "--get", "fleetops.publishRef"],
-                            cwd=repo, capture_output=True, text=True)
+                            cwd=repo, capture_output=True, encoding="utf-8", errors="surrogateescape")
     if result.returncode == 1:
         return {DEFAULT_PUBLISH_REF}
     if result.returncode != 0:
@@ -135,7 +137,7 @@ def publish_commit(repo, ref):
     """
     out = git(["for-each-ref", "--format=%(refname) %(objectname)", ref], repo)
     sha = None
-    for line in out.splitlines():
+    for line in out.split("\n"):
         name, _, objectname = line.partition(" ")
         if name == ref:
             sha = objectname.strip()
@@ -186,7 +188,7 @@ def tag_chain(repo, sha):
         header, _, message = body.partition("\n\n")
         messages.append((obj, message))
         obj = None
-        for line in header.splitlines():
+        for line in header.split("\n"):
             if line.startswith("object "):
                 obj = line[len("object "):].strip()
                 break
@@ -204,7 +206,7 @@ def stray_refs(repo, allowed=None, target=None):
             target = None
     out = git(["for-each-ref", "--format=%(refname) %(objectname)"], repo)
     strays = []
-    for line in out.splitlines():
+    for line in out.split("\n"):
         if not line.strip():
             continue
         name, _, sha = line.partition(" ")
@@ -217,7 +219,7 @@ def stray_refs(repo, allowed=None, target=None):
             if kind == "commit" and target is not None:
                 mb = subprocess.run(
                     GIT + ["merge-base", "--is-ancestor", final, target],
-                    cwd=repo, capture_output=True, text=True
+                    cwd=repo, capture_output=True, encoding="utf-8", errors="surrogateescape"
                 )
                 if mb.returncode == 0:
                     continue  # exempt: tag peels to a published commit
@@ -236,7 +238,7 @@ def banned_objects(repo):
     only once and a banned name can share its object with an allowed one.
     """
     out = git(["rev-list", "--all", "--objects", "--no-object-names"], repo)
-    ids = [line.strip() for line in out.splitlines() if line.strip()]
+    ids = [line.strip() for line in out.split("\n") if line.strip()]
     if not ids:
         return []
     fmt = git(["rev-parse", "--show-object-format"], repo).strip()
@@ -246,7 +248,9 @@ def banned_objects(repo):
 
     checks = git_bytes(["cat-file", "--batch-check=%(objectname) %(objecttype)"], repo,
                        input=("\n".join(ids) + "\n").encode())
-    lines = checks.decode().splitlines()
+    lines = checks.decode().split("\n")
+    if lines[-1] == "":
+        lines.pop()
     if len(lines) != len(ids):
         raise RuntimeError("object type batch truncated")
     trees = []
@@ -317,7 +321,7 @@ def banned_trailers(repo):
     # Scan tag annotations reachable from EVERY ref, not only refs/tags/.
     seen_tags = set()
     tags_out = git(["for-each-ref", "--format=%(objecttype) %(objectname)"], repo)
-    for line in tags_out.splitlines():
+    for line in tags_out.split("\n"):
         if not line.strip():
             continue
         objtype, _, sha = line.partition(" ")
@@ -334,6 +338,11 @@ def banned_trailers(repo):
     return hits
 
 
+def display_value(value):
+    """Render git text safely, escaping controls and undecodable bytes."""
+    return value if value.isprintable() else repr(value)
+
+
 def check(repo, quiet=False):
     def say(*a):
         if not quiet:
@@ -345,7 +354,7 @@ def check(repo, quiet=False):
 
     shallow_result = subprocess.run(
         GIT + ["rev-parse", "--is-shallow-repository"],
-        cwd=repo, capture_output=True, text=True
+        cwd=repo, capture_output=True, encoding="utf-8", errors="surrogateescape"
     )
     if shallow_result.returncode != 0:
         stderr = shallow_result.stderr.decode(errors="replace") if isinstance(shallow_result.stderr, bytes) else shallow_result.stderr
@@ -393,14 +402,14 @@ def check(repo, quiet=False):
     if strays:
         say(f"  [FAIL] {len(strays)} ref(s) outside the allow-list — pushing them would publish them (push --all sends branches, push --tags sends tags, push --mirror sends every ref):")
         for name, sha in strays:
-            say(f"         {name} @ {sha}")
+            say(f"         {display_value(name)} @ {sha}")
     else:
         say("  [OK]   no stray publishable refs")
 
     if objs:
         say(f"  [FAIL] {len(objs)} never-publish name(s) reachable from --all:")
         for sha, path in objs[:20]:
-            name = path if path.isprintable() else repr(path)
+            name = display_value(path)
             say(f"         {sha}  {name}")
         if len(objs) > 20:
             say(f"         … and {len(objs) - 20} more")
@@ -410,7 +419,7 @@ def check(repo, quiet=False):
     if trailers:
         say(f"  [FAIL] {len(trailers)} AI-attribution trailer(s) in reachable history:")
         for sha, t in trailers[:20]:
-            say(f"         {sha}  {t}")
+            say(f"         {sha}  {display_value(t)}")
     else:
         say("  [OK]   no AI-attribution trailers")
 

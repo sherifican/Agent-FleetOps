@@ -13,6 +13,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
@@ -142,6 +143,10 @@ def test_trees_are_read_in_bounded_batches(tmp_path, monkeypatch):
     assert sum(batches) == 7 and max(batches) <= 2, batches
 
 
+def test_the_default_tree_batch_is_bounded():
+    assert 1 <= _gate().TREE_BATCH <= 1000
+
+
 MODEL_COAUTHORS = [
     "Claude <noreply" + "@" + "anthropic.com>",
     "Bot <noreply" + "@" + "anthropic.com>",
@@ -171,6 +176,11 @@ MODEL_COAUTHORS = [
     "Kimi-K2 <bot@example.invalid>",
     "glm4 <bot@example.invalid>",
     "codex_cli <bot@example.invalid>",
+    "Bot <noreply" + "@" + "x.ai>",
+    "x.ai <bot@example.invalid>",
+    "Cursor <bot@example.invalid>",
+    "Cursor Agent <bot@example.invalid>",
+    "Ornith-9B <bot@example.invalid>",
 ]
 
 
@@ -199,6 +209,11 @@ HUMAN_LINES = [
     "Co-Authored-By: Lena Grokowski <l@example.invalid>",
     "Co-Authored-By: Qwendolyn Hart <q@example.invalid>",
     "Co-Authored-By: Codexa Rivers <x@example.invalid>",
+    "Co-Authored-By: Max Aiken <max.aiken@example.invalid>",
+    "Co-Authored-By: Rex Aiello <rex.aiello@example.invalid>",
+    "Co-Authored-By: Gemma\u00eblle Martin <g2@example.invalid>",
+    "Co-Authored-By: Kimi\u0107 Novak <k2@example.invalid>",
+    "Co-Authored-By: Llama\u00f1o Ruiz <l2@example.invalid>",
     "Reviewed-by: Claude <r@example.invalid>",
     "Delegated-to: a local code model wrote the change from a written spec",
     "Authored-directly: the spec, the tests and the count updates",
@@ -232,3 +247,83 @@ def test_a_person_whose_name_is_a_model_name_is_refused_and_the_line_shown_whole
     git("commit", "-q", "--allow-empty", "-m", f"change\n\n{line}")
     assert gate.check(str(repo)) == 1
     assert line in capsys.readouterr().out
+
+
+
+# Python's str.splitlines() also splits on these; git allows them inside a ref name.
+UNICODE_LINE_BREAKS = ["\u0085", "\u2028", "\u2029"]
+
+
+@pytest.mark.parametrize("sep", UNICODE_LINE_BREAKS, ids=["NEL", "LS", "PS"])
+def test_a_branch_named_main_plus_a_unicode_line_break_is_a_stray(tmp_path, sep):
+    gate = _gate()
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    git("update-ref", f"refs/heads/main{sep}hidden", "HEAD")
+    assert gate.check(str(repo), quiet=True) == 1
+
+
+def _write_raw_message(repo, git, kind, message):
+    """Store a commit or a tag whose message is not valid UTF-8."""
+    head = git("rev-parse", "HEAD")
+    if kind == "tag":
+        body = (f"object {head}\ntype commit\ntag v1\n"
+                "tagger f <f@example.invalid> 0 +0000\n\n").encode() + message
+        sha = subprocess.run(["git", "hash-object", "-t", "tag", "-w", "--stdin"], cwd=repo,
+                             input=body, capture_output=True, check=True).stdout.decode().strip()
+        git("update-ref", "refs/tags/v1", sha)
+    else:
+        tree = git("rev-parse", "HEAD^{tree}")
+        body = (f"tree {tree}\nparent {head}\n"
+                "author f <f@example.invalid> 0 +0000\n"
+                "committer f <f@example.invalid> 0 +0000\n\n").encode() + message
+        sha = subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin"], cwd=repo,
+                             input=body, capture_output=True, check=True).stdout.decode().strip()
+        git("update-ref", "refs/heads/main", sha)
+
+
+NON_UTF8_CASES = {
+    "tag-clean": ("tag", b"caf\xe9\n", 0),
+    "tag-model-trailer": ("tag", b"caf\xe9\n\nCo-Authored-By: Qwen <bot@example.invalid>\n", 1),
+    "commit-clean": ("commit", b"caf\xe9\n", 0),
+    "commit-model-trailer": ("commit", b"caf\xe9\n\nCo-Authored-By: Qwen \xe9 <bot@example.invalid>\n", 1),
+}
+
+
+@pytest.mark.parametrize("case", NON_UTF8_CASES.values(), ids=NON_UTF8_CASES.keys())
+def test_a_message_that_is_not_utf8_gets_a_verdict_not_a_traceback(tmp_path, case):
+    kind, message, expected = case
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    _write_raw_message(repo, git, kind, message)
+    path = Path(__file__).resolve().parents[2] / "_tools" / "ref_gate.py"
+    env = dict(os.environ, PYTHONIOENCODING="utf-8:strict", PYTHONUTF8="0")
+    result = subprocess.run([sys.executable, str(path), str(repo)], capture_output=True,
+                            text=True, errors="replace", env=env)
+    assert "Traceback" not in result.stdout + result.stderr, result.stderr
+    assert result.returncode == expected, result.stdout + result.stderr
+
+
+def test_a_ref_name_holding_a_line_break_does_not_stand_in_for_the_publishing_ref(tmp_path):
+    # for-each-ref lists children of refs/heads/main; split on U+2028, this child's name
+    # would end in a record reading exactly "refs/heads/main <sha>".
+    gate = _gate()
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    git("branch", "-m", "work")
+    git("update-ref", "refs/heads/main/a refs/heads/main", "HEAD")
+    assert gate.publish_commit(str(repo), "refs/heads/main") == (None, "absent")
+
+
+def test_a_branch_name_that_is_not_utf8_is_reported_escaped(tmp_path):
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    subprocess.run(["git", "update-ref", b"refs/heads/caf\xff", "HEAD"], cwd=repo, check=True,
+                   capture_output=True)
+    path = Path(__file__).resolve().parents[2] / "_tools" / "ref_gate.py"
+    env = dict(os.environ, PYTHONIOENCODING="utf-8:strict", PYTHONUTF8="0")
+    result = subprocess.run([sys.executable, str(path), str(repo)], capture_output=True,
+                            text=True, errors="replace", env=env)
+    assert "Traceback" not in result.stdout + result.stderr, result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "'refs/heads/caf\\udcff'" in result.stdout, result.stdout
