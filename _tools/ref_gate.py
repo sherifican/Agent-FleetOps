@@ -23,13 +23,19 @@ Rules enforced:
      blob, fails like any stray ref.
   2. NO NEVER-PUBLISH CONTENT ON ANY REACHABLE REF — scans objects reachable from
      `--all`, not just the checked-out tree.
-  3. NO AI-ATTRIBUTION TRAILERS on any reachable commit or in any tag message,
-     nested annotations included.
+  3. NO AI-ATTRIBUTION TRAILERS on any reachable commit or in any tag annotation reachable
+     from any ref, nested annotations included.
 
 fleetops.publishRef is trimmed; an absent, empty, or whitespace-only value defaults
 to refs/heads/main. A configured value must start with refs/ and pass
 git check-ref-format. Invalid values refuse with one message and status 1.
 refs/original/ is reserved for rewrite leftovers and cannot be configured for publication.
+Tags are judged against the publishing ref's commit. When that branch is absent locally
+(a pull-request checkout has only refs/remotes/origin/*), its refs/remotes/origin counterpart
+is the anchor; with neither present, any tag makes the gate refuse with 2. A configured
+publishing ref that does not point at a commit is refused with 1. Every git call runs with
+--no-replace-objects: a push publishes real objects, so a local replace ref must not change
+a verdict.
 
 Note rule 2 and 3 deliberately query the OBJECT layer (`rev-list --objects`,
 `log --format=%B`) rather than grepping rendered `git log` output: a text search over a
@@ -41,7 +47,7 @@ ref carrying a banned blob and a banned trailer, and asserts the gate goes RED o
 rule. A gate that cannot be made to fail is indistinguishable from a gate that passes.
 
 Exit: 0 = clean · 1 = violations · 2 = refused to run (cannot produce a trustworthy verdict)
-A shallow clone refuses with 2: missing history would make every rule look clean.
+A shallow clone refuses with 2: missing history can hide violations and makes tag ancestry unjudgeable.
 """
 
 import os
@@ -60,11 +66,13 @@ PUSHABLE_PREFIXES = ("refs/heads/", "refs/tags/", "refs/original/")
 BANNED_PATH = re.compile(r"(^|/)__pycache__(/|$)|\.pyc$|\.pyo$")
 BANNED_TRAILER = re.compile(r"(?im)^(Co-Authored-By|Co-authored-by):\s*.*(claude|gpt|codex|gemini|copilot|assistant|\bai\b)")
 
+GIT = ["git", "--no-replace-objects"]
+
 
 def git(args, cwd):
     """Run a git command, returning stdout. Never masks a failure behind a pipe."""
     p = subprocess.run(
-        ["git"] + args, cwd=cwd, capture_output=True, text=True
+        GIT + args, cwd=cwd, capture_output=True, text=True
     )
     if p.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed rc={p.returncode}: {p.stderr.strip()}")
@@ -73,7 +81,7 @@ def git(args, cwd):
 
 def publishable_refs(repo):
     """An adopter may select one publishing ref; absent config preserves the CI default."""
-    result = subprocess.run(["git", "config", "--get", "fleetops.publishRef"],
+    result = subprocess.run(GIT + ["config", "--get", "fleetops.publishRef"],
                             cwd=repo, capture_output=True, text=True)
     if result.returncode == 1:
         return {DEFAULT_PUBLISH_REF}
@@ -86,21 +94,55 @@ def publishable_refs(repo):
         raise RuntimeError("fleetops.publishRef must name a full ref beginning with refs/")
     if ref.startswith("refs/original/"):
         raise RuntimeError("fleetops.publishRef must name a full publishing ref outside refs/original/")
-    if subprocess.run(["git", "check-ref-format", ref], cwd=repo,
+    if subprocess.run(GIT + ["check-ref-format", ref], cwd=repo,
                       capture_output=True).returncode != 0:
         raise RuntimeError("fleetops.publishRef must name a valid full ref")
     return {ref}
 
 
 def publish_commit(repo, ref):
-    """Resolve a ref to its commit sha, or None if the ref does not exist."""
+    """Resolve a ref to its commit sha.
+
+    Returns (sha or None, reason) where reason is "ok", "absent", or "not-a-commit".
+    Raises RuntimeError on unexpected git failures.
+    """
     result = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", ref + "^{commit}"],
+        GIT + ["rev-parse", "--verify", "--quiet", ref],
+        cwd=repo, capture_output=True, text=True
+    )
+    if result.returncode == 1:
+        return None, "absent"
+    if result.returncode != 0:
+        raise RuntimeError(f"cannot resolve {ref}: rc={result.returncode} {result.stderr.strip()}")
+
+    result = subprocess.run(
+        GIT + ["rev-parse", "--verify", "--quiet", ref + "^{commit}"],
         cwd=repo, capture_output=True, text=True
     )
     if result.returncode == 0:
-        return result.stdout.strip()
-    return None
+        return result.stdout.strip(), "ok"
+    if result.returncode == 1:
+        return None, "not-a-commit"
+    raise RuntimeError(f"cannot resolve {ref}: rc={result.returncode} {result.stderr.strip()}")
+
+
+def publish_anchor(repo, ref):
+    """Determine the anchor ref and commit for tag ancestry checks.
+
+    Returns (anchor_ref or None, commit_sha or None, reason).
+    """
+    sha, reason = publish_commit(repo, ref)
+    if reason == "ok":
+        return ref, sha, "ok"
+    if reason == "not-a-commit":
+        return ref, None, "not-a-commit"
+    # absent locally: a pull-request checkout has no local branches, only refs/remotes/origin/*
+    if ref.startswith("refs/heads/"):
+        remote = "refs/remotes/origin/" + ref[len("refs/heads/"):]
+        rsha, rreason = publish_commit(repo, remote)
+        if rreason == "ok":
+            return remote, rsha, "remote"
+    return None, None, "absent"
 
 
 def tag_chain(repo, sha):
@@ -110,10 +152,14 @@ def tag_chain(repo, sha):
     """
     obj = sha
     messages = []
-    for _ in range(32):
+    seen = set()
+    while True:
         kind = git(["cat-file", "-t", obj], repo).strip()
         if kind != "tag":
             return obj, kind, messages
+        if obj in seen:
+            raise RuntimeError(f"tag chain loops at {sha}")
+        seen.add(obj)
         body = git(["cat-file", "tag", obj], repo)
         header, _, message = body.partition("\n\n")
         messages.append((obj, message))
@@ -124,19 +170,18 @@ def tag_chain(repo, sha):
                 break
         if obj is None:
             raise RuntimeError(f"tag chain malformed at {sha}")
-    raise RuntimeError(f"tag chain too deep at {sha}")
 
 
-def stray_refs(repo):
+def stray_refs(repo, allowed=None, target=None):
     """Rule 1 — every ref a push could carry must be allow-listed."""
+    if allowed is None:
+        allowed = publishable_refs(repo)
+        ref = next(iter(allowed))
+        _, target, reason = publish_anchor(repo, ref)
+        if reason not in ("ok", "remote"):
+            target = None
     out = git(["for-each-ref", "--format=%(refname) %(objectname)"], repo)
     strays = []
-    allowed = publishable_refs(repo)
-    target = None
-    for ref in allowed:
-        target = publish_commit(repo, ref)
-        if target is not None:
-            break
     for line in out.splitlines():
         if not line.strip():
             continue
@@ -149,7 +194,7 @@ def stray_refs(repo):
             final, kind, _ = tag_chain(repo, sha)
             if kind == "commit" and target is not None:
                 mb = subprocess.run(
-                    ["git", "merge-base", "--is-ancestor", final, target],
+                    GIT + ["merge-base", "--is-ancestor", final, target],
                     cwd=repo, capture_output=True, text=True
                 )
                 if mb.returncode == 0:
@@ -187,14 +232,20 @@ def banned_trailers(repo):
         for m in BANNED_TRAILER.finditer(body):
             hits.append((sha.strip()[:9], m.group(0).strip()))
 
-    # Also scan every annotated tag message (outer and nested inner tags).
-    tags_out = git(["for-each-ref", "--format=%(refname) %(objectname)", "refs/tags/"], repo)
+    # Scan tag annotations reachable from EVERY ref, not only refs/tags/.
+    seen_tags = set()
+    tags_out = git(["for-each-ref", "--format=%(objecttype) %(objectname)"], repo)
     for line in tags_out.splitlines():
         if not line.strip():
             continue
-        _, _, sha = line.partition(" ")
+        objtype, _, sha = line.partition(" ")
+        if objtype != "tag":
+            continue
         _, _, messages = tag_chain(repo, sha)
         for tag_sha, message in messages:
+            if tag_sha in seen_tags:
+                continue
+            seen_tags.add(tag_sha)
             for m in BANNED_TRAILER.finditer(message):
                 hits.append(("tag " + tag_sha[:9], m.group(0).strip()))
 
@@ -211,14 +262,14 @@ def check(repo, quiet=False):
         return 2
 
     shallow_result = subprocess.run(
-        ["git", "rev-parse", "--is-shallow-repository"],
+        GIT + ["rev-parse", "--is-shallow-repository"],
         cwd=repo, capture_output=True, text=True
     )
     if shallow_result.returncode != 0:
         sys.stderr.write(f"ref_gate: cannot tell whether {repo} is shallow — refusing to emit a verdict\n")
         return 2
     if shallow_result.stdout.strip() == "true":
-        sys.stderr.write(f"ref_gate: {repo} is a shallow clone — history is incomplete, so ancestry and reachable-object checks cannot be judged; fetch full history (fetch-depth: 0) — refusing to emit a verdict\n")
+        sys.stderr.write(f"ref_gate: {repo} is a shallow clone — history is incomplete, so ancestry and reachable-object checks cannot be judged; fetch full history (git fetch --unshallow; in GitHub Actions, checkout with fetch-depth: 0) — refusing to emit a verdict\n")
         return 2
 
     try:
@@ -227,8 +278,26 @@ def check(repo, quiet=False):
         say(f"ref_gate: REFUSED {error}")
         return 1
 
+    ref = next(iter(allowed))
+
     try:
-        strays = stray_refs(repo)
+        anchor_ref, target, reason = publish_anchor(repo, ref)
+
+        if reason == "not-a-commit":
+            say(f"ref_gate: REFUSED fleetops.publishRef {ref} does not point at a commit")
+            return 1
+
+        if reason == "absent":
+            tags_out = git(["for-each-ref", "--format=%(refname)", "refs/tags/"], repo)
+            if tags_out.strip():
+                sys.stderr.write(f"ref_gate: publishing ref {ref} is absent (and no refs/remotes/origin counterpart) — tags cannot be judged; refusing to emit a verdict\n")
+                return 2
+            say(f"  publishing ref {ref} absent; no tags to judge")
+
+        if reason == "remote":
+            say(f"  anchor: {anchor_ref} (local {ref} absent, as in a pull-request checkout)")
+
+        strays = stray_refs(repo, allowed=allowed, target=target)
         objs = banned_objects(repo)
         trailers = banned_trailers(repo)
     except RuntimeError as error:
