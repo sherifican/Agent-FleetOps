@@ -29,11 +29,14 @@ Rules enforced:
      assistant, as a word, versioned spellings such as Qwen3-Coder included) on any reachable commit or in any tag annotation
      reachable from any ref, nested annotations included.
      The names are a fixed list of model, vendor and assistant names, so a model the list does not name is not caught.
-     Names are matched as words, so a person whose name is also a model's name
+     Names are matched as words; a following or preceding combining mark continues
+     the word, except the default-ignorable marks in DEFAULT_IGNORABLE_MARK_RANGES,
+     so a person whose name is also a model's name
      (Gemma, Kimi) is refused too; the report shows the whole line.
 
-fleetops.publishRef is trimmed; an absent, empty, or whitespace-only value defaults
-to refs/heads/main. A configured value must start with refs/ and pass
+fleetops.publishRef loses git config's one final LF, then ASCII space and tab
+are trimmed from both ends; every other character stays. An absent or empty value defaults to refs/heads/main.
+A configured value must start with refs/ and pass
 git check-ref-format. Invalid values refuse with one message and status 1.
 refs/original/ is reserved for rewrite leftovers and cannot be configured for publication.
 Tags are judged against the publishing ref's commit. When that branch is absent locally
@@ -73,6 +76,13 @@ DEFAULT_PUBLISH_REF = "refs/heads/main"
 PUSHABLE_PREFIXES = ("refs/heads/", "refs/tags/", "refs/original/")
 
 TREE_BATCH = 1000
+
+# Category-M Default_Ignorable_Code_Point ranges from Unicode 18.0.0
+# DerivedCoreProperties.txt (inclusive endpoints).
+DEFAULT_IGNORABLE_MARK_RANGES = (
+    (0x034F, 0x034F), (0x17B4, 0x17B5), (0x180B, 0x180D),
+    (0x180F, 0x180F), (0xFE00, 0xFE0F), (0xE0100, 0xE01EF),
+)
 
 BANNED_PATH = re.compile(r"(^|/)__pycache__(/|\Z)|\.pyc\Z|\.pyo\Z")
 BANNED_TRAILER = re.compile(
@@ -114,7 +124,7 @@ def publishable_refs(repo):
     if result.returncode != 0:
         stderr = result.stderr.decode(errors="replace") if isinstance(result.stderr, bytes) else result.stderr
         raise RuntimeError(f"cannot read fleetops.publishRef: {stderr.strip()}")
-    ref = result.stdout.strip()
+    ref = result.stdout.removesuffix("\n").strip(" \t")
     if not ref:
         return {DEFAULT_PUBLISH_REF}
     if not ref.startswith("refs/"):
@@ -309,16 +319,24 @@ def banned_objects(repo):
 
 
 def trailer_matches(body):
-    """Extend the name guard with category-M characters present in this message.
+    """Extend word boundaries with non-ignorable category-M marks in this message.
 
     Python's re has no Unicode category escape. Inspect only this message's unique
     characters, avoiding a full Unicode table on every module import.
     """
-    marks = "".join(sorted(c for c in set(body) if unicodedata.category(c).startswith("M")))
+    marks = "".join(sorted(
+        c for c in set(body)
+        if unicodedata.category(c).startswith("M")
+        and not any(low <= ord(c) <= high for low, high in DEFAULT_IGNORABLE_MARK_RANGES)
+    ))
     pattern = BANNED_TRAILER
     if marks:
-        guard = rf"(?![^\W\d_]|[{re.escape(marks)}])"
-        pattern = re.compile(BANNED_TRAILER.pattern.replace(r"(?![^\W\d_])", guard))
+        escaped = re.escape(marks)
+        guard = rf"(?![^\W\d_]|[{escaped}])"
+        boundary = rf"(?<![{escaped}])\b(?![{escaped}])"
+        pattern = re.compile(BANNED_TRAILER.pattern
+                             .replace(r"(?![^\W\d_])", guard)
+                             .replace(r"\b", boundary))
     return pattern.finditer(body)
 
 
@@ -361,7 +379,9 @@ def display_value(value):
 def check(repo, quiet=False):
     def say(*a):
         if not quiet:
-            print(*a)
+            encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+            line = " ".join(str(value) for value in a)
+            print(line.encode(encoding, errors="backslashreplace").decode(encoding))
 
     if not os.path.isdir(os.path.join(repo, ".git")):
         sys.stderr.write(f"ref_gate: {repo} is not a git repo — refusing to emit a verdict\n")
@@ -509,12 +529,12 @@ def self_test():
         # Prose-vs-path discrimination: a commit whose MESSAGE says __pycache__ but which
         # adds no such path must NOT trip rule 2. This is the false-positive that a
         # `git log | grep` implementation would produce.
-        before_prose = set(banned_objects(repo))
-        git(["checkout", "-q", "-b", "prose"], repo)
-        _plant(repo, "clean.txt", "y\n", "fix: untrack root __pycache__ (swept in by add -A)")
-        git(["checkout", "-q", "main"], repo)
-        prose_hits = set(banned_objects(repo)) - before_prose
-        if prose_hits:
+        prose_repo = os.path.join(td, "prose")
+        os.makedirs(prose_repo)
+        git(["init", "-q", "-b", "main"], prose_repo)
+        _plant(prose_repo, "ok.py", "print('hi')\n", "init: clean commit")
+        _plant(prose_repo, "clean.txt", "y\n", "fix: untrack root __pycache__ (swept in by add -A)")
+        if banned_objects(prose_repo):
             failures.append("DISCRIMINATION: a commit MESSAGE mentioning __pycache__ was read as a path")
 
     if failures:

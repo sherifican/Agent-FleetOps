@@ -144,7 +144,7 @@ def test_trees_are_read_in_bounded_batches(tmp_path, monkeypatch):
 
 
 def test_the_default_tree_batch_is_bounded():
-    assert 1 <= _gate().TREE_BATCH <= 1000
+    assert _gate().TREE_BATCH == 1000
 
 
 MODEL_COAUTHORS = [
@@ -211,6 +211,17 @@ HUMAN_LINES = [
     "Co-Authored-By: Codexa Rivers <x@example.invalid>",
     "Co-Authored-By: Max Aiken <max.aiken@example.invalid>",
     "Co-Authored-By: Rex Aiello <rex.aiello@example.invalid>",
+    # The vendor spelling is x.ai with a literal dot: look-alikes are people, not the vendor.
+    "Co-Authored-By: Max Byrne <max@xXai.example.invalid>",
+    "Co-Authored-By: Rex Byrne <rex@x-ai.example.invalid>",
+    # A mark continues the word on every alternative and on both sides: decomposed and composed
+    # spellings of the same person give the same verdict.
+    "Co-Authored-By: A\u00cdda Ruiz <a2@example.invalid>",
+    "Co-Authored-By: AI\u0301da Ruiz <a3@example.invalid>",
+    "Co-Authored-By: M\u00e1kimi Ortiz <m1@example.invalid>",
+    "Co-Authored-By: Ma\u0301kimi Ortiz <m2@example.invalid>",
+    "Co-Authored-By: Rex Byrne <rex@x.a\u00edme.example.invalid>",
+    "Co-Authored-By: Rex Byrne <rex@x.ai\u0301me.example.invalid>",
     "Co-Authored-By: Gemma\u00eblle Martin <g2@example.invalid>",
     "Co-Authored-By: Kimi\u0107 Novak <k2@example.invalid>",
     "Co-Authored-By: Llama\u00f1o Ruiz <l2@example.invalid>",
@@ -370,9 +381,117 @@ def test_a_configured_publishing_ref_that_is_not_utf8_is_reported_escaped(tmp_pa
     assert "Traceback" not in result.stdout + result.stderr, result.stderr
     assert result.returncode == expected, result.stdout + result.stderr
     assert f"'{shown}'" in result.stdout, result.stdout
+    if plant is None:
+        assert f"publishing ref '{shown}' absent; no tags to judge" in result.stdout, result.stdout
 
 
-def test_the_self_test_catches_a_scanner_that_reads_commit_prose_as_a_path(monkeypatch):
+# `git config --get` ends its value with one LF. Stripping more than that also removes a trailing
+# U+0085, U+2028 or U+2029 (str.strip treats them as whitespace) and a quoted trailing space, so a
+# configured name that is NOT refs/heads/main was read as refs/heads/main and main was allowed.
+CONFIGURED_TAILS = {"nel": "\u0085", "ls": "\u2028", "ps": "\u2029", "newline": "\n"}
+
+
+@pytest.mark.parametrize("tail", CONFIGURED_TAILS.values(), ids=CONFIGURED_TAILS.keys())
+def test_a_configured_publishing_ref_with_a_trailing_character_is_not_read_as_main(tmp_path, tail):
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    _configure_publish_ref(repo, "refs/heads/main" + tail)
+    result = _run_strict(repo)
+    assert "Traceback" not in result.stdout + result.stderr, result.stderr
+    # The configured ref does not exist, so refs/heads/main is a stray, not the publishing ref.
+    assert result.returncode == 1, result.stdout + result.stderr
+
+
+# ASCII space and tab can never be part of a ref name, so padding at either end is trimmed
+# (the legacy edge cases in test_ref_gate.py trim leading and trailing padding together).
+PADDED = {"trailing": "refs/heads/main \t", "leading": " \trefs/heads/main", "both": "  refs/heads/main \t"}
+
+
+@pytest.mark.parametrize("value", PADDED.values(), ids=PADDED.keys())
+def test_ascii_padding_at_either_end_of_the_configured_ref_is_trimmed(tmp_path, value):
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    _configure_publish_ref(repo, value)
+    result = _run_strict(repo)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_a_plain_configured_publishing_ref_still_passes(tmp_path):
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    _configure_publish_ref(repo, "refs/heads/main")
+    result = _run_strict(repo)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_a_configured_publishing_ref_from_a_crlf_config_file_still_passes(tmp_path):
+    # git drops the CR of a CRLF config line itself; the gate must not refuse such a file.
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    with open(Path(repo) / ".git" / "config", "ab") as config:
+        config.write(b"[fleetops]\r\n\tpublishRef = refs/heads/main\r\n")
+    result = _run_strict(repo)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_the_self_test_catches_a_prose_scanner_whose_hit_matches_a_real_one(monkeypatch, capsys):
+    # A scanner that reports the name once whenever the history mentions it anywhere returns the
+    # same hit before and after the prose commit, because a real __pycache__ is already planted.
+    gate = _gate()
+
+    def mentions(repo):
+        log = subprocess.run(["git", "log", "--all", "--name-only", "--format=%B"], cwd=repo,
+                             capture_output=True, text=True, check=True).stdout
+        return [("log", "__pycache__")] if "__pycache__" in log else []
+
+    monkeypatch.setattr(gate, "banned_objects", mentions)
+    assert gate.self_test() == 1
+    assert "DISCRIMINATION" in capsys.readouterr().out
+
+
+def test_a_repository_path_that_is_not_utf8_gets_a_verdict(tmp_path):
+    parent = tmp_path / "paths"
+    parent.mkdir()
+    repo = os.path.join(os.fsencode(parent), b"caf\xff")
+    os.mkdir(repo)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(["git", *IDENTITY, "commit", "-q", "--allow-empty", "-m", "A"], cwd=repo, check=True)
+    path = Path(__file__).resolve().parents[2] / "_tools" / "ref_gate.py"
+    env = dict(os.environ, PYTHONIOENCODING="utf-8:strict", PYTHONUTF8="0")
+    result = subprocess.run([sys.executable, str(path), repo], capture_output=True, env=env)
+    out = (result.stdout + result.stderr).decode("utf-8", "replace")
+    assert b"Traceback" not in result.stdout + result.stderr, out
+    assert result.returncode == 0, out
+
+
+def test_a_report_on_an_ascii_stream_gets_a_verdict(tmp_path):
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    git("branch", "caf\u00e9")
+    path = Path(__file__).resolve().parents[2] / "_tools" / "ref_gate.py"
+    env = dict(os.environ, PYTHONIOENCODING="ascii:strict", PYTHONUTF8="0")
+    result = subprocess.run([sys.executable, str(path), str(repo)], capture_output=True, env=env)
+    out = (result.stdout + result.stderr).decode("ascii", "replace")
+    assert b"Traceback" not in result.stdout + result.stderr, out
+    assert result.returncode == 1, out
+
+
+def test_a_configuration_refusal_holding_undecodable_bytes_is_reported(tmp_path, monkeypatch):
+    import io
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    gate = _gate()
+
+    def refuse(repo):
+        raise RuntimeError("cannot read fleetops.publishRef: caf\udcff")
+
+    monkeypatch.setattr(gate, "publishable_refs", refuse)
+    sink = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", errors="strict")
+    monkeypatch.setattr(sys, "stdout", sink)
+    assert gate.check(str(repo)) == 1
+
+
+def test_the_self_test_catches_a_scanner_that_reads_commit_prose_as_a_path(monkeypatch, capsys):
     # A `git log | grep` scanner reports the name a commit message mentions. The self-test says
     # it proves prose/path discrimination, so it must go red on exactly that scanner.
     gate = _gate()
@@ -388,6 +507,7 @@ def test_the_self_test_catches_a_scanner_that_reads_commit_prose_as_a_path(monke
 
     monkeypatch.setattr(gate, "banned_objects", reads_prose)
     assert gate.self_test() == 1
+    assert "DISCRIMINATION" in capsys.readouterr().out
 
 
 DECOMPOSED_HUMAN_LINES = [
@@ -404,3 +524,66 @@ def test_a_decomposed_human_name_in_a_tag_annotation_stays_clean(tmp_path, line)
     git("commit", "-q", "--allow-empty", "-m", "A")
     git("tag", "-a", "v1", "-m", f"v1\n\n{line}")
     assert gate.check(str(repo), quiet=True) == 0
+
+
+def test_the_self_test_catches_a_prose_scanner_that_reads_only_the_checked_out_branch(monkeypatch, capsys):
+    # `git log` without --all reads the branch that is checked out when the check runs, so the
+    # prose commit has to be reachable from it.
+    gate = _gate()
+    real = gate.banned_objects
+
+    def reads_branch_prose(repo):
+        log = subprocess.run(["git", "log", "--format=%B"], cwd=repo,
+                             capture_output=True, text=True, check=True).stdout
+        return real(repo) + ([("0" * 40, "__pycache__")] if "__pycache__" in log else [])
+
+    monkeypatch.setattr(gate, "banned_objects", reads_branch_prose)
+    assert gate.self_test() == 1
+    assert "DISCRIMINATION" in capsys.readouterr().out
+
+
+# Category-M characters that are also Default_Ignorable_Code_Point (Unicode 18.0.0
+# DerivedCoreProperties.txt): the combining grapheme joiner, Khmer inherent vowels, Mongolian free
+# variation selectors and variation selectors 1-256. They do not change the letters a reader sees,
+# so unlike a diacritic they must not continue a model name on either side.
+IGNORABLE_MARK_RANGES = [(0x034F, 0x034F), (0x17B4, 0x17B5), (0x180B, 0x180D), (0x180F, 0x180F),
+                         (0xFE00, 0xFE0F), (0xE0100, 0xE01EF)]
+IGNORABLE_MARKS = [chr(c) for low, high in IGNORABLE_MARK_RANGES for c in range(low, high + 1)]
+IGNORABLE_TOKENS = ["Claude", "Grok", "Gemma", "Ornith", "AI", "x.ai"]
+
+
+def test_an_ignorable_mark_beside_a_model_name_does_not_hide_it():
+    gate = _gate()
+    assert len(IGNORABLE_MARKS) == 263  # assert-control: the full set, not a sample
+    missed = []
+    for mark in IGNORABLE_MARKS:
+        for token in IGNORABLE_TOKENS:
+            for who in (token + mark, mark + token):
+                body = f"change\n\nCo-Authored-By: {who} <dev@example.invalid>\n"
+                if not list(gate.trailer_matches(body)):
+                    missed.append(f"U+{ord(mark):04X} {who!r}")
+    assert not missed, f"{len(missed)} missed, first: {missed[:8]}"
+
+
+IGNORABLE_END_TO_END = {
+    "commit": "commit",
+    "tag": "tag",
+    "beside-a-diacritic-name": "mixed",
+}
+
+
+@pytest.mark.parametrize("where", IGNORABLE_END_TO_END.values(), ids=IGNORABLE_END_TO_END.keys())
+def test_an_ignorable_mark_after_a_model_name_still_fails_the_gate(tmp_path, where):
+    gate = _gate()
+    repo, git = _repo(tmp_path)
+    line = "Co-Authored-By: Grok\ufe00 <x@example.invalid>"
+    if where == "commit":
+        git("commit", "-q", "--allow-empty", "-m", f"change\n\n{line}")
+    elif where == "tag":
+        git("commit", "-q", "--allow-empty", "-m", "A")
+        git("tag", "-a", "v1", "-m", f"v1\n\n{line}")
+    else:
+        # A real diacritic elsewhere in the message must not switch the ignorable mark on.
+        git("commit", "-q", "--allow-empty", "-m",
+            f"change\n\nCo-Authored-By: Kim\u0131\u0302 Jones <k5@example.invalid>\n{line}")
+    assert gate.check(str(repo), quiet=True) == 1
