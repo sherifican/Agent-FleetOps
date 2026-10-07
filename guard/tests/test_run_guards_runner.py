@@ -32,7 +32,7 @@ OPTIONAL = ("PASSBACK_OUTBOX", "PASSBACK_TEETH_TARGET", "SCRUB_OVERLAY", "SCRUB_
 def _bounded_runner(args, env, timeout):
     """Bound the bash call and stop its process group on a timeout."""
     command = ["bash", "guard/run_guards.sh", *args]
-    proc = subprocess.Popen(command, cwd=REPO, env=env, stdout=subprocess.PIPE,
+    proc = subprocess.Popen(command, cwd=REPO, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, start_new_session=True)
     pgid = proc.pid  # start_new_session makes this child the process-group leader.
 
@@ -69,8 +69,12 @@ def _bounded_runner(args, env, timeout):
                         proc.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         pass
-                    out = exc.stdout if exc.stdout is not None else ""
-                    err = exc.stderr if exc.stderr is not None else ""
+                    # A wait() timeout after pipe EOF omits output; guard CPython's private buffer.
+                    buffered = getattr(proc, "_fileobj2output", None) or {}
+                    out = (exc.stdout if exc.stdout is not None else
+                           b"".join(buffered.get(proc.stdout, ())))
+                    err = (exc.stderr if exc.stderr is not None else
+                           b"".join(buffered.get(proc.stderr, ())))
                     if isinstance(out, bytes):
                         out = out.decode(errors="replace")
                     if isinstance(err, bytes):
@@ -222,7 +226,11 @@ def _stubbed_runner(tmp_path, args=(), abnormal=None, count_seam=False, extra_en
         env["RUNNER_ABNORMAL_STEP"], env["RUNNER_ABNORMAL_RC"] = abnormal[0], str(abnormal[1])
     if count_seam:
         env["COUNT_MEASUREMENT_SEAM"] = COUNT_SEAM
-    env.update(extra_env or {})
+    for key, value in (extra_env or {}).items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
     proc = _bounded_runner(args, env, 120)
     invocations = log.read_text().splitlines() if log.exists() else []
     return proc, proc.stdout + proc.stderr, invocations

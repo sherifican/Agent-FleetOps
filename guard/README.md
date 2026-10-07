@@ -13,9 +13,14 @@ and shimmed runner calls have a 120-second deadline. A timeout sends SIGTERM to 
 process group, allows five seconds to exit, then sends SIGKILL; the test fails with
 the runner name and a bounded output tail. Every call, including one interrupted by an exception
 such as Ctrl-C, ends by sending SIGKILL to the group; if the outer pytest is itself
-killed, that cleanup does not run. A child that leaves the group with setsid or
+killed, that cleanup does not run. pytest-timeout's `thread` method ends pytest with
+`os._exit`, so no `finally` runs, while its default `signal` method on POSIX raises
+inside the test and lets cleanup run. A child that leaves the group with setsid or
 setpgid is out of its reach, so if it still holds the pipes the helper stops reading
 them about ten seconds after the deadline.
+These deadlines are per call. If every call hung, they would add up to more than an hour,
+past the workflow step's 45-minute deadline; GitHub would then cancel the step instead of
+each test failing by name with TIMEOUT, and the step would still end red.
 
 ## The discipline, in one paragraph
 
@@ -32,7 +37,7 @@ staleness check could never fire. That defect is why the dry run now returns `2`
 |---|---|---|
 | Teeth-prover | `python3 guard/teeth_prover.py` | 10 planted mutations; every guard proves it can fail |
 | Contract agreement | `python3 guard/contract_agreement.py` | all four vocabulary surfaces agree (validator · addendum · rollup · preamble) |
-| Guard unit gates | `pytest guard/tests/ -q` | 5873 tests, hermetic in the sense that no arm needs a live fleet, a network or a credential. This is the collected count, not a pass count. Read `-rs` for the actual skips on the machine running the suite: the passback arm needs `PASSBACK_OUTBOX`; the publication identity-terms arm needs the private list (`_tools/identity_terms.txt`); and six freed-but-armed preflight cells cannot be built under Python 3.14 because `free_tool_id` clears their event mask. Other arms stand down without `O_TMPFILE`, a filesystem that supports it, an unprivileged account, working default ACLs, or permission to strip an ACL. The unreadable-config control also skips if the account can still read a mode-000 fixture. A skipped arm is not a passing one. The strict xfail that once recorded the scanner's stale-report gap was repaired in `a0dbe05` and is now a live arm |
+| Guard unit gates | `pytest guard/tests/ -q` | 5894 tests, hermetic in the sense that no arm needs a live fleet, a network or a credential. This is the collected count, not a pass count. Read `-rs` for the actual skips on the machine running the suite: the passback arm needs `PASSBACK_OUTBOX`; the publication identity-terms arm needs the private list (`_tools/identity_terms.txt`); and six freed-but-armed preflight cells cannot be built under Python 3.14 because `free_tool_id` clears their event mask. Other arms stand down without `O_TMPFILE`, a filesystem that supports it, an unprivileged account, working default ACLs, or permission to strip an ACL. The unreadable-config control also skips if the account can still read a mode-000 fixture. A skipped arm is not a passing one. The strict xfail that once recorded the scanner's stale-report gap was repaired in `a0dbe05` and is now a live arm |
 | Fetch-gate teeth interpreter | `python3 guard/tests/teeth_fetch_gate.py` | Run the fetch-gate teeth and `guard/tests` with Python 3.12 or newer; `python3` in these commands must name that interpreter and pytest must be installed there. Child preflight probes also invoke `python3.11`, `python3.12` and `python3.14` when present; the 3.14 child needs its own pytest installation. Absent children or a child unable to import pytest report skip/UNMEASURED with the measured reason. Each child resolves its own user site, with `-s` respected; a pytest terminal summary is required before its exit status can count as a measurement. An unavailable observer is UNMEASURED, never a pass. |
 | Documented counts | `python3 guard/doc_count_drift.py` | every count written into prose or the banner matches what it describes |
 | Rendered banner | `python3 guard/banner_render.py` | the PNG keeps its transparent corners, opaque painted interior and transparent exterior (with narrow edge antialiasing), has 2x source geometry, and carries both source and PNG identity stamps |

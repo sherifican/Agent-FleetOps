@@ -10,9 +10,9 @@ passes. Review of that helper found three exits it did not cover and one counter
   * a normal exit left a background child of the runner alive;
   * dropping the `roll` after the nested (narrowed) pytest step passed every test.
 
-Written BEFORE the fix. Tests 1-3 failed on the helper as first written; test 4 failed on a
-runner whose nested step dropped its `roll`; test 5 failed on checks that accepted any non-empty
-marker, compared it as a number, matched it as a prefix, or also accepted `true`.
+Tests 1-3 fail when interrupts leave the group alive, escaped pipe holders block the final read,
+or normal exits leave children alive; test 4 fails when the nested pytest status is not rolled;
+test 5 fails when narrowing accepts a near-miss marker or treats an empty/unset marker as `1`.
 """
 import importlib.util
 import os
@@ -37,10 +37,13 @@ def _runner_module():
 
 def _alive(pid):
     try:
-        with open("/proc/%d/stat" % pid) as fh:
-            return fh.read().rsplit(")", 1)[1].split()[0] != "Z"
+        with open("/proc/%d/stat" % pid, "rb") as fh:
+            return fh.read().rsplit(b")", 1)[1].split()[0] != b"Z"
     except OSError:
         return False
+    except (ValueError, IndexError):
+        # The pid entry exists; an unreadable survivor must not look like successful cleanup.
+        return True
 
 
 def _kill(pid):
@@ -206,20 +209,119 @@ def test_a_failing_narrowed_pytest_step_is_counted_as_a_violation(tmp_path):
 
 
 # =============================================================================================
-# 5. Only the exact value `1` narrows the nested pytest step. Any other non-empty value is an
-#    adopter's or a typo's, and must still run the whole guard tree.
+# 5. Only the exact value `1` narrows the nested pytest step. Every other value, including an
+#    empty or unset marker, must still run the whole guard tree.
 # =============================================================================================
 # Values a numeric (-eq 1), prefix (1*) or truthy comparison would wrongly accept.
-NEAR_MISSES = ("yes", "true", "01", " 1", "1 ", "+1", "10", "1yes")
+NEAR_MISSES = ("yes", "true", "01", " 1", "1 ", "+1", "10", "1yes", "", "on", "TRUE")
 
 
-def test_a_marker_other_than_exactly_1_still_runs_the_whole_guard_tree(tmp_path):
+@pytest.mark.parametrize("value", (*NEAR_MISSES, None),
+                         ids=[*NEAR_MISSES[:-3], "empty", "on", "TRUE", "unset"])
+def test_a_marker_other_than_exactly_1_still_runs_the_whole_guard_tree(tmp_path, value):
     runner = _runner_module()
-    for i, value in enumerate(NEAR_MISSES):
-        work = tmp_path / ("v%d" % i)
-        work.mkdir()
-        _, out, inv = runner._stubbed_runner(work, extra_env={NESTED: value})
-        pytest_children = [ln for ln in inv if ln.startswith("-m pytest")]
-        assert "-m pytest guard/tests/ -q" in pytest_children, (
-            "GUARD_RUNNER_NESTED=%r narrowed the pytest step:\n%s" % (value, out))
-        assert not any("narrowed" in ln for ln in out.splitlines()), (value, out)
+    _, out, inv = runner._stubbed_runner(tmp_path, extra_env={NESTED: value})
+    pytest_children = [ln for ln in inv if ln.startswith("-m pytest")]
+    assert "-m pytest guard/tests/ -q" in pytest_children, (
+        "GUARD_RUNNER_NESTED=%r narrowed the pytest step:\n%s" % (value, out))
+    assert not any("narrowed" in ln for ln in out.splitlines()), (value, out)
+
+
+# Survivor checks must handle process names that are arbitrary kernel bytes.
+def test_alive_reads_a_non_utf8_process_name_and_zombie_state(tmp_path):
+    import select
+    import subprocess
+    import sys
+
+    if not pathlib.Path("/proc/self/stat").is_file():
+        pytest.skip("/proc process stat is unavailable (requires Linux)")
+    child_code = r"""
+import ctypes
+import sys
+import time
+libc = ctypes.CDLL(None)
+prctl = getattr(libc, "prctl", None)
+if prctl is None or prctl(15, ctypes.c_char_p(b"\xff\xfechild)"), 0, 0, 0) != 0:
+    sys.exit(77)
+print("named", flush=True)
+time.sleep(30)
+"""
+    child = subprocess.Popen([sys.executable, "-c", child_code],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        assert select.select([child.stdout], [], [], 5)[0], "child did not signal its name"
+        ready = child.stdout.readline()
+        if not ready and child.wait(timeout=5) == 77:
+            pytest.skip("prctl(PR_SET_NAME) is unavailable")
+        assert ready == b"named\n", child.stderr.read()
+        assert _alive(child.pid) is True
+        child.kill()
+        # Wait for the exit without reaping: the zombie keeps its non-UTF-8 name in /proc/<pid>/stat,
+        # so only a bytes parse reaches the `Z` state; a text parse raises and reports it alive.
+        os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+        assert pathlib.Path("/proc/%d/stat" % child.pid).is_file()
+        assert _alive(child.pid) is False
+        child.wait(timeout=5)
+        assert _alive(child.pid) is False
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=5)
+        child.stdout.close()
+        child.stderr.close()
+
+
+@pytest.mark.parametrize("content", [b"", b"truncated", b"name)"])
+def test_alive_keeps_an_existing_unparseable_stat_alive(monkeypatch, content):
+    import io
+
+    monkeypatch.setattr("builtins.open", lambda *a, **kw: io.BytesIO(content))
+    assert _alive(123) is True
+
+
+# An inherited open pipe must not become the runner's interactive input.
+def test_a_runner_reading_stdin_gets_eof_promptly(tmp_path, monkeypatch):
+    runner = _runner_module()
+    fake_repo, _ = _plant(tmp_path, "read -r line\nexit 0\n")
+    monkeypatch.setattr(runner, "REPO", str(fake_repo))
+    read_fd, write_fd = os.pipe()
+    saved_stdin = os.dup(0)
+    saved_inheritable = os.get_inheritable(0)
+    try:
+        os.dup2(read_fd, 0)
+        # Without EOF on stdin the planted `read` blocks until this deadline and the helper fails.
+        proc = runner._bounded_runner((), dict(os.environ), 10)
+    finally:
+        os.dup2(saved_stdin, 0, inheritable=saved_inheritable)
+        for fd in (saved_stdin, read_fd, write_fd):
+            os.close(fd)
+    assert proc.returncode == 0, proc
+
+
+# Real pipes reach EOF, but three synthetic wait timeouts emulate a slow-to-reap leader.
+def test_the_third_read_wait_timeout_keeps_output_already_read(tmp_path, monkeypatch):
+    runner = _runner_module()
+    fake_repo, _ = _plant(tmp_path, "printf 'earlier stdout\\n'\n"
+                          "printf 'earlier stderr\\n' >&2\nexec 1>&- 2>&-\nsleep 300\n")
+    real_popen = subprocess.Popen
+    waits = []
+
+    class SlowReapPopen(real_popen):
+        def wait(self, timeout=None):
+            if timeout is not None and len(waits) < 3:
+                assert self.stdout.closed and self.stderr.closed, "pipes must already be at EOF"
+                exc = subprocess.TimeoutExpired(self.args, timeout)
+                assert exc.stdout is None and exc.stderr is None
+                waits.append(timeout)
+                raise exc
+            return super().wait(timeout=timeout)
+
+    monkeypatch.setattr(runner, "REPO", str(fake_repo))
+    monkeypatch.setattr(runner.subprocess, "Popen", SlowReapPopen)
+    with pytest.raises(pytest.fail.Exception) as caught:
+        runner._bounded_runner((), dict(os.environ), 2)
+    assert len(waits) == 3, "the third communicate wait path was not reached: %r" % waits
+    message = str(caught.value)
+    assert "TIMEOUT" in message and "run_guards.sh" in message, message
+    assert "earlier stdout\n" in message, message
+    assert "earlier stderr\n" in message, message

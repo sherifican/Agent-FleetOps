@@ -156,10 +156,13 @@ wait
 
 def _alive(pid):
     try:
-        with open("/proc/%d/stat" % pid) as fh:
-            return fh.read().rsplit(")", 1)[1].split()[0] != "Z"
+        with open("/proc/%d/stat" % pid, "rb") as fh:
+            return fh.read().rsplit(b")", 1)[1].split()[0] != b"Z"
     except OSError:
         return False
+    except (ValueError, IndexError):
+        # The pid entry exists; an unreadable survivor must not look like successful cleanup.
+        return True
 
 
 def _kill(pid):
@@ -217,3 +220,55 @@ def test_a_hung_live_runner_call_fails_at_its_deadline_and_kills_its_process_gro
     for pid in survivors:
         _kill(pid)
     assert not survivors, "the timeout left the runner's process tree alive: %r" % survivors
+
+
+# Survivor checks must handle process names that are arbitrary kernel bytes.
+def test_alive_reads_a_non_utf8_process_name_and_zombie_state(tmp_path):
+    import select
+    import subprocess
+    import sys
+
+    if not pathlib.Path("/proc/self/stat").is_file():
+        pytest.skip("/proc process stat is unavailable (requires Linux)")
+    child_code = r"""
+import ctypes
+import sys
+import time
+libc = ctypes.CDLL(None)
+prctl = getattr(libc, "prctl", None)
+if prctl is None or prctl(15, ctypes.c_char_p(b"\xff\xfechild)"), 0, 0, 0) != 0:
+    sys.exit(77)
+print("named", flush=True)
+time.sleep(30)
+"""
+    child = subprocess.Popen([sys.executable, "-c", child_code],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        assert select.select([child.stdout], [], [], 5)[0], "child did not signal its name"
+        ready = child.stdout.readline()
+        if not ready and child.wait(timeout=5) == 77:
+            pytest.skip("prctl(PR_SET_NAME) is unavailable")
+        assert ready == b"named\n", child.stderr.read()
+        assert _alive(child.pid) is True
+        child.kill()
+        # Wait for the exit without reaping: the zombie keeps its non-UTF-8 name in /proc/<pid>/stat,
+        # so only a bytes parse reaches the `Z` state; a text parse raises and reports it alive.
+        os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+        assert pathlib.Path("/proc/%d/stat" % child.pid).is_file()
+        assert _alive(child.pid) is False
+        child.wait(timeout=5)
+        assert _alive(child.pid) is False
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=5)
+        child.stdout.close()
+        child.stderr.close()
+
+
+@pytest.mark.parametrize("content", [b"", b"truncated", b"name)"])
+def test_alive_keeps_an_existing_unparseable_stat_alive(monkeypatch, content):
+    import io
+
+    monkeypatch.setattr("builtins.open", lambda *a, **kw: io.BytesIO(content))
+    assert _alive(123) is True
