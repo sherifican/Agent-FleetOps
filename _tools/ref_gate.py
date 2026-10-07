@@ -35,8 +35,9 @@ Rules enforced:
      (Gemma, Kimi) is refused too; the report shows the whole line.
      A name split by an invisible character inside it (a default-ignorable mark such as
      U+FE00, or a format character such as U+200B), and a trailer that begins after a
-     Unicode line separator (U+2028) rather than an LF, are not caught: a trailer is
-     an LF-delimited line, matched as a contiguous name.
+     Unicode line separator (U+2028) rather than a line break, are not caught: a trailer
+     is one line of git's output, read with universal newlines (an LF, a CR or a CRLF
+     ends it; U+2028 does not), matched as a contiguous name.
 
 fleetops.publishRef loses git config's one final LF, then ASCII space and tab
 are trimmed from both ends; every other character stays. An absent or empty value defaults to refs/heads/main.

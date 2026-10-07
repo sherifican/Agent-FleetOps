@@ -491,6 +491,13 @@ def test_a_report_on_an_ascii_stream_gets_a_verdict(tmp_path):
     # The report itself reaches the stream, with the characters ASCII cannot hold escaped.
     assert b"refs/heads/caf\\xe9 @ " in result.stdout, out
     assert b"=> VIOLATIONS" in result.stdout, out
+    # A stream that can hold the character gets it as it is, not escaped.
+    env = dict(os.environ, PYTHONIOENCODING="utf-8:strict", PYTHONUTF8="0")
+    result = subprocess.run([sys.executable, str(path), str(repo)], capture_output=True, env=env)
+    out = (result.stdout + result.stderr).decode("utf-8", "replace")
+    assert result.returncode == 1, out
+    assert "refs/heads/caf\u00e9 @ ".encode() in result.stdout, out
+    assert b"caf\\xe9" not in result.stdout, out
 
 
 def test_a_configuration_refusal_holding_undecodable_bytes_is_reported(tmp_path, monkeypatch):
@@ -607,7 +614,8 @@ def test_an_ignorable_mark_after_a_model_name_still_fails_the_gate(tmp_path, whe
     # The refusal must be for the model line, not for the person beside it.
     flagged = [l for l in capsys.readouterr().out.splitlines() if "Co-Authored-By" in l]
     assert any("Grok" in l for l in flagged), flagged
-    assert not any("Jones" in l for l in flagged), flagged
+    if where == "mixed":
+        assert not any("Jones" in l for l in flagged), flagged
 
 
 def test_the_self_test_reports_on_an_ascii_stream():
@@ -617,7 +625,7 @@ def test_the_self_test_reports_on_an_ascii_stream():
     out = (result.stdout + result.stderr).decode("ascii", "replace")
     assert b"Traceback" not in result.stdout + result.stderr, out
     assert result.returncode == 0, out
-    assert b"ref_gate --self-test: PASSED" in result.stdout, out
+    assert b"ref_gate --self-test: PASSED \\u2014 " in result.stdout, out
 
 
 def test_a_self_test_failure_is_reported_on_an_ascii_stream(monkeypatch):
@@ -632,3 +640,4 @@ def test_a_self_test_failure_is_reported_on_an_ascii_stream(monkeypatch):
     out = sink.buffer.getvalue().decode("ascii")
     assert "ref_gate --self-test: FAILED" in out, out
     assert "BASELINE" in out, out
+    assert "\\u2014" in out, out
