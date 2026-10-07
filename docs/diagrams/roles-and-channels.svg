@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1560" viewBox="0 0 1200 1560" role="img" aria-labelledby="title description" font-family="DejaVu Sans Mono, monospace" font-kerning="none">
+<title id="title">Roles and channels</title>
+<desc id="description">Roles, request and reply permissions, separate authorization, and a destination check. A missing required reviewer is a gap that stops the selected protocol. An optional link leads to the inert-handoff recipe.</desc>
+<defs>
+<linearGradient id="ground" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0a0b12"/><stop offset="1" stop-color="#12101e"/></linearGradient>
+<linearGradient id="accent"><stop stop-color="#22d3ee"/><stop offset="1" stop-color="#e879f9"/></linearGradient>
+<marker id="flow" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#22d3ee" stroke-width="1.5"/></marker>
+<marker id="decision" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#e879f9" stroke-width="1.5"/></marker>
+</defs>
+<rect x="0" y="0" width="1200" height="1560" fill="#0a0b12" fill-opacity="1"/>
+<rect x="40" y="92" width="1120" height="3" fill="url(#accent)"/>
+<g id="heading" class="card"><rect class="box" x="40" y="40" width="1120" height="48" fill="none"/>
+<text x="56" y="76" font-size="36" fill="#e2e8f0">Roles and channels</text>
+</g>
+<g id="caption" class="card"><rect class="box" x="40" y="104" width="1120" height="32" fill="none"/>
+<circle cx="63.25" cy="118.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="128" font-size="24" fill="#e2e8f0">R Apply only the selected workflow's rules.</text>
+</g>
+<g id="legend" class="card"><rect class="box" x="40" y="152" width="1120" height="128" fill="none"/>
+<rect class="legend-mark" x="48.75" y="152" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="56" y="176" font-size="24" fill="#e2e8f0">D Documented</text>
+<circle class="legend-mark" cx="375.25" cy="166.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="368" y="176" font-size="24" fill="#e2e8f0">R Recommendation</text>
+<text x="56" y="208" font-size="24" fill="#e2e8f0">Solid arrow: information or artifact flow</text>
+<text x="56" y="240" font-size="24" fill="#e2e8f0">Dotted arrow: authorization decision</text>
+<text x="56" y="272" font-size="24" fill="#e2e8f0">Dashed frame: optional example</text>
+</g>
+<g id="roles-left" class="card">
+<rect class="box" x="40" y="304" width="536" height="64" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="63.25" cy="334.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="344" font-size="24" fill="#e2e8f0">R Accountable human</text>
+</g>
+<g id="roles-right" class="card">
+<rect class="box" x="40" y="464" width="1120" height="64" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="63.25" cy="494.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="504" font-size="24" fill="#e2e8f0">R Task agent</text>
+</g>
+<g id="review-left" class="card">
+<rect class="box" x="40" y="784" width="1120" height="160" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<rect x="48.75" y="800" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="56" y="824" font-size="24" fill="#e2e8f0">D Research verifier</text>
+<text x="56" y="856" font-size="24" fill="#e2e8f0">When research-team requires it</text>
+<text x="56" y="888" font-size="24" fill="#e2e8f0">Different from producer</text>
+<text x="56" y="920" font-size="24" fill="#e2e8f0">May block publication</text>
+</g>
+<g id="review-right" class="card">
+<rect class="box" x="624" y="976" width="536" height="96" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="647.25" cy="1006.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="640" y="1016" font-size="24" fill="#e2e8f0">R Authorized publisher</text>
+<text x="640" y="1048" font-size="24" fill="#e2e8f0">or delivery actor</text>
+</g>
+<g id="channels-left" class="card">
+<rect class="box" x="40" y="592" width="280" height="128" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="63.25" cy="622.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="632" font-size="24" fill="#e2e8f0">R Request</text>
+<text x="56" y="664" font-size="24" fill="#e2e8f0">Requester writes</text>
+<text x="56" y="696" font-size="24" fill="#e2e8f0">Recipient reads</text>
+</g>
+<g id="channels-right" class="card">
+<rect class="box" x="880" y="592" width="280" height="128" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="903.25" cy="622.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="896" y="632" font-size="24" fill="#e2e8f0">R Reply</text>
+<text x="896" y="664" font-size="24" fill="#e2e8f0">Responder writes</text>
+<text x="896" y="696" font-size="24" fill="#e2e8f0">Requester reads</text>
+</g>
+<g id="approval" class="card">
+<rect class="box" x="624" y="304" width="536" height="96" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="647.25" cy="334.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="640" y="344" font-size="24" fill="#e2e8f0">R Authorization decision:</text>
+<text x="640" y="376" font-size="24" fill="#e2e8f0">Approval under selected policy</text>
+</g>
+<g id="permissions" class="card">
+<rect class="box" x="344" y="608" width="512" height="96" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="367.25" cy="638.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="360" y="648" font-size="24" fill="#e2e8f0">R Channel separation</text>
+<text x="360" y="680" font-size="24" fill="#e2e8f0">Procedural only if unenforced</text>
+</g>
+<g id="delivery" class="card">
+<rect class="box" x="40" y="1104" width="1120" height="128" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<rect x="48.75" y="1120" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="56" y="1144" font-size="24" fill="#e2e8f0">D Artifact handoff</text>
+<text x="56" y="1176" font-size="24" fill="#e2e8f0">Check destination exists; size OR checksum</text>
+<text x="56" y="1208" font-size="24" fill="#e2e8f0">Mismatch: stop</text>
+</g>
+<g id="optional" class="card">
+<rect class="box" x="40" y="1264" width="1120" height="96" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5" stroke-dasharray="8 6"/>
+<circle cx="63.25" cy="1294.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="1304" font-size="24" fill="#e2e8f0">R Optional: inert-handoff recipe</text>
+<text x="56" y="1336" font-size="24" fill="#e2e8f0">See Review and handoff</text>
+</g>
+<g id="local" class="card">
+<rect class="box" x="40" y="1392" width="1120" height="128" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="63.25" cy="1422.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="1432" font-size="24" fill="#e2e8f0">R Handoff may be local</text>
+<text x="56" y="1464" font-size="24" fill="#e2e8f0">Gap: required role missing</text>
+<text x="56" y="1496" font-size="24" fill="#e2e8f0">Stop this protocol; no pass</text>
+</g>
+<path class="connector" d="M1160 496 H1174 V1024 H1160" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<path class="connector" d="M892 1072 V1104" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<path class="connector" d="M180 528 V592" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<path class="connector" d="M180 720 V784" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<path class="connector" d="M1020 784 V720" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<path class="connector" d="M1020 592 V528" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<path class="connector" d="M576 336 H624" fill="none" stroke="#e879f9" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="2 6" marker-end="url(#decision)"/>
+<path class="connector" d="M892 400 V464" fill="none" stroke="#e879f9" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="2 6" marker-end="url(#decision)"/>
+</svg>

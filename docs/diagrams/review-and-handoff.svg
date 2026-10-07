@@ -1,0 +1,147 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="2236" viewBox="0 0 1200 2236" role="img" aria-labelledby="title description" font-family="DejaVu Sans Mono, monospace" font-kerning="none">
+<title id="title">Review and handoff</title>
+<desc id="description">Selected workflow checks lead to candidate review and consumer-byte verification. Code, research, and curation retain separate documented requirements. Failure, cannot-check, or a missing required role leads to HOLD. The optional inert-handoff panel shows three prerequisites and a separately authorized installation boundary.</desc>
+<defs>
+<linearGradient id="ground" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0a0b12"/><stop offset="1" stop-color="#12101e"/></linearGradient>
+<linearGradient id="accent"><stop stop-color="#22d3ee"/><stop offset="1" stop-color="#e879f9"/></linearGradient>
+<marker id="flow" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#22d3ee" stroke-width="1.5"/></marker>
+<marker id="decision" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#e879f9" stroke-width="1.5"/></marker>
+</defs>
+<rect x="0" y="0" width="1200" height="2236" fill="#0a0b12" fill-opacity="1"/>
+<rect x="40" y="92" width="1120" height="3" fill="url(#accent)"/>
+<g id="heading" class="card"><rect class="box" x="40" y="40" width="1120" height="48" fill="none"/>
+<text x="56" y="76" font-size="36" fill="#e2e8f0">Review and handoff</text>
+</g>
+<g id="caption" class="card"><rect class="box" x="40" y="104" width="1120" height="32" fill="none"/>
+<circle cx="63.25" cy="118.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="128" font-size="24" fill="#e2e8f0">R Apply only the selected workflow's rules.</text>
+</g>
+<g id="legend" class="card"><rect class="box" x="40" y="152" width="1120" height="96" fill="none"/>
+<rect class="legend-mark" x="48.75" y="152" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="56" y="176" font-size="24" fill="#e2e8f0">D Documented</text>
+<circle class="legend-mark" cx="375.25" cy="166.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="368" y="176" font-size="24" fill="#e2e8f0">R Recommendation</text>
+<text x="56" y="208" font-size="24" fill="#e2e8f0">Solid arrow: information or artifact flow</text>
+<text x="56" y="240" font-size="24" fill="#e2e8f0">Dashed frame: optional example</text>
+</g>
+<g id="scope-left" class="card">
+<rect class="box" x="40" y="272" width="536" height="64" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="63.25" cy="302.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="312" font-size="24" fill="#e2e8f0">R Scope</text>
+</g>
+<g id="scope-right" class="card">
+<rect class="box" x="624" y="272" width="496" height="64" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="647.25" cy="302.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="640" y="312" font-size="24" fill="#e2e8f0">R Applicable checks</text>
+</g>
+<g id="candidate-left" class="card">
+<rect class="box" x="624" y="368" width="496" height="64" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="647.25" cy="398.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="640" y="408" font-size="24" fill="#e2e8f0">R Review candidate</text>
+</g>
+<g id="candidate-right" class="card">
+<rect class="box" x="40" y="368" width="536" height="64" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="63.25" cy="398.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="408" font-size="24" fill="#e2e8f0">R Check consumed bytes</text>
+</g>
+<g id="outcome-left" class="card">
+<rect class="box" x="40" y="464" width="536" height="64" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="63.25" cy="494.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="504" font-size="24" fill="#e2e8f0">R Pass to authorized next step</text>
+</g>
+<g id="outcome-right" class="card">
+<rect class="box" x="624" y="464" width="496" height="128" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<rect x="632.75" y="480" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="640" y="504" font-size="24" fill="#e2e8f0">D Fail or cannot-check</text>
+<text x="640" y="536" font-size="24" fill="#e2e8f0">HOLD or equivalent status</text>
+<text x="640" y="568" font-size="24" fill="#e2e8f0">Acceptance stops</text>
+</g>
+<g id="retry" class="card">
+<rect class="box" x="40" y="624" width="1120" height="64" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="63.25" cy="654.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="664" font-size="24" fill="#e2e8f0">R Repair: new candidate; repeat affected checks</text>
+</g>
+<g id="key" class="card">
+<rect class="box" x="40" y="704" width="1120" height="64" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="63.25" cy="734.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="744" font-size="24" fill="#e2e8f0">R Protocol key: not the next step</text>
+</g>
+<g id="code" class="card">
+<rect class="box" x="40" y="784" width="1120" height="128" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<rect x="48.75" y="800" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="56" y="824" font-size="24" fill="#e2e8f0">D Code only</text>
+<text x="56" y="856" font-size="24" fill="#e2e8f0">Produce; separate review; repair</text>
+<text x="56" y="888" font-size="24" fill="#e2e8f0">Test the final reviewed revision</text>
+</g>
+<g id="research" class="card">
+<rect class="box" x="40" y="928" width="1120" height="160" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<rect x="48.75" y="944" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="56" y="968" font-size="24" fill="#e2e8f0">D Research-team only</text>
+<text x="56" y="1000" font-size="24" fill="#e2e8f0">At least two separate evidence legs</text>
+<text x="56" y="1032" font-size="24" fill="#e2e8f0">Verifier differs from producer</text>
+<text x="56" y="1064" font-size="24" fill="#e2e8f0">Factual split: evidence or HOLD</text>
+</g>
+<g id="curation" class="card">
+<rect class="box" x="40" y="1104" width="1120" height="160" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<rect x="48.75" y="1120" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="56" y="1144" font-size="24" fill="#e2e8f0">D Curation only</text>
+<text x="56" y="1176" font-size="24" fill="#e2e8f0">Verifier first; then panel vote</text>
+<text x="56" y="1208" font-size="24" fill="#e2e8f0">Two independent reviewers + accountable operator</text>
+<text x="56" y="1240" font-size="24" fill="#e2e8f0">ACCEPT or FILTER; dissent needs operator verdict</text>
+</g>
+<g id="cold" class="card">
+<rect class="box" x="40" y="1280" width="1120" height="64" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="63.25" cy="1310.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="1320" font-size="24" fill="#e2e8f0">R Cold review: same frozen inputs; no peer reports</text>
+</g>
+<g id="ordinary" class="card">
+<rect class="box" x="40" y="1360" width="1120" height="128" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<rect x="48.75" y="1376" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="56" y="1400" font-size="24" fill="#e2e8f0">D Handoff only if transfer is next</text>
+<text x="56" y="1432" font-size="24" fill="#e2e8f0">Check destination exists; size OR checksum</text>
+<text x="56" y="1464" font-size="24" fill="#e2e8f0">Mismatch: stop</text>
+</g>
+<g id="optional" class="card">
+<rect class="box" x="66" y="1530" width="1068" height="64" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="89.25" cy="1560.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="82" y="1570" font-size="24" fill="#e2e8f0">R Optional: inert package handoff</text>
+</g>
+<g id="prerequisites" class="card">
+<rect class="box" x="66" y="1610" width="1068" height="128" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="89.25" cy="1640.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="82" y="1650" font-size="24" fill="#e2e8f0">R Checks passed</text>
+<text x="82" y="1682" font-size="24" fill="#e2e8f0">Transfer authorized</text>
+<text x="82" y="1714" font-size="24" fill="#e2e8f0">Both destinations inert throughout</text>
+</g>
+<g id="recipe" class="card">
+<rect class="box" x="66" y="1754" width="1068" height="128" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="89.25" cy="1784.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="82" y="1794" font-size="24" fill="#e2e8f0">R Hash AND size</text>
+<text x="82" y="1826" font-size="24" fill="#e2e8f0">Recipe in text equivalent</text>
+<text x="82" y="1858" font-size="24" fill="#e2e8f0">Unknown / collision / failed check: stop expansion</text>
+</g>
+<g id="inert-end" class="card">
+<rect class="box" x="66" y="1898" width="1068" height="96" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="89.25" cy="1928.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="82" y="1938" font-size="24" fill="#e2e8f0">R Verified inert; installation and activation</text>
+<text x="82" y="1970" font-size="24" fill="#e2e8f0">need separate authorization</text>
+</g>
+<g id="local" class="card">
+<rect class="box" x="40" y="2036" width="1120" height="160" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="63.25" cy="2066.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="2076" font-size="24" fill="#e2e8f0">R Handoff may be local</text>
+<text x="56" y="2108" font-size="24" fill="#e2e8f0">Required independent review remains a gate</text>
+<text x="56" y="2140" font-size="24" fill="#e2e8f0">Gap: required role missing</text>
+<text x="56" y="2172" font-size="24" fill="#e2e8f0">Stop this protocol; no pass</text>
+</g>
+<path class="connector" d="M576 304 H624" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<path class="connector" d="M892 336 V368" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<path class="connector" d="M624 392 H576" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<path class="connector" d="M308 432 V464" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<path class="connector" d="M544 432 V448 H600 V528 H624" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<path class="connector" d="M892 592 V624" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<path class="connector" d="M1160 656 H1174 V256 H1080 V272" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<path class="connector" d="M892 432 V464" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<path class="connector" d="M1120 304 H1142 V528 H1120" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<rect x="40" y="1504" width="1120" height="516" rx="14" fill="none" stroke="#e879f9" stroke-width="1.5" stroke-dasharray="8 6"/>
+</svg>

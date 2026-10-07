@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1576" viewBox="0 0 1200 1576" role="img" aria-labelledby="title description" font-family="DejaVu Sans Mono, monospace" font-kerning="none">
+<title id="title">Memory stores</title>
+<desc id="description">Standing rules and project instructions are distinct from episodic evidence. Current project documentation outranks an old note; other rule conflicts require the selected policy. Dashed examples show a pointer index, tool memory, secondary copies, reference storage, and an archive.</desc>
+<defs>
+<linearGradient id="ground" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0a0b12"/><stop offset="1" stop-color="#12101e"/></linearGradient>
+<linearGradient id="accent"><stop stop-color="#22d3ee"/><stop offset="1" stop-color="#e879f9"/></linearGradient>
+<marker id="flow" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#22d3ee" stroke-width="1.5"/></marker>
+<marker id="decision" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#e879f9" stroke-width="1.5"/></marker>
+</defs>
+<rect x="0" y="0" width="1200" height="1576" fill="#0a0b12" fill-opacity="1"/>
+<rect x="40" y="92" width="1120" height="3" fill="url(#accent)"/>
+<g id="heading" class="card"><rect class="box" x="40" y="40" width="1120" height="48" fill="none"/>
+<text x="56" y="76" font-size="36" fill="#e2e8f0">Memory stores</text>
+</g>
+<g id="caption" class="card"><rect class="box" x="40" y="104" width="1120" height="32" fill="none"/>
+<circle cx="63.25" cy="118.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="128" font-size="24" fill="#e2e8f0">R Apply only the selected workflow's rules.</text>
+</g>
+<g id="legend" class="card"><rect class="box" x="40" y="152" width="1120" height="128" fill="none"/>
+<rect class="legend-mark" x="48.75" y="152" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="56" y="176" font-size="24" fill="#e2e8f0">D Documented</text>
+<circle class="legend-mark" cx="375.25" cy="166.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="368" y="176" font-size="24" fill="#e2e8f0">R Recommendation</text>
+<text x="56" y="208" font-size="24" fill="#e2e8f0">Solid arrow: labelled relationship; label names it</text>
+<text x="56" y="240" font-size="24" fill="#e2e8f0">Dashed frame: optional example</text>
+<text x="56" y="272" font-size="24" fill="#e2e8f0">Dot: source set by selected configuration</text>
+</g>
+<g id="purposes-left" class="card">
+<rect class="box" x="40" y="304" width="536" height="96" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<rect x="48.75" y="320" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="56" y="344" font-size="24" fill="#e2e8f0">D Standing rules</text>
+<text x="56" y="376" font-size="24" fill="#e2e8f0">Authoritative memory tier</text>
+</g>
+<g id="purposes-right" class="card">
+<rect class="box" x="624" y="304" width="536" height="128" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<rect x="632.75" y="320" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="640" y="344" font-size="24" fill="#e2e8f0">D Episodic notes</text>
+<text x="640" y="376" font-size="24" fill="#e2e8f0">Context and evidence</text>
+<text x="640" y="408" font-size="24" fill="#e2e8f0">No binding rules</text>
+</g>
+<g id="pointer-left" class="card">
+<rect class="box" x="40" y="464" width="536" height="96" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5" stroke-dasharray="8 6"/>
+<rect x="48.75" y="480" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="56" y="504" font-size="24" fill="#e2e8f0">D Optional example: index</text>
+<text x="56" y="536" font-size="24" fill="#e2e8f0">If present: pointers only</text>
+</g>
+<g id="pointer-right" class="card">
+<rect class="box" x="624" y="464" width="536" height="96" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5" stroke-dasharray="8 6"/>
+<circle cx="647.25" cy="494.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="640" y="504" font-size="24" fill="#e2e8f0">R Optional tool memory</text>
+<text x="640" y="536" font-size="24" fill="#e2e8f0">Not a second authority</text>
+</g>
+<g id="project-left" class="card">
+<rect class="box" x="40" y="592" width="536" height="96" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<rect x="48.75" y="608" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="56" y="632" font-size="24" fill="#e2e8f0">D Project instructions</text>
+<text x="56" y="664" font-size="24" fill="#e2e8f0">Approvals and safeguards</text>
+</g>
+<g id="project-right" class="card">
+<rect class="box" x="624" y="592" width="536" height="96" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<rect x="632.75" y="608" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="640" y="632" font-size="24" fill="#e2e8f0">D Current project documentation</text>
+<text x="640" y="664" font-size="24" fill="#e2e8f0">takes precedence over old notes</text>
+</g>
+<g id="copies-left" class="card">
+<rect class="box" x="40" y="832" width="536" height="128" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5" stroke-dasharray="8 6"/>
+<rect x="48.75" y="848" width="29" height="29" rx="2" fill="#15333e" stroke="#22d3ee"/>
+<text x="56" y="872" font-size="24" fill="#e2e8f0">D Optional secondary copy</text>
+<text x="56" y="904" font-size="24" fill="#e2e8f0">If present: report drift</text>
+<text x="56" y="936" font-size="24" fill="#e2e8f0">Owner decides the relationship</text>
+</g>
+<g id="copies-right" class="card">
+<rect class="box" x="624" y="832" width="536" height="96" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5" stroke-dasharray="8 6"/>
+<circle cx="647.25" cy="862.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="640" y="872" font-size="24" fill="#e2e8f0">R Optional reference store</text>
+<text x="640" y="904" font-size="24" fill="#e2e8f0">Reference only</text>
+</g>
+<g id="archive" class="card">
+<rect class="box" x="40" y="992" width="1120" height="128" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5" stroke-dasharray="8 6"/>
+<circle cx="63.25" cy="1022.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="1032" font-size="24" fill="#e2e8f0">R Optional archive</text>
+<text x="56" y="1064" font-size="24" fill="#e2e8f0">May be empty</text>
+<text x="56" y="1096" font-size="24" fill="#e2e8f0">Check current authority</text>
+</g>
+<g id="reading" class="card">
+<rect class="box" x="40" y="1152" width="1120" height="128" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="63.25" cy="1182.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="1192" font-size="24" fill="#e2e8f0">R Read required instructions</text>
+<text x="56" y="1224" font-size="24" fill="#e2e8f0">Unreadable in full?</text>
+<text x="56" y="1256" font-size="24" fill="#e2e8f0">Stop dependent action</text>
+</g>
+<g id="access" class="card">
+<rect class="box" x="40" y="1312" width="1120" height="96" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="63.25" cy="1342.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="1352" font-size="24" fill="#e2e8f0">R Readers, writers, loading: configure actual access</text>
+<text x="56" y="1384" font-size="24" fill="#e2e8f0">Read under configured policy</text>
+</g>
+<g id="local" class="card">
+<rect class="box" x="40" y="1440" width="1120" height="96" rx="10" fill="#0d0f1a" stroke="#71829c" stroke-width="1.5"/>
+<circle cx="63.25" cy="1470.5" r="14.5" fill="#2e1d3d" stroke="#e879f9"/>
+<text x="56" y="1480" font-size="24" fill="#e2e8f0">R Teaching figure retains optional examples</text>
+<text x="56" y="1512" font-size="24" fill="#e2e8f0">Deployments omit absent stores; files may be local</text>
+</g>
+<g id="pointer-label" class="label"><rect class="box" x="328" y="416" width="176" height="32" fill="none"/>
+<text x="344" y="440" font-size="24" fill="#e2e8f0">points to</text>
+</g>
+<path class="connector" d="M308 464 V400" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+<g id="canonical-port" class="port"><circle cx="308" cy="786" r="4" fill="#22d3ee" stroke="#22d3ee"/></g>
+<g id="copy-label" class="label"><rect class="box" x="328" y="792" width="256" height="32" fill="none"/>
+<text x="344" y="816" font-size="24" fill="#e2e8f0">maintained copy</text>
+</g>
+<path class="connector" d="M308 790 V832" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#flow)"/>
+</svg>

@@ -83,7 +83,8 @@ def test_the_shipping_entry_point_reads_the_newly_scoped_files():
     # off-topic, so the front-facing set is one file smaller. The number tracks that set; if
     # it moves without a file being added or removed, the scan's reach changed and THAT is
     # the thing to investigate.
-    assert "scanned 44 text file(s)" in run.stdout, (
+    # 44 -> 48 with the diagrams: docs/diagrams/README.md and its three SVGs joined the set.
+    assert "scanned 48 text file(s)" in run.stdout, (
         "the front-facing files did not join the scanned set: " + run.stdout)
     assert "1 declared exemption(s)" in run.stdout, (
         "the addendum's exemption is not being counted: " + run.stdout)
