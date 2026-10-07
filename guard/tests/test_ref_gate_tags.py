@@ -240,7 +240,11 @@ IMPOSTOR_SPELLINGS = [
 
 @pytest.mark.parametrize("impostor", IMPOSTOR_SPELLINGS)
 def test_no_spelling_of_the_publishing_ref_stands_in_for_it(tmp_path, impostor):
-    """rev-parse would resolve each of these for refs/heads/main; the gate must not."""
+    """None of these may stand in for refs/heads/main.
+
+    The first four are spellings rev-parse would resolve for it; refs/heads/main/extra is a
+    child ref that a prefix match in for-each-ref would return.
+    """
     gate = _gate()
     repo, git, commits = _repo(tmp_path)
     git("checkout", "-q", "--detach", commits["B"])
@@ -250,15 +254,23 @@ def test_no_spelling_of_the_publishing_ref_stands_in_for_it(tmp_path, impostor):
     assert gate.check(str(repo), quiet=True) == 2
 
 
-@pytest.mark.parametrize("shape", ["push", "pull-request"])
+@pytest.mark.parametrize("shape", ["push", "pull-request", "configured"])
 def test_a_git_failure_at_any_call_refuses(tmp_path, capsys, shape):
-    """Every git call the gate makes is failed in turn; none may turn into a verdict."""
+    """Each git call on a recorded clean run is failed in turn; none may turn into a verdict.
+
+    Three runs are recorded: a push checkout, a pull-request checkout, and a push checkout
+    with fleetops.publishRef configured (so check-ref-format runs). Every refusal must carry
+    git's own error text. A call that none of these runs makes (the tag query when neither
+    anchor exists, for one) is not covered by this test.
+    """
     gate = _gate()
     repo, git, commits = _repo(tmp_path)
     _annotated(git, "v0.1.1", commits["B"], "v0.1.1")
     git("tag", "v0.1.0", commits["A"])
     if shape == "pull-request":
         _pr_checkout(git, commits)
+    if shape == "configured":
+        git("config", "fleetops.publishRef", "refs/heads/main")
     real_run = subprocess.run
     calls = []
 
@@ -275,6 +287,8 @@ def test_a_git_failure_at_any_call_refuses(tmp_path, capsys, shape):
     seen = {" ".join(argv) for argv in calls}
     assert any("cat-file tag" in argv for argv in seen)
     assert any("merge-base --is-ancestor" in argv for argv in seen)
+    if shape == "configured":
+        assert any("check-ref-format" in argv for argv in seen)
     capsys.readouterr()
 
     for target in range(len(calls)):
@@ -295,10 +309,11 @@ def test_a_git_failure_at_any_call_refuses(tmp_path, capsys, shape):
         out = capsys.readouterr()
         argv = " ".join(calls[target])
         assert count[0] > target, argv
-        if "config" in calls[target]:
+        if "config" in calls[target] or "check-ref-format" in calls[target]:
             assert rc == 1 and "REFUSED" in out.out, argv  # documented config refusal
+            assert "injected failure" in out.out + out.err, argv
         elif "--is-shallow-repository" in calls[target]:
-            assert rc == 2, argv
+            assert rc == 2 and "injected failure" in out.err, argv
         else:
             assert rc == 2 and "injected failure" in out.err, argv
 

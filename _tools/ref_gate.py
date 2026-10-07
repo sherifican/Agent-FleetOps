@@ -25,8 +25,10 @@ Rules enforced:
      reachable from `--all`, not just the checked-out tree, and not only the one name
      rev-list prints for an object that sits under several names.
   3. NO AI CO-AUTHOR TRAILERS (Co-Authored-By naming a model, a model vendor or an
-     assistant, as a whole word) on any reachable commit or in any tag annotation
+     assistant, as a word, versioned spellings such as Qwen3-Coder included) on any reachable commit or in any tag annotation
      reachable from any ref, nested annotations included.
+     Names are matched as words, so a person whose name is also a model's name
+     (Gemma, Kimi) is refused too; the report shows the whole line.
 
 fleetops.publishRef is trimmed; an absent, empty, or whitespace-only value defaults
 to refs/heads/main. A configured value must start with refs/ and pass
@@ -67,11 +69,13 @@ DEFAULT_PUBLISH_REF = "refs/heads/main"
 # judge a mirror push.
 PUSHABLE_PREFIXES = ("refs/heads/", "refs/tags/", "refs/original/")
 
-BANNED_PATH = re.compile(r"(^|/)__pycache__(/|$)|\.pyc$|\.pyo$")
+TREE_BATCH = 1000
+
+BANNED_PATH = re.compile(r"(^|/)__pycache__(/|\Z)|\.pyc\Z|\.pyo\Z")
 BANNED_TRAILER = re.compile(
     r"(?im)^co-authored-by:[^\n]*?"
-    r"(?:\b(?:claude|anthropic|chatgpt|gpt|openai|codex|gemini|gemma|grok|xai|qwen|deepseek"
-    r"|llama|mistral|kimi|moonshot|glm|copilot|assistant)\b|\b(?-i:AI)\b)"
+    r"(?:\b(?:claude(?:code)?|anthropic|chatgpt|gpt|openai|codex|gemini|gemma|grok|xai|qwen|deepseek"
+    r"|llama|mistral|kimi|moonshot|glm|copilot|assistant)(?![a-z])|\b(?-i:AI)\b)[^\n]*"
 )
 
 GIT = ["git", "--no-replace-objects"]
@@ -105,7 +109,8 @@ def publishable_refs(repo):
     if result.returncode == 1:
         return {DEFAULT_PUBLISH_REF}
     if result.returncode != 0:
-        raise RuntimeError("cannot read fleetops.publishRef")
+        stderr = result.stderr.decode(errors="replace") if isinstance(result.stderr, bytes) else result.stderr
+        raise RuntimeError(f"cannot read fleetops.publishRef: {stderr.strip()}")
     ref = result.stdout.strip()
     if not ref:
         return {DEFAULT_PUBLISH_REF}
@@ -113,9 +118,12 @@ def publishable_refs(repo):
         raise RuntimeError("fleetops.publishRef must name a full ref beginning with refs/")
     if ref.startswith("refs/original/"):
         raise RuntimeError("fleetops.publishRef must name a full publishing ref outside refs/original/")
-    if subprocess.run(GIT + ["check-ref-format", ref], cwd=repo,
-                      capture_output=True).returncode != 0:
-        raise RuntimeError("fleetops.publishRef must name a valid full ref")
+    result = subprocess.run(GIT + ["check-ref-format", ref], cwd=repo,
+                            capture_output=True)
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace") if isinstance(result.stderr, bytes) else result.stderr
+        detail = f": {stderr.strip()}" if stderr.strip() else ""
+        raise RuntimeError(f"fleetops.publishRef must name a valid full ref{detail}")
     return {ref}
 
 
@@ -252,43 +260,46 @@ def banned_objects(repo):
     if not trees:
         return []
 
-    body = git_bytes(["cat-file", "--batch"], repo, input=("\n".join(trees) + "\n").encode())
     hits = []
     seen = set()
-    pos = 0
-    for tree in trees:
-        header_end = body.find(b"\n", pos)
-        if header_end == -1:
-            raise RuntimeError("tree batch truncated")
-        header = body[pos:header_end].decode().split(" ")
-        if len(header) != 3 or header[:2] != [tree, "tree"]:
-            raise RuntimeError(f"unexpected batch header {header!r}")
-        try:
-            size = int(header[2])
-        except ValueError:
-            raise RuntimeError(f"unexpected batch header {header!r}") from None
-        if size < 0:
-            raise RuntimeError(f"unexpected batch header {header!r}")
-        content = body[header_end + 1:header_end + 1 + size]
-        if len(content) != size:
-            raise RuntimeError("tree batch truncated")
-        pos = header_end + 1 + size
-        if body[pos:pos + 1] != b"\n":
-            raise RuntimeError("tree batch truncated")
-        pos += 1
-        i = 0
-        while i < len(content):
-            space = content.find(b" ", i)
-            nul = content.find(b"\0", space + 1) if space != -1 else -1
-            if space == -1 or nul == -1 or nul + 1 + hash_len > len(content):
-                raise RuntimeError(f"tree {tree[:9]} malformed")
-            name = os.fsdecode(content[space + 1:nul])
-            i = nul + 1 + hash_len
-            if BANNED_PATH.search(name) and (tree, name) not in seen:
-                seen.add((tree, name))
-                hits.append((tree[:9], name))
-    if pos != len(body):
-        raise RuntimeError("unexpected trailing tree batch data")
+    for start in range(0, len(trees), TREE_BATCH):
+        chunk = trees[start:start + TREE_BATCH]
+        body = git_bytes(["cat-file", "--batch"], repo,
+                         input=("\n".join(chunk) + "\n").encode())
+        pos = 0
+        for tree in chunk:
+            header_end = body.find(b"\n", pos)
+            if header_end == -1:
+                raise RuntimeError("tree batch truncated")
+            header = body[pos:header_end].decode().split(" ")
+            if len(header) != 3 or header[:2] != [tree, "tree"]:
+                raise RuntimeError(f"unexpected batch header {header!r}")
+            try:
+                size = int(header[2])
+            except ValueError:
+                raise RuntimeError(f"unexpected batch header {header!r}") from None
+            if size < 0:
+                raise RuntimeError(f"unexpected batch header {header!r}")
+            content = body[header_end + 1:header_end + 1 + size]
+            if len(content) != size:
+                raise RuntimeError("tree batch truncated")
+            pos = header_end + 1 + size
+            if body[pos:pos + 1] != b"\n":
+                raise RuntimeError("tree batch truncated")
+            pos += 1
+            i = 0
+            while i < len(content):
+                space = content.find(b" ", i)
+                nul = content.find(b"\0", space + 1) if space != -1 else -1
+                if space == -1 or nul == -1 or nul + 1 + hash_len > len(content):
+                    raise RuntimeError(f"tree {tree[:9]} malformed")
+                name = os.fsdecode(content[space + 1:nul])
+                i = nul + 1 + hash_len
+                if BANNED_PATH.search(name) and (tree, name) not in seen:
+                    seen.add((tree, name))
+                    hits.append((tree[:9], name))
+        if pos != len(body):
+            raise RuntimeError("unexpected trailing tree batch data")
     return hits
 
 
@@ -337,7 +348,8 @@ def check(repo, quiet=False):
         cwd=repo, capture_output=True, text=True
     )
     if shallow_result.returncode != 0:
-        sys.stderr.write(f"ref_gate: cannot tell whether {repo} is shallow — refusing to emit a verdict\n")
+        stderr = shallow_result.stderr.decode(errors="replace") if isinstance(shallow_result.stderr, bytes) else shallow_result.stderr
+        sys.stderr.write(f"ref_gate: cannot tell whether {repo} is shallow: {stderr.strip()} — refusing to emit a verdict\n")
         return 2
     if shallow_result.stdout.strip() == "true":
         sys.stderr.write(f"ref_gate: {repo} is a shallow clone — history is incomplete, so ancestry and reachable-object checks cannot be judged; fetch full history (git fetch --unshallow; in GitHub Actions, checkout with fetch-depth: 0) — refusing to emit a verdict\n")
@@ -379,20 +391,21 @@ def check(repo, quiet=False):
     say(f"  publishable allow-list: {sorted(allowed)}")
 
     if strays:
-        say(f"  [FAIL] {len(strays)} ref(s) outside the allow-list — a push --all/--mirror would publish these:")
+        say(f"  [FAIL] {len(strays)} ref(s) outside the allow-list — pushing them would publish them (push --all sends branches, push --tags sends tags, push --mirror sends every ref):")
         for name, sha in strays:
             say(f"         {name} @ {sha}")
     else:
         say("  [OK]   no stray publishable refs")
 
     if objs:
-        say(f"  [FAIL] {len(objs)} never-publish object(s) reachable from --all:")
+        say(f"  [FAIL] {len(objs)} never-publish name(s) reachable from --all:")
         for sha, path in objs[:20]:
-            say(f"         {sha}  {path}")
+            name = path if path.isprintable() else repr(path)
+            say(f"         {sha}  {name}")
         if len(objs) > 20:
             say(f"         … and {len(objs) - 20} more")
     else:
-        say("  [OK]   no never-publish objects reachable")
+        say("  [OK]   no never-publish names reachable")
 
     if trailers:
         say(f"  [FAIL] {len(trailers)} AI-attribution trailer(s) in reachable history:")
