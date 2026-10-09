@@ -702,3 +702,90 @@ def test_a_baseline_failure_names_only_its_own_probe(monkeypatch, probe):
     assert "  - " + chosen in lines, out
     assert "  - " + other not in lines, out
     assert "ref_gate --self-test: PASSED" not in out, out
+
+
+def test_a_quiet_check_prints_nothing_on_a_violating_repo(tmp_path, capsys):
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    git("branch", "side")            # a stray ref: the gate must go red
+    gate = _gate()
+    capsys.readouterr()
+    assert gate.check(str(repo), quiet=True) == 1
+    captured = capsys.readouterr()
+    assert captured.out == "", captured.out
+    assert captured.err == "", captured.err
+    # Control: the same repo without quiet prints its report.
+    assert gate.check(str(repo)) == 1
+    assert capsys.readouterr().out.strip() != ""
+
+    # Quiet must hold for every rule's report, not only the stray-ref one.
+    for kind in ("object", "trailer"):
+        base = tmp_path / kind
+        base.mkdir()
+        other, ogit = _repo(base)
+        ogit("commit", "-q", "--allow-empty", "-m", "A")
+        if kind == "object":
+            _commit_files(other, ogit, {"pkg/__pycache__/mod.cpython-312.pyc": b"\x00compiled\x00"})
+        else:
+            ogit("commit", "-q", "--allow-empty", "-m",
+                 "chore: thing\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
+        capsys.readouterr()
+        assert gate.check(str(other), quiet=True) == 1, kind
+        captured = capsys.readouterr()
+        assert captured.out == "", (kind, captured.out)
+        assert captured.err == "", (kind, captured.err)
+
+
+def test_a_carriage_return_alone_as_the_configured_ref_is_refused(tmp_path, capsys):
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    with open(repo / ".git" / "config", "ab") as config:
+        config.write(b'[fleetops]\n\tpublishRef = "\r"\n')
+    raw = subprocess.run(["git", "config", "--get", "fleetops.publishRef"], cwd=repo,
+                         capture_output=True, check=True).stdout
+    assert raw == b"\r\n", raw          # the CR itself reaches the gate's reader
+    gate = _gate()
+    capsys.readouterr()
+    assert gate.check(str(repo)) == 1
+    lines = capsys.readouterr().out.split("\n")
+    assert "ref_gate: REFUSED fleetops.publishRef must name a full ref beginning with refs/" in lines, lines
+
+
+RULE_ALONE = {
+    "stray": "ref(s) outside the allow-list",
+    "object": "never-publish name(s) reachable from --all:",
+    "trailer": "AI-attribution trailer(s) in reachable history:",
+}
+OK_LINES = {
+    "stray": "  [OK]   no stray publishable refs",
+    "object": "  [OK]   no never-publish names reachable",
+    "trailer": "  [OK]   no AI-attribution trailers",
+}
+
+
+@pytest.mark.parametrize("rule", sorted(RULE_ALONE))
+def test_each_rule_alone_reports_only_its_own_failure(tmp_path, capsys, rule):
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    if rule == "stray":
+        git("branch", "side")
+    elif rule == "object":
+        _commit_files(repo, git, {"pkg/__pycache__/mod.cpython-312.pyc": b"\x00compiled\x00"})
+    else:
+        git("commit", "-q", "--allow-empty", "-m",
+            "chore: thing\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
+    gate = _gate()
+    capsys.readouterr()
+    assert gate.check(str(repo)) == 1
+    lines = capsys.readouterr().out.split("\n")
+    fails = [line for line in lines if line.startswith("  [FAIL] ")]
+    assert len(fails) == 1, lines
+    assert fails[0].endswith(RULE_ALONE[rule]) or RULE_ALONE[rule] in fails[0], lines
+    for other_rule, text in RULE_ALONE.items():
+        if other_rule != rule:
+            assert text not in fails[0], lines
+    for other, ok in OK_LINES.items():
+        if other != rule:
+            assert ok in lines, lines
+        else:
+            assert ok not in lines, lines
