@@ -618,6 +618,12 @@ def test_an_ignorable_mark_after_a_model_name_still_fails_the_gate(tmp_path, whe
         assert not any("Jones" in l for l in flagged), flagged
 
 
+B_CLEAN = "BASELINE: a clean single-main repo was not green \u2014 gate is over-firing"
+B_TAG = "BASELINE: a release tag on main's tip was not green \u2014 tag exemption is over-firing"
+PASSED_LINE = ("ref_gate --self-test: PASSED \u2014 all 3 rules provably go red; "
+               "tags exempt only on published history; prose/path discrimination holds")
+
+
 def test_the_self_test_reports_on_an_ascii_stream():
     path = Path(__file__).resolve().parents[2] / "_tools" / "ref_gate.py"
     env = dict(os.environ, PYTHONIOENCODING="ascii:strict", PYTHONUTF8="0")
@@ -625,16 +631,14 @@ def test_the_self_test_reports_on_an_ascii_stream():
     out = (result.stdout + result.stderr).decode("ascii", "replace")
     assert b"Traceback" not in result.stdout + result.stderr, out
     assert result.returncode == 0, out
-    assert (b"ref_gate --self-test: PASSED \\u2014 all 3 rules provably go red; "
-            b"tags exempt only on published history; prose/path discrimination holds") in result.stdout, out
+    assert PASSED_LINE.encode("ascii", "backslashreplace") in result.stdout.split(b"\n"), out
     # On a stream that can hold it, the line carries the em dash itself, not an escape.
     env = dict(os.environ, PYTHONIOENCODING="utf-8:strict", PYTHONUTF8="0")
     result = subprocess.run([sys.executable, str(path), "--self-test"], capture_output=True, env=env)
     out = (result.stdout + result.stderr).decode("utf-8", "replace")
     assert b"Traceback" not in result.stdout + result.stderr, out
     assert result.returncode == 0, out
-    assert ("ref_gate --self-test: PASSED \u2014 all 3 rules provably go red; "
-            "tags exempt only on published history; prose/path discrimination holds").encode("utf-8") in result.stdout, out
+    assert PASSED_LINE.encode("utf-8") in result.stdout.split(b"\n"), out
 
 
 def test_a_self_test_failure_is_reported_on_an_ascii_stream(monkeypatch):
@@ -647,16 +651,54 @@ def test_a_self_test_failure_is_reported_on_an_ascii_stream(monkeypatch):
     assert gate.self_test() == 1
     sink.flush()
     out = sink.buffer.getvalue().decode("ascii")
-    assert "ref_gate --self-test: FAILED" in out, out
-    assert "BASELINE" in out, out
-    # Each baseline message reaches the stream with its em dash escaped.
-    assert "BASELINE: a clean single-main repo was not green \\u2014 gate is over-firing" in out, out
-    assert "BASELINE: a release tag on main's tip was not green \\u2014 tag exemption is over-firing" in out, out
-    # On a stream that can hold it, each message carries the em dash itself, not an escape.
+    lines = out.split("\n")
+    assert "ref_gate --self-test: FAILED" in lines, out
+    assert "  - " + B_CLEAN.encode("ascii", "backslashreplace").decode("ascii") in lines, out
+    assert "  - " + B_TAG.encode("ascii", "backslashreplace").decode("ascii") in lines, out
+    assert "ref_gate --self-test: PASSED" not in out, out
+
+
+def test_a_self_test_failure_is_reported_on_a_utf8_stream(monkeypatch):
+    import io
+    gate = _gate()
+    monkeypatch.setattr(gate, "check", lambda *a, **k: 1)
     sink = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", errors="strict")
     monkeypatch.setattr(sys, "stdout", sink)
     assert gate.self_test() == 1
     sink.flush()
     out = sink.buffer.getvalue().decode("utf-8")
-    assert "BASELINE: a clean single-main repo was not green \u2014 gate is over-firing" in out, out
-    assert "BASELINE: a release tag on main's tip was not green \u2014 tag exemption is over-firing" in out, out
+    lines = out.split("\n")
+    assert "ref_gate --self-test: FAILED" in lines, out
+    assert "  - " + B_CLEAN in lines, out
+    assert "  - " + B_TAG in lines, out
+    assert "ref_gate --self-test: PASSED" not in out, out
+
+
+@pytest.mark.parametrize("probe", ["clean", "tag"])
+def test_a_baseline_failure_names_only_its_own_probe(monkeypatch, probe):
+    import io
+    gate = _gate()
+    real = gate.check
+
+    def fake(repo, quiet=False):
+        if os.path.basename(repo) == "r":
+            tags = subprocess.run(["git", "tag", "--list"], cwd=repo, capture_output=True,
+                                  text=True, check=True).stdout.split()
+            if probe == "clean" and not tags:
+                return 1
+            if probe == "tag" and tags == ["v0.0.1"]:
+                return 1
+        return real(repo, quiet=quiet)
+
+    monkeypatch.setattr(gate, "check", fake)
+    sink = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", errors="strict")
+    monkeypatch.setattr(sys, "stdout", sink)
+    assert gate.self_test() == 1
+    sink.flush()
+    out = sink.buffer.getvalue().decode("utf-8")
+    chosen, other = (B_CLEAN, B_TAG) if probe == "clean" else (B_TAG, B_CLEAN)
+    lines = out.split("\n")
+    assert "ref_gate --self-test: FAILED" in lines, out
+    assert "  - " + chosen in lines, out
+    assert "  - " + other not in lines, out
+    assert "ref_gate --self-test: PASSED" not in out, out
