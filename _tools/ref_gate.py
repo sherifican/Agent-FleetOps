@@ -509,32 +509,70 @@ def self_test():
         git(["tag", "-d", "v9.9.9"], repo)
         git(["tag", "-d", "v0.0.1"], repo)
 
-        # Mutation 1 — a stray ref (the exact filter-branch leftover shape).
-        git(["update-ref", "refs/original/refs/heads/main", "refs/heads/main"], repo)
-        if not stray_refs(repo):
-            failures.append("MUTATION 1: a planted refs/original/* leftover did NOT trip rule 1")
-        if check(repo, quiet=True) != 1:
-            failures.append("MUTATION 1: gate did not go red on a stray ref")
-        git(["update-ref", "-d", "refs/original/refs/heads/main"], repo)
+        def fresh(name):
+            path = os.path.join(td, name)
+            os.makedirs(path)
+            git(["init", "-q", "-b", "main"], path)
+            _plant(path, "ok.py", "print('hi')\n", "init: clean commit")
+            return path
 
-        # Mutation 2 — a banned object reachable only from a NON-checked-out ref.
-        git(["checkout", "-q", "-b", "sidecar"], repo)
-        _plant(repo, "pkg/__pycache__/mod.cpython-312.pyc", "\x00compiled\x00", "add: compiled artifact")
-        git(["checkout", "-q", "main"], repo)
-        hits = banned_objects(repo)
-        if not hits:
-            failures.append("MUTATION 2: a .pyc reachable only from a sidecar branch did NOT trip rule 2")
-        if check(repo, quiet=True) != 1:
-            failures.append("MUTATION 2: gate did not go red on an off-branch banned object")
+        def isolated(label, path, want):
+            # want is one of "strays", "objs", "trailers"
+            found = {"strays": bool(stray_refs(path)),
+                     "objs": bool(banned_objects(path)),
+                     "trailers": bool(banned_trailers(path))}
+            others = [k for k, v in found.items() if v and k != want]
+            if not found[want] or others:
+                failures.append(f"FIXTURE {label}: expected only {want} to be present, found {sorted(k for k, v in found.items() if v)}")
+                return
+            if check(path, quiet=True) != 1:
+                failures.append(f"{label}: gate did not go red when only this rule was violated")
 
-        # Mutation 3 — an AI-attribution trailer on a non-main ref.
-        git(["checkout", "-q", "sidecar"], repo)
-        _plant(repo, "note.txt", "x\n", "chore: thing\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
-        git(["checkout", "-q", "main"], repo)
-        if not banned_trailers(repo):
-            failures.append("MUTATION 3: a planted Co-Authored-By trailer did NOT trip rule 3")
-        if check(repo, quiet=True) != 1:
-            failures.append("MUTATION 3: gate did not go red on an attribution trailer")
+        # RULE 1 — a stray ref on its own must make the gate red.
+        stray = fresh("rule1")
+        if check(stray, quiet=True) != 0:
+            failures.append("FIXTURE RULE 1 (stray ref): fresh repo was not green")
+        else:
+            git(["update-ref", "refs/original/refs/heads/main", "refs/heads/main"], stray)
+            isolated("RULE 1 (stray ref)", stray, "strays")
+
+        # RULE 2 — a never-publish name on main must make the gate red.
+        obj = fresh("rule2")
+        if check(obj, quiet=True) != 0:
+            failures.append("FIXTURE RULE 2 (never-publish name): fresh repo was not green")
+        else:
+            _plant(obj, "pkg/__pycache__/mod.cpython-312.pyc", "\x00compiled\x00", "add: compiled artifact")
+            isolated("RULE 2 (never-publish name)", obj, "objs")
+
+        # RULE 3 — an AI-attribution trailer on main must make the gate red.
+        tr = fresh("rule3")
+        if check(tr, quiet=True) != 0:
+            failures.append("FIXTURE RULE 3 (AI-attribution trailer): fresh repo was not green")
+        else:
+            _plant(tr, "note.txt", "x\n", "chore: thing\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
+            isolated("RULE 3 (AI-attribution trailer)", tr, "trailers")
+
+        # REACH — rules 2 and 3 must see history reachable only from a non-checked-out ref.
+        # PAIR / ALL THREE — two rules, and then all three, violated together must still turn the gate red.
+        reach = fresh("reach")
+        git(["checkout", "-q", "-b", "sidecar"], reach)
+        _plant(reach, "pkg/__pycache__/mod.cpython-312.pyc", "\x00compiled\x00", "add: compiled artifact")
+        git(["checkout", "-q", "main"], reach)
+        if not banned_objects(reach):
+            failures.append("REACH: a .pyc reachable only from a non-checked-out branch did NOT trip rule 2")
+        elif banned_trailers(reach):
+            failures.append("FIXTURE REACH: the trailer detector fired before any trailer was planted")
+        elif not stray_refs(reach):
+            failures.append("FIXTURE PAIR: the sidecar branch was not reported as a stray ref")
+        elif check(reach, quiet=True) != 1:
+            failures.append("PAIR: a stray branch plus a never-publish name did not turn the gate red together")
+        git(["checkout", "-q", "sidecar"], reach)
+        _plant(reach, "note.txt", "x\n", "chore: thing\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
+        git(["checkout", "-q", "main"], reach)
+        if not banned_trailers(reach):
+            failures.append("REACH: a Co-Authored-By trailer reachable only from a non-checked-out branch did NOT trip rule 3")
+        elif check(reach, quiet=True) != 1:
+            failures.append("ALL THREE: a repo violating all three rules at once did not turn the gate red")
 
         # Prose-vs-path discrimination: a commit whose MESSAGE says __pycache__ but which
         # adds no such path must NOT trip rule 2. This is the false-positive that a
