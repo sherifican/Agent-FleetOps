@@ -109,7 +109,7 @@ This refusal preserves the kernel process boundary; do not bypass it to run the 
 cd tui && .venv/bin/python -m pytest -q
 ```
 
-**VERIFY — expected output:** pytest must exit `0` and report `1179 passed` on Python 3.14, or `1178 passed, 1 skipped` on Python 3.11/3.12 because Unicode array typecode w is unavailable. These versions describe the same 1179 cases. Baseline Python 3.13 skips the unwritten Unicode 15.1.0 census; Python 3.13 execution at this revision is unmeasured. Retain the actual output and interpreter's readline backend; a different result is a blocker, and collection alone does not verify the TUI.
+**VERIFY — expected output:** pytest must exit `0` and report `1182 passed` on Python 3.14, or `1181 passed, 1 skipped` on Python 3.11/3.12 because Unicode array typecode w is unavailable. These versions describe the same 1182 cases. Baseline Python 3.13 skips the unwritten Unicode 15.1.0 census; Python 3.13 and 3.14 execution at this revision is unmeasured; Python 3.12 was measured at `1181 passed, 1 skipped`. Retain the actual output and interpreter's readline backend; a different result is a blocker, and collection alone does not verify the TUI.
 
 ## Step 5 — launch only after the acceptance run
 

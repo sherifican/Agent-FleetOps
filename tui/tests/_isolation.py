@@ -195,8 +195,13 @@ def _stop_retirement_guard(child, descriptor, pidfd=None):
     if received != b'':
         raise RuntimeError('retirement cancellation did not observe peer exit')
     if pidfd is not None:
+        idtype = getattr(os, 'P_PIDFD', None)
+        if idtype is None:
+            if not sys.platform.startswith('linux'):
+                raise RuntimeError('pidfd reap needs P_PIDFD, which only Linux defines')
+            idtype = 3  # Linux uapi P_PIDFD; some CPython builds omit the constant
         try:
-            os.waitid(os.P_PIDFD, pidfd, os.WEXITED)
+            os.waitid(idtype, pidfd, os.WEXITED)
         except ChildProcessError:
             pass  # Another reaper owns this exact incarnation's reap.
     else:

@@ -603,9 +603,9 @@ consume the next test's count. The next fixture establishes soft zero before
 starting threads. Teardown still restores the incoming process limit.
 
 
-Current collection is 1179 TUI cases on Python 3.14. Python 3.11/3.12 are
-expected to collect the same cases; execution at this revision is unmeasured. Python 3.13 execution at this revision is
-unmeasured. Python 3.11/3.12 skip the unavailable array w case; Python 3.14 executes both the array w
+Current collection is 1182 TUI cases (collected on Python 3.12). Python 3.11/3.13/3.14 are
+expected to collect the same cases. Python 3.12 execution at this revision: 1181 passed, 1 skipped; Python 3.11, 3.13 and
+3.14 execution at this revision is unmeasured. Python 3.11/3.12 skip the unavailable array w case; Python 3.14 executes both the array w
 case and the Unicode-class census. Baseline Python 3.13 executes array w
 and skips the unwritten Unicode 15.1.0 census. Published combined counts
 include collected guard cases, not a claim that every guard ran in this

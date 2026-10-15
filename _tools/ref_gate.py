@@ -536,7 +536,7 @@ def self_test():
             git(["update-ref", "refs/original/refs/heads/main", "refs/heads/main"], stray)
             isolated("RULE 1 (stray ref)", stray, "strays")
 
-        # RULE 2 — a never-publish name on main must make the gate red.
+        # RULE 2 — a never-publish name at main's tip must make the gate red.
         obj = fresh("rule2")
         if check(obj, quiet=True) != 0:
             failures.append("FIXTURE RULE 2 (never-publish name): fresh repo was not green")
@@ -544,7 +544,7 @@ def self_test():
             _plant(obj, "pkg/__pycache__/mod.cpython-312.pyc", "\x00compiled\x00", "add: compiled artifact")
             isolated("RULE 2 (never-publish name)", obj, "objs")
 
-        # RULE 3 — an AI-attribution trailer on main must make the gate red.
+        # RULE 3 — an AI-attribution trailer at main's tip must make the gate red.
         tr = fresh("rule3")
         if check(tr, quiet=True) != 0:
             failures.append("FIXTURE RULE 3 (AI-attribution trailer): fresh repo was not green")
@@ -552,26 +552,72 @@ def self_test():
             _plant(tr, "note.txt", "x\n", "chore: thing\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
             isolated("RULE 3 (AI-attribution trailer)", tr, "trailers")
 
+        # Tip-detection pairs have different verdict branches from stray+object.
+        # The object-trailer pair also has an older trailer; REACH below supplies
+        # the strict history-only fixture for both content detectors.
+        for name, want in (("stray-trailer", {"strays", "trailers"}),
+                           ("object-trailer", {"objs", "trailers"})):
+            pair = fresh(name)
+            _plant(pair, "note.txt", "x\n", "chore: thing\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
+            if "strays" in want:
+                git(["branch", "sidecar"], pair)
+            else:
+                _plant(pair, "pkg/__pycache__/mod.cpython-312.pyc", "\x00compiled\x00", "add: compiled artifact")
+            found = {key for key, hits in (("strays", stray_refs(pair)),
+                                          ("objs", banned_objects(pair)),
+                                          ("trailers", banned_trailers(pair))) if hits}
+            if found != want:
+                failures.append(f"FIXTURE PAIR {name}: expected {sorted(want)}, found {sorted(found)}")
+            elif check(pair, quiet=True) != 1:
+                failures.append(f"PAIR {name}: gate did not go red when these two rules were violated")
+
         # REACH — rules 2 and 3 must see history reachable only from a non-checked-out ref.
         # PAIR / ALL THREE — two rules, and then all three, violated together must still turn the gate red.
         reach = fresh("reach")
         git(["checkout", "-q", "-b", "sidecar"], reach)
         _plant(reach, "pkg/__pycache__/mod.cpython-312.pyc", "\x00compiled\x00", "add: compiled artifact")
         git(["checkout", "-q", "main"], reach)
-        if not banned_objects(reach):
+        reach_objects = bool(banned_objects(reach))
+        reach_trailers = bool(banned_trailers(reach))
+        reach_strays = bool(stray_refs(reach))
+        if not reach_objects:
             failures.append("REACH: a .pyc reachable only from a non-checked-out branch did NOT trip rule 2")
-        elif banned_trailers(reach):
+        if reach_trailers:
             failures.append("FIXTURE REACH: the trailer detector fired before any trailer was planted")
-        elif not stray_refs(reach):
+        if not reach_strays:
             failures.append("FIXTURE PAIR: the sidecar branch was not reported as a stray ref")
-        elif check(reach, quiet=True) != 1:
+        if reach_objects and not reach_trailers and reach_strays and check(reach, quiet=True) != 1:
             failures.append("PAIR: a stray branch plus a never-publish name did not turn the gate red together")
         git(["checkout", "-q", "sidecar"], reach)
         _plant(reach, "note.txt", "x\n", "chore: thing\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
+        trailer_commit = git(["rev-parse", "HEAD"], reach).strip()
+        git(["rm", "-q", "pkg/__pycache__/mod.cpython-312.pyc"], reach)
+        git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m",
+             "remove: compiled artifact"], reach)
         git(["checkout", "-q", "main"], reach)
-        if not banned_trailers(reach):
+        # Assert history-only independently of the detectors under test. Advancing
+        # a ref alone leaves the artifact in its tree; both tips must be clean.
+        refs = git(["for-each-ref", "--format=%(refname)"], reach).split()
+        if any(BANNED_PATH.search(os.fsdecode(name))
+               for ref in refs
+               for name in git_bytes(["ls-tree", "-rtz", "--name-only", ref], reach).split(b"\0")
+               if name):
+            failures.append("FIXTURE REACH: a ref tip tree contains a never-publish name")
+        tips = git(["for-each-ref", "--format=%(objectname)"], reach).split()
+        if trailer_commit in tips:
+            failures.append("FIXTURE REACH: the trailer commit is still a ref tip")
+
+        # Recheck each detector once. Only a previously observed hit can disappear.
+        post_objects = bool(banned_objects(reach))
+        post_strays = bool(stray_refs(reach))
+        post_trailers = bool(banned_trailers(reach))
+        if reach_objects and not post_objects:
+            failures.append("REACH: the historical .pyc disappeared after the trailer plant — rule 2 is tip-only")
+        if reach_strays and not post_strays:
+            failures.append("REACH: the sidecar stray ref disappeared after the trailer plant — rule 1 is incomplete")
+        if not post_trailers:
             failures.append("REACH: a Co-Authored-By trailer reachable only from a non-checked-out branch did NOT trip rule 3")
-        elif check(reach, quiet=True) != 1:
+        if post_objects and post_strays and post_trailers and check(reach, quiet=True) != 1:
             failures.append("ALL THREE: a repo violating all three rules at once did not turn the gate red")
 
         # Prose-vs-path discrimination: a commit whose MESSAGE says __pycache__ but which

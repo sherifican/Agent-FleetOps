@@ -620,6 +620,12 @@ def test_an_ignorable_mark_after_a_model_name_still_fails_the_gate(tmp_path, whe
 
 B_CLEAN = "BASELINE: a clean single-main repo was not green \u2014 gate is over-firing"
 B_TAG = "BASELINE: a release tag on main's tip was not green \u2014 tag exemption is over-firing"
+ALWAYS_RED_FAILURES = [
+    B_CLEAN, B_TAG,
+    "FIXTURE RULE 1 (stray ref): fresh repo was not green",
+    "FIXTURE RULE 2 (never-publish name): fresh repo was not green",
+    "FIXTURE RULE 3 (AI-attribution trailer): fresh repo was not green",
+]
 PASSED_LINE = ("ref_gate --self-test: PASSED \u2014 all 3 rules provably go red; "
                "tags exempt only on published history; prose/path discrimination holds")
 
@@ -631,14 +637,16 @@ def test_the_self_test_reports_on_an_ascii_stream():
     out = (result.stdout + result.stderr).decode("ascii", "replace")
     assert b"Traceback" not in result.stdout + result.stderr, out
     assert result.returncode == 0, out
-    assert PASSED_LINE.encode("ascii", "backslashreplace") in result.stdout.split(b"\n"), out
+    assert result.stdout == PASSED_LINE.encode("ascii", "backslashreplace") + b"\n", out
+    assert result.stderr == b"", out
     # On a stream that can hold it, the line carries the em dash itself, not an escape.
     env = dict(os.environ, PYTHONIOENCODING="utf-8:strict", PYTHONUTF8="0")
     result = subprocess.run([sys.executable, str(path), "--self-test"], capture_output=True, env=env)
     out = (result.stdout + result.stderr).decode("utf-8", "replace")
     assert b"Traceback" not in result.stdout + result.stderr, out
     assert result.returncode == 0, out
-    assert PASSED_LINE.encode("utf-8") in result.stdout.split(b"\n"), out
+    assert result.stdout == PASSED_LINE.encode("utf-8") + b"\n", out
+    assert result.stderr == b"", out
 
 
 def test_a_self_test_failure_is_reported_on_an_ascii_stream(monkeypatch):
@@ -651,11 +659,9 @@ def test_a_self_test_failure_is_reported_on_an_ascii_stream(monkeypatch):
     assert gate.self_test() == 1
     sink.flush()
     out = sink.buffer.getvalue().decode("ascii")
-    lines = out.split("\n")
-    assert "ref_gate --self-test: FAILED" in lines, out
-    assert "  - " + B_CLEAN.encode("ascii", "backslashreplace").decode("ascii") in lines, out
-    assert "  - " + B_TAG.encode("ascii", "backslashreplace").decode("ascii") in lines, out
-    assert "ref_gate --self-test: PASSED" not in out, out
+    expected = "ref_gate --self-test: FAILED\n" + "".join(
+        "  - " + message + "\n" for message in ALWAYS_RED_FAILURES)
+    assert out == expected.encode("ascii", "backslashreplace").decode("ascii"), out
 
 
 def test_a_self_test_failure_is_reported_on_a_utf8_stream(monkeypatch):
@@ -667,11 +673,8 @@ def test_a_self_test_failure_is_reported_on_a_utf8_stream(monkeypatch):
     assert gate.self_test() == 1
     sink.flush()
     out = sink.buffer.getvalue().decode("utf-8")
-    lines = out.split("\n")
-    assert "ref_gate --self-test: FAILED" in lines, out
-    assert "  - " + B_CLEAN in lines, out
-    assert "  - " + B_TAG in lines, out
-    assert "ref_gate --self-test: PASSED" not in out, out
+    assert out == "ref_gate --self-test: FAILED\n" + "".join(
+        "  - " + message + "\n" for message in ALWAYS_RED_FAILURES), out
 
 
 @pytest.mark.parametrize("probe", ["clean", "tag"])
@@ -696,12 +699,8 @@ def test_a_baseline_failure_names_only_its_own_probe(monkeypatch, probe):
     assert gate.self_test() == 1
     sink.flush()
     out = sink.buffer.getvalue().decode("utf-8")
-    chosen, other = (B_CLEAN, B_TAG) if probe == "clean" else (B_TAG, B_CLEAN)
-    lines = out.split("\n")
-    assert "ref_gate --self-test: FAILED" in lines, out
-    assert "  - " + chosen in lines, out
-    assert "  - " + other not in lines, out
-    assert "ref_gate --self-test: PASSED" not in out, out
+    chosen = B_CLEAN if probe == "clean" else B_TAG
+    assert out == "ref_gate --self-test: FAILED\n  - " + chosen + "\n", out
 
 
 def test_a_quiet_check_prints_nothing_on_a_violating_repo(tmp_path, capsys):
@@ -789,3 +788,278 @@ def test_each_rule_alone_reports_only_its_own_failure(tmp_path, capsys, rule):
             assert ok in lines, lines
         else:
             assert ok not in lines, lines
+
+    # Assert the whole report: another rule cannot hide on a non-FAIL line,
+    # or escape a substring exclusion by paraphrasing its diagnostic.
+    trailer = "Co-Authored-By: Claude <noreply@anthropic.com>"
+    reports = {
+        "stray": [
+            "  [FAIL] 1 ref(s) outside the allow-list — pushing them would publish them (push --all sends branches, push --tags sends tags, push --mirror sends every ref):",
+            f"         refs/heads/side @ {git('rev-parse', 'HEAD')[:9]}",
+        ],
+        "object": [],
+        "trailer": [
+            "  [FAIL] 1 AI-attribution trailer(s) in reachable history:",
+            f"         {git('rev-parse', 'HEAD')[:9]}  {trailer}",
+        ],
+    }
+    if rule == "object":
+        reports["object"] = [
+            "  [FAIL] 2 never-publish name(s) reachable from --all:",
+            f"         {git('rev-parse', 'HEAD:pkg')[:9]}  __pycache__",
+            f"         {git('rev-parse', 'HEAD:pkg/__pycache__')[:9]}  mod.cpython-312.pyc",
+        ]
+    expected = [f"ref_gate: {repo}", "  publishable allow-list: ['refs/heads/main']"]
+    for name in ("stray", "object", "trailer"):
+        expected.extend(reports[name] if name == rule else [OK_LINES[name]])
+    expected.extend(["  => VIOLATIONS", ""])
+    assert lines == expected, lines
+
+
+@pytest.mark.parametrize("missing", ["objs", "strays"])
+def test_the_self_test_catches_each_trailer_pair_verdict_gap(monkeypatch, capsys, missing):
+    gate = _gate()
+    real = gate.check
+
+    def misses_pair(repo, quiet=False):
+        found = {"strays": bool(gate.stray_refs(repo)),
+                 "objs": bool(gate.banned_objects(repo)),
+                 "trailers": bool(gate.banned_trailers(repo))}
+        if not found[missing] and sum(found.values()) == 2:
+            return 0
+        return real(repo, quiet=quiet)
+
+    monkeypatch.setattr(gate, "check", misses_pair)
+    pair = "stray-trailer" if missing == "objs" else "object-trailer"
+    _assert_self_test_failures(gate, capsys, [f"PAIR {pair}: gate did not go red when these two rules were violated"])
+
+
+def test_reach_reports_both_a_silent_object_detector_and_a_premature_trailer(monkeypatch, capsys):
+    gate = _gate()
+    real_objects, real_trailers = gate.banned_objects, gate.banned_trailers
+
+    def silent_objects(repo):
+        return [] if os.path.basename(repo) == "reach" else real_objects(repo)
+
+    def premature_trailer(repo):
+        if os.path.basename(repo) == "reach":
+            return [("fixture", "premature trailer")]
+        return real_trailers(repo)
+
+    monkeypatch.setattr(gate, "banned_objects", silent_objects)
+    monkeypatch.setattr(gate, "banned_trailers", premature_trailer)
+    assert gate.self_test() == 1
+    lines = capsys.readouterr().out.split("\n")
+    assert lines == ["ref_gate --self-test: FAILED",
+                     "  - REACH: a .pyc reachable only from a non-checked-out branch did NOT trip rule 2",
+                     "  - FIXTURE REACH: the trailer detector fired before any trailer was planted", ""]
+
+
+@pytest.mark.parametrize("rules", [
+    ("stray", "object"), ("stray", "trailer"), ("object", "trailer"),
+    ("stray", "object", "trailer"),
+])
+def test_a_quiet_check_prints_nothing_when_multiple_rules_fire(tmp_path, capsys, rules):
+    repo, git = _repo(tmp_path)
+    git("commit", "-q", "--allow-empty", "-m", "A")
+    if "object" in rules:
+        _commit_files(repo, git, {"pkg/__pycache__/mod.cpython-312.pyc": b"\x00compiled\x00"})
+    if "trailer" in rules:
+        git("commit", "-q", "--allow-empty", "-m",
+            "chore: thing\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
+    if "stray" in rules:
+        git("branch", "side")
+    gate = _gate()
+    capsys.readouterr()
+    assert gate.check(str(repo), quiet=True) == 1
+    captured = capsys.readouterr()
+    assert captured.out == "", captured.out
+    assert captured.err == "", captured.err
+    # Positive control: the same fixture really exercises every chosen rule.
+    assert gate.check(str(repo)) == 1
+    captured = capsys.readouterr()
+    assert sum(line.startswith("  [FAIL] ") for line in captured.out.split("\n")) == len(rules)
+    assert captured.err == "", captured.err
+
+
+@pytest.mark.parametrize("stream", ["no-encoding", "none", "ascii"])
+def test_stdout_handles_unusual_stream_encodings(monkeypatch, stream):
+    gate = _gate()
+
+    class Sink:
+        def __init__(self):
+            self.parts = []
+
+        def write(self, text):
+            if stream == "ascii":
+                text.encode("ascii", "strict")
+            self.parts.append(text)
+
+    sink = Sink()
+    if stream != "no-encoding":
+        sink.encoding = None if stream == "none" else "ascii"
+    monkeypatch.setattr(sys, "stdout", sink)
+    gate._stdout("report café — caf\udcff", 7)
+    expected = ("report caf\\xe9 \\u2014 caf\\udcff 7\n" if stream == "ascii"
+                else "report café — caf\\udcff 7\n")
+    assert "".join(sink.parts) == expected
+
+
+REACH_OBJECT_LOST = "REACH: the historical .pyc disappeared after the trailer plant — rule 2 is tip-only"
+REACH_STRAY_LOST = "REACH: the sidecar stray ref disappeared after the trailer plant — rule 1 is incomplete"
+REACH_TRAILER_LOST = "REACH: a Co-Authored-By trailer reachable only from a non-checked-out branch did NOT trip rule 3"
+ALL_THREE_LOST = "ALL THREE: a repo violating all three rules at once did not turn the gate red"
+POST_FAILURE = {"banned_objects": REACH_OBJECT_LOST, "stray_refs": REACH_STRAY_LOST,
+                "banned_trailers": REACH_TRAILER_LOST}
+
+
+def _reach_has_trailer(gate, repo):
+    return (os.path.basename(repo) == "reach"
+            and "Co-Authored-By:" in gate.git(["log", "--all", "--format=%B"], repo))
+
+
+def _assert_self_test_failures(gate, capsys, expected):
+    assert gate.self_test() == 1
+    captured = capsys.readouterr()
+    assert captured.out.split("\n") == ["ref_gate --self-test: FAILED",
+                                       *["  - " + line for line in expected], ""]
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("detector", sorted(POST_FAILURE))
+def test_each_post_trailer_recheck_names_exactly_its_missing_detector(monkeypatch, capsys, detector):
+    gate = _gate()
+    real = getattr(gate, detector)
+
+    def disappears(repo, **kwargs):
+        return [] if _reach_has_trailer(gate, repo) else real(repo, **kwargs)
+
+    monkeypatch.setattr(gate, detector, disappears)
+    _assert_self_test_failures(gate, capsys, [POST_FAILURE[detector]])
+
+
+@pytest.mark.parametrize("missing", [None, *sorted(POST_FAILURE)])
+def test_all_three_verdict_is_checked_only_when_all_detectors_fire(monkeypatch, capsys, missing):
+    gate = _gate()
+    real_check = gate.check
+    if missing:
+        real_detector = getattr(gate, missing)
+
+        def disappears(repo, **kwargs):
+            return [] if _reach_has_trailer(gate, repo) else real_detector(repo, **kwargs)
+
+        monkeypatch.setattr(gate, missing, disappears)
+
+    def false_green(repo, quiet=False):
+        return 0 if _reach_has_trailer(gate, repo) else real_check(repo, quiet=quiet)
+
+    monkeypatch.setattr(gate, "check", false_green)
+    _assert_self_test_failures(gate, capsys,
+                               [POST_FAILURE[missing]] if missing else [ALL_THREE_LOST])
+
+
+@pytest.mark.parametrize("detector,expected", [
+    ("banned_objects", "REACH: a .pyc reachable only from a non-checked-out branch did NOT trip rule 2"),
+    ("stray_refs", "FIXTURE PAIR: the sidecar branch was not reported as a stray ref"),
+])
+def test_a_detector_that_never_fired_is_not_reported_as_disappearing(monkeypatch, capsys, detector, expected):
+    gate = _gate()
+    real = getattr(gate, detector)
+
+    def silent(repo, **kwargs):
+        return [] if os.path.basename(repo) == "reach" else real(repo, **kwargs)
+
+    monkeypatch.setattr(gate, detector, silent)
+    _assert_self_test_failures(gate, capsys, [expected])
+
+
+@pytest.mark.parametrize("pair,detector,expected", [
+    ("stray-trailer", "stray_refs",
+     "FIXTURE PAIR stray-trailer: expected ['strays', 'trailers'], found ['trailers']"),
+    ("object-trailer", "banned_objects",
+     "FIXTURE PAIR object-trailer: expected ['objs', 'trailers'], found ['trailers']"),
+])
+def test_a_pair_fixture_reports_exactly_its_wrong_detector_set(monkeypatch, capsys, pair, detector, expected):
+    gate = _gate()
+    real = getattr(gate, detector)
+
+    def silent(repo, **kwargs):
+        return [] if os.path.basename(repo) == pair else real(repo, **kwargs)
+
+    monkeypatch.setattr(gate, detector, silent)
+    _assert_self_test_failures(gate, capsys, [expected])
+
+
+@pytest.mark.parametrize("scanner", ["no-walk", "ls-tree", "side-tip-trailers", "tip-trailers"])
+def test_the_self_test_rejects_ref_tip_only_content_scanners(monkeypatch, capsys, scanner):
+    gate = _gate()
+    if scanner == "no-walk":
+        real_git = gate.git
+
+        def no_walk(args, repo):
+            if args[:3] == ["rev-list", "--all", "--objects"]:
+                args = args[:2] + ["--no-walk"] + args[2:]
+            return real_git(args, repo)
+
+        monkeypatch.setattr(gate, "git", no_walk)
+    elif scanner == "ls-tree":
+        def tip_objects(repo):
+            hits = []
+            for ref in gate.git(["for-each-ref", "--format=%(refname)"], repo).split():
+                for entry in gate.git_bytes(["ls-tree", "-rz", ref], repo).split(b"\0"):
+                    if entry:
+                        header, path = entry.split(b"\t", 1)
+                        name = os.fsdecode(path)
+                        if gate.BANNED_PATH.search(name):
+                            hits.append((header.decode().split()[-1][:9], name))
+            return hits
+
+        monkeypatch.setattr(gate, "banned_objects", tip_objects)
+    elif scanner == "side-tip-trailers":
+        # The global tip-message mutant already fails the round-1 object-trailer
+        # pair. Keep main's history so this tests the still-uncovered side ref.
+        def side_tip_trailers(repo):
+            bodies = [gate.git(["log", "HEAD", "--format=%B"], repo)]
+            for ref in gate.git(["for-each-ref", "--format=%(refname)"], repo).split():
+                bodies.append(gate.git(["log", "-1", "--format=%B", ref], repo))
+            return [("tip", m.group(0)) for body in bodies for m in gate.trailer_matches(body)]
+
+        monkeypatch.setattr(gate, "banned_trailers", side_tip_trailers)
+    else:
+        # The literal R3(c) mutant: only each ref tip's own message is read.
+        def tip_trailers(repo):
+            bodies = [gate.git(["log", "-1", "--format=%B", ref], repo)
+                      for ref in gate.git(["for-each-ref", "--format=%(refname)"], repo).split()]
+            return [("tip", m.group(0)) for body in bodies for m in gate.trailer_matches(body)]
+
+        monkeypatch.setattr(gate, "banned_trailers", tip_trailers)
+    expected = {
+        "no-walk": [REACH_OBJECT_LOST],
+        "ls-tree": [REACH_OBJECT_LOST],
+        "side-tip-trailers": [REACH_TRAILER_LOST],
+        "tip-trailers": ["FIXTURE PAIR object-trailer: expected ['objs', 'trailers'], found ['objs']",
+                         REACH_TRAILER_LOST],
+    }[scanner]
+    _assert_self_test_failures(gate, capsys, expected)
+
+
+@pytest.mark.parametrize("broken", ["object", "both"])
+def test_reach_preconditions_are_checked_independently_of_detectors(monkeypatch, capsys, broken):
+    gate = _gate()
+    real_git = gate.git
+
+    def leave_tip_dirty(args, repo):
+        if os.path.basename(repo) == "reach":
+            if args[:2] == ["rm", "-q"]:
+                return ""
+            if args[-1:] == ["remove: compiled artifact"]:
+                if broken == "both":
+                    return ""
+                args = args[:5] + ["--allow-empty"] + args[5:]
+        return real_git(args, repo)
+
+    monkeypatch.setattr(gate, "git", leave_tip_dirty)
+    expected = ["FIXTURE REACH: a ref tip tree contains a never-publish name"]
+    if broken == "both":
+        expected.append("FIXTURE REACH: the trailer commit is still a ref tip")
+    _assert_self_test_failures(gate, capsys, expected)
