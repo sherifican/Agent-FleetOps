@@ -4,7 +4,7 @@
 
 # Agent-FleetOps
 
-Custom multi-agent orchestration built from scratch (no CrewAI, LangGraph, or any framework). Counters off-the-shelf failure modes — error cascades, argument loops, unverified agent trust — with mutation-proven drift guards, deterministic apply, driver-lock serialization, and verifier-first review panels. Routing decisions are made against real measured throughput per hardware tier, via a multi-box telemetry pipeline whose data is in the repo — not vendor benchmarks. **6128 tests in `guard/tests/`** prove every guard can fail, none of them needing a live fleet, a network or a credential. Validated in production via [ParaKit](https://github.com/sherifican/ParaKit-Open_Source)
+Custom multi-agent orchestration built from scratch (no CrewAI, LangGraph, or any framework). Counters off-the-shelf failure modes — error cascades, argument loops, unverified agent trust — with mutation-proven drift guards, deterministic apply, driver-lock serialization, and verifier-first review panels. Routing decisions are made against real measured throughput per hardware tier, via a multi-box telemetry pipeline whose data is in the repo — not vendor benchmarks. The [teeth-prover](guard/teeth_prover.py) proves every guard can fail. **6128 tests collected in `guard/tests/`**, none of them needing a live fleet, a network or a credential; [guard/README.md](guard/README.md) explains which arms skip and why. Validated in production via [ParaKit](https://github.com/sherifican/ParaKit-Open_Source)
 
 ---
 >**So you wanna run an AI Fleet without it turning into a hallucination circus? I've put together a generalized version of my collection of skills and tools, please use as you see fit. This is not prompt engineering, more like automatic babysitting. I hope it helps, if you like what I've put together, throw me a star and I'll keep updating as I improve on the design, thanks!**
@@ -774,7 +774,9 @@ it than leave it implicit.
 
 MIT — see LICENSE.
 
-The current suite-count captions use Python 3.14 collection. Python 3.11/3.12
-collect the same TUI cases and skip the unavailable Unicode array typecode w
-case. Baseline Python 3.13 skips the unwritten Unicode 15.1.0 census.
-Python 3.13 execution at this revision is unmeasured.
+The TUI count above was collected on Python 3.12. CI’s python-floor job
+collects (does not run) the TUI suite on Python 3.11.
+Python 3.12 execution at this revision: 1181 passed, 1 skipped. Python 3.11, 3.13 and 3.14 execution at this revision is unmeasured.
+Python 3.11/3.12 skip the unavailable Unicode array typecode w case.
+Baseline Python 3.13 skips the unwritten Unicode 15.1.0 census.
+Collection on Python 3.14 was not measured on the release host.

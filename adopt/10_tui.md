@@ -109,7 +109,7 @@ This refusal preserves the kernel process boundary; do not bypass it to run the 
 cd tui && .venv/bin/python -m pytest -q
 ```
 
-**VERIFY — expected output:** pytest must exit `0` and report `1182 passed` on Python 3.14, or `1181 passed, 1 skipped` on Python 3.11/3.12 because Unicode array typecode w is unavailable. These versions describe the same 1182 cases. Baseline Python 3.13 skips the unwritten Unicode 15.1.0 census; Python 3.13 and 3.14 execution at this revision is unmeasured; Python 3.12 was measured at `1181 passed, 1 skipped`. Retain the actual output and interpreter's readline backend; a different result is a blocker, and collection alone does not verify the TUI.
+**VERIFY — expected output:** pytest must exit `0` and report `1182 passed` on Python 3.14, or `1181 passed, 1 skipped` on Python 3.11/3.12 because Unicode array typecode w is unavailable. These versions describe the same 1182 cases. Baseline Python 3.13 skips the unwritten Unicode 15.1.0 census; Python 3.12 execution at this revision: 1181 passed, 1 skipped. Python 3.11, 3.13 and 3.14 execution at this revision is unmeasured. Retain the actual output and interpreter's readline backend; a different result is a blocker, and collection alone does not verify the TUI.
 
 ## Step 5 — launch only after the acceptance run
 
@@ -123,10 +123,11 @@ cd tui && ./run.sh
 
 External input setup is fail-closed: follow [Point the TUI at your fleet](../tui/README.md#point-the-tui-at-your-fleet), copy and edit `tui/paths.example.json`, or set `FLEET_TUI_<KEY>`; absent keys display `not configured: <key>`.
 
-The canonical count above uses Python 3.14. Python 3.11/3.12 collect the same
-cases and skip the unavailable Unicode array typecode w case. Baseline Python
-3.13 skips the unwritten Unicode 15.1.0 census; native 3.13 collection for
-this revision is unmeasured.
+The count above was collected on Python 3.12. CI’s python-floor job collects
+(does not run) the TUI suite on Python 3.11. Python 3.11/3.12 skip the
+unavailable Unicode array typecode w case. Baseline Python 3.13 skips the
+unwritten Unicode 15.1.0 census; native 3.13 collection for this revision is
+unmeasured. Collection on Python 3.14 was not measured on the release host.
 
 
 Passing startup scenarios remove their compact input and child pytest tree;

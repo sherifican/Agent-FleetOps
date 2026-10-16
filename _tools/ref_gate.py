@@ -572,6 +572,8 @@ def self_test():
                 failures.append(f"PAIR {name}: gate did not go red when these two rules were violated")
 
         # REACH — rules 2 and 3 must see history reachable only from a non-checked-out ref.
+        # Violations are buried >= 4 commits below the tip so a scanner reading only
+        # the first 3 commits of each ref fails the self-test.
         # PAIR / ALL THREE — two rules, and then all three, violated together must still turn the gate red.
         reach = fresh("reach")
         git(["checkout", "-q", "-b", "sidecar"], reach)
@@ -594,6 +596,8 @@ def self_test():
         git(["rm", "-q", "pkg/__pycache__/mod.cpython-312.pyc"], reach)
         git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m",
              "remove: compiled artifact"], reach)
+        for n in range(1, 4):
+            _plant(reach, f"marker-{n}.txt", f"{n}\n", f"add: marker {n}")
         git(["checkout", "-q", "main"], reach)
         # Assert history-only independently of the detectors under test. Advancing
         # a ref alone leaves the artifact in its tree; both tips must be clean.
@@ -604,7 +608,8 @@ def self_test():
                if name):
             failures.append("FIXTURE REACH: a ref tip tree contains a never-publish name")
         tips = git(["for-each-ref", "--format=%(objectname)"], reach).split()
-        if trailer_commit in tips:
+        if any(trailer_commit in git(["rev-list", "-n", "3", tip], reach).split()
+               for tip in tips):
             failures.append("FIXTURE REACH: the trailer commit is still a ref tip")
 
         # Recheck each detector once. Only a previously observed hit can disappear.

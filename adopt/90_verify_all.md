@@ -45,7 +45,7 @@ python3 -m pytest guard/tests/ -q
 guard/run_guards.sh; printf 'guard-runner-exit=%s\n' "$?"
 ```
 
-**VERIFY — expected output:** inventory, skill-manifest, clear-lock, curation-scaffold, and system-map checks must exit `0`; the box probe must print one `local` box; TUI pytest must exit `0` and report `1182 passed` on Python 3.14 (Python 3.11/3.12: `1181 passed, 1 skipped`, the unavailable Unicode array w case; baseline Python 3.13 skips the unwritten Unicode 15.1.0 census and all versions describe the same 1182 cases; Python 3.13 and 3.14 execution at this revision is unmeasured); teeth-prover, contract agreement, and guard tests must exit `0`; the default guard runner prints `UNMEASURED` and `guard-runner-exit=2` by design. Keep every literal output block and the TUI interpreter's readline backend. These are required results, not a record of an acceptance run.
+**VERIFY — expected output:** inventory, skill-manifest, clear-lock, curation-scaffold, and system-map checks must exit `0`; the box probe must print one `local` box; TUI pytest must exit `0` and report `1182 passed` on Python 3.14 (Python 3.11/3.12: `1181 passed, 1 skipped`, the unavailable Unicode array w case; baseline Python 3.13 skips the unwritten Unicode 15.1.0 census and all versions describe the same 1182 cases); Python 3.12 execution at this revision: 1181 passed, 1 skipped. Python 3.11, 3.13 and 3.14 execution at this revision is unmeasured. The teeth-prover, contract agreement, and guard tests must exit `0`; the default guard runner prints `UNMEASURED` and `guard-runner-exit=2` by design. Keep every literal output block and the TUI interpreter's readline backend. These are required results, not a record of an acceptance run.
 
 ## Fill before reporting
 
@@ -65,10 +65,11 @@ guard/run_guards.sh; printf 'guard-runner-exit=%s\n' "$?"
 
 Do not convert an `UNMEASURED` row into `clean`. If a human declines an optional automation, record it as deliberately unconfigured, not as a failed setup.
 
-The canonical count above uses Python 3.14. Python 3.11/3.12 collect the same
-cases and skip the unavailable Unicode array typecode w case. Baseline Python
-3.13 skips the unwritten Unicode 15.1.0 census; native 3.13 collection for
-this revision is unmeasured.
+The count above was collected on Python 3.12. CI’s python-floor job collects
+(does not run) the TUI suite on Python 3.11. Python 3.11/3.12 skip the
+unavailable Unicode array typecode w case. Baseline Python 3.13 skips the
+unwritten Unicode 15.1.0 census; native 3.13 collection for this revision is
+unmeasured. Collection on Python 3.14 was not measured on the release host.
 
 
 Run the TUI footprint check once in a fresh directory outside the checkout.

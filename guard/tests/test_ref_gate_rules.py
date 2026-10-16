@@ -1061,6 +1061,10 @@ def test_reach_preconditions_are_checked_independently_of_detectors(monkeypatch,
         if os.path.basename(repo) == "reach":
             if args[:2] == ["rm", "-q"]:
                 return ""
+            if broken == "both" and args[-1:] in (["add: marker 1"],
+                                                  ["add: marker 2"],
+                                                  ["add: marker 3"]):
+                return ""
             if args[-1:] == ["remove: compiled artifact"]:
                 if broken == "both":
                     return ""
