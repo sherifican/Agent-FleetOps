@@ -1065,7 +1065,7 @@ def test_reach_preconditions_are_checked_independently_of_detectors(monkeypatch,
             if args[:2] == ["rm", "-q"]:
                 return ""
             # Two marker commits still land, so the trailer commit sits two below the tip:
-            # only a check that looks past the tip itself reports it.
+            # only a check that reads at least three commits of each ref (rev-list -n 3) reports it.
             if broken == "both" and args[-1:] == ["add: marker 1"]:
                 return ""
             if args[-1:] == ["remove: compiled artifact"]:
