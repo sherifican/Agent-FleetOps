@@ -760,6 +760,11 @@ OK_LINES = {
     "object": "  [OK]   no never-publish names reachable",
     "trailer": "  [OK]   no AI-attribution trailers",
 }
+RULE_EVIDENCE = {
+    "stray": "refs/heads/side",
+    "object": "mod.cpython-312.pyc",
+    "trailer": "Co-Authored-By: Claude",
+}
 
 
 @pytest.mark.parametrize("rule", sorted(RULE_ALONE))
@@ -883,6 +888,21 @@ def test_a_quiet_check_prints_nothing_when_multiple_rules_fire(tmp_path, capsys,
     for ln in fails:
         matched = [rule for rule, text in RULE_ALONE.items() if text in ln]
         assert len(matched) == 1, (ln, captured.out)
+    # Each fired rule's header must sit above that rule's own detail lines: a check() that exchanged two fired
+    # rules' header phrases would still print one phrase per [FAIL] line.
+    out_lines = captured.out.split("\n")
+    for rule in rules:
+        start = next(i for i, ln in enumerate(out_lines)
+                     if ln.startswith("  [FAIL] ") and RULE_ALONE[rule] in ln)
+        block = []
+        for ln in out_lines[start + 1:]:
+            if ln.startswith("  [") or ln.startswith("  =>"):
+                break
+            block.append(ln)
+        assert any(RULE_EVIDENCE[rule] in ln for ln in block), (rule, captured.out)
+        for other in rules:
+            if other != rule:
+                assert not any(RULE_EVIDENCE[other] in ln for ln in block), (rule, other, captured.out)
     for rule, text in RULE_ALONE.items():
         fired = [ln for ln in fails if text in ln]
         if rule in rules:
