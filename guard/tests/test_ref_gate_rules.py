@@ -879,6 +879,15 @@ def test_a_quiet_check_prints_nothing_when_multiple_rules_fire(tmp_path, capsys,
     assert gate.check(str(repo)) == 1
     captured = capsys.readouterr()
     assert sum(line.startswith("  [FAIL] ") for line in captured.out.split("\n")) == len(rules)
+    fails = [ln for ln in captured.out.split("\n") if ln.startswith("  [FAIL] ")]
+    for rule, text in RULE_ALONE.items():
+        fired = [ln for ln in fails if text in ln]
+        if rule in rules:
+            assert len(fired) == 1, (rule, captured.out)
+            assert OK_LINES[rule] not in captured.out, (rule, captured.out)
+        else:
+            assert fired == [], (rule, captured.out)
+            assert OK_LINES[rule] in captured.out, (rule, captured.out)
     assert captured.err == "", captured.err
 
 

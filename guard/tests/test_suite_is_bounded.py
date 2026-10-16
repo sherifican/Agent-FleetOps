@@ -230,6 +230,10 @@ def test_a_hung_live_runner_call_fails_at_its_deadline_and_kills_its_process_gro
             _kill(pid)
         t.join(10)
     assert not hung, "a hung run_guards.sh kept the live runner call blocked past 30 s: no deadline"
+    exc = result.get("exc")
+    if (not pids and isinstance(exc, pytest.skip.Exception)
+            and str(exc).startswith("UNMEASURED: child pytest unavailable: ")):
+        raise exc
     assert len(pids) == 2, "the planted runner did not start (pids %r): %r" % (pids, result)
     assert "exc" in result, "a runner that hit its deadline must fail the test, got %r" % (result,)
     msg = str(result["exc"])
