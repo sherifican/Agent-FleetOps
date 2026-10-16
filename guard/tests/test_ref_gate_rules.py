@@ -911,6 +911,30 @@ def test_a_quiet_check_prints_nothing_when_multiple_rules_fire(tmp_path, capsys,
         else:
             assert fired == [], (rule, captured.out)
             assert OK_LINES[rule] in captured.out, (rule, captured.out)
+    # Assert the whole report, as the single-rule test does: a check() that drops a detail line or the verdict
+    # only when several rules fire would still carry one evidence string per block.
+    head = git("rev-parse", "HEAD")[:9]
+    reports = {
+        "stray": [
+            "  [FAIL] 1 ref(s) outside the allow-list — pushing them would publish them (push --all sends branches, push --tags sends tags, push --mirror sends every ref):",
+            f"         refs/heads/side @ {head}",
+        ],
+        "trailer": [
+            "  [FAIL] 1 AI-attribution trailer(s) in reachable history:",
+            f"         {head}  Co-Authored-By: Claude <noreply@anthropic.com>",
+        ],
+    }
+    if "object" in rules:
+        reports["object"] = [
+            "  [FAIL] 2 never-publish name(s) reachable from --all:",
+            f"         {git('rev-parse', 'HEAD:pkg')[:9]}  __pycache__",
+            f"         {git('rev-parse', 'HEAD:pkg/__pycache__')[:9]}  mod.cpython-312.pyc",
+        ]
+    expected = [f"ref_gate: {repo}", "  publishable allow-list: ['refs/heads/main']"]
+    for name in ("stray", "object", "trailer"):
+        expected.extend(reports[name] if name in rules else [OK_LINES[name]])
+    expected.extend(["  => VIOLATIONS", ""])
+    assert out_lines == expected, out_lines
     assert captured.err == "", captured.err
 
 
