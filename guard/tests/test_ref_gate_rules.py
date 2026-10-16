@@ -1061,9 +1061,9 @@ def test_reach_preconditions_are_checked_independently_of_detectors(monkeypatch,
         if os.path.basename(repo) == "reach":
             if args[:2] == ["rm", "-q"]:
                 return ""
-            if broken == "both" and args[-1:] in (["add: marker 1"],
-                                                  ["add: marker 2"],
-                                                  ["add: marker 3"]):
+            # Two marker commits still land, so the trailer commit sits two below the tip:
+            # only a check that looks past the tip itself reports it.
+            if broken == "both" and args[-1:] == ["add: marker 1"]:
                 return ""
             if args[-1:] == ["remove: compiled artifact"]:
                 if broken == "both":
