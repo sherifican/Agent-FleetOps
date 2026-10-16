@@ -610,7 +610,7 @@ def self_test():
         tips = git(["for-each-ref", "--format=%(objectname)"], reach).split()
         if any(trailer_commit in git(["rev-list", "-n", "3", tip], reach).split()
                for tip in tips):
-            failures.append("FIXTURE REACH: the trailer commit is still a ref tip")
+            failures.append("FIXTURE REACH: the trailer commit is within the first 3 commits of a ref")
 
         # Recheck each detector once. Only a previously observed hit can disappear.
         post_objects = bool(banned_objects(reach))

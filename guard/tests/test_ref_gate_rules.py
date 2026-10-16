@@ -880,6 +880,9 @@ def test_a_quiet_check_prints_nothing_when_multiple_rules_fire(tmp_path, capsys,
     captured = capsys.readouterr()
     assert sum(line.startswith("  [FAIL] ") for line in captured.out.split("\n")) == len(rules)
     fails = [ln for ln in captured.out.split("\n") if ln.startswith("  [FAIL] ")]
+    for ln in fails:
+        matched = [rule for rule, text in RULE_ALONE.items() if text in ln]
+        assert len(matched) == 1, (ln, captured.out)
     for rule, text in RULE_ALONE.items():
         fired = [ln for ln in fails if text in ln]
         if rule in rules:
@@ -1074,5 +1077,5 @@ def test_reach_preconditions_are_checked_independently_of_detectors(monkeypatch,
     monkeypatch.setattr(gate, "git", leave_tip_dirty)
     expected = ["FIXTURE REACH: a ref tip tree contains a never-publish name"]
     if broken == "both":
-        expected.append("FIXTURE REACH: the trailer commit is still a ref tip")
+        expected.append("FIXTURE REACH: the trailer commit is within the first 3 commits of a ref")
     _assert_self_test_failures(gate, capsys, expected)

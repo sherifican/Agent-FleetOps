@@ -236,6 +236,8 @@ def test_a_hung_live_runner_call_fails_at_its_deadline_and_kills_its_process_gro
         raise exc
     assert len(pids) == 2, "the planted runner did not start (pids %r): %r" % (pids, result)
     assert "exc" in result, "a runner that hit its deadline must fail the test, got %r" % (result,)
+    assert isinstance(result["exc"], pytest.fail.Exception), (
+        "a runner that hit its deadline must fail, not skip or pass: %r" % (result["exc"],))
     msg = str(result["exc"])
     assert "run_guards.sh" in msg and "TIMEOUT" in msg.upper(), (
         "the failure must name the runner and the timeout: %r" % msg)
