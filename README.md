@@ -4,7 +4,7 @@
 
 # Agent-FleetOps
 
-Custom multi-agent orchestration built from scratch (no CrewAI, LangGraph, or any framework). Counters off-the-shelf failure modes — error cascades, argument loops, unverified agent trust — with mutation-proven drift guards, deterministic apply, driver-lock serialization, and verifier-first review panels. Routing decisions are made against real measured throughput per hardware tier, via a multi-box telemetry pipeline whose data is in the repo — not vendor benchmarks. The [teeth-prover](guard/teeth_prover.py) proves the research-property guards can fail. **6128 tests collected in `guard/tests/`**, none of them needing a live fleet, a network or a credential; [guard/README.md](guard/README.md) explains which arms skip and why. Validated in production via [ParaKit](https://github.com/sherifican/ParaKit-Open_Source)
+This is custom multi-agent orchestration, built from scratch (no CrewAI, LangGraph, or any framework). Counters off-the-shelf failure modes — error cascades, argument loops, unverified agent trust — with mutation-proven drift guards, deterministic apply, driver-lock serialization, and verifier-first review panels. Routing decisions are made against real measured throughput per hardware tier, via a multi-box telemetry pipeline whose data is in the repo — not vendor benchmarks. The [teeth-prover](guard/teeth_prover.py) proves the research-property guards can fail. **6128 tests collected in `guard/tests/`**, none of them needing a live fleet, a network or a credential; [guard/README.md](guard/README.md) explains which arms skip and why. It is validated in production via [ParaKit](https://github.com/sherifican/ParaKit-Open_Source).
 
 ---
 >**So you wanna run an AI Fleet without it turning into a hallucination circus? I've put together a generalized version of my collection of skills and tools, please use as you see fit. This is not prompt engineering, more like automatic babysitting. I hope it helps, if you like what I've put together, throw me a star and I'll keep updating as I improve on the design, thanks!**
@@ -29,6 +29,7 @@ Start with `eval-integrity`, `generate-review-fix-loop`, and `model-routing-tabl
 ## How the pieces fit
 
 ![How the pieces fit: fleet activity flows into the read-only monitor, the guard lane and the curation loop](docs/anim/how-the-pieces-fit.gif)
+*In this diagram, "teeth_prover" checks the 10 judging checks in `research_properties`, not every guard; see [guard/README.md](guard/README.md).*
 
 <details><summary>diagram source (mermaid)</summary>
 
@@ -37,7 +38,7 @@ flowchart TD
     W["Fleet activity <br/>local + cloud model legs"] --> T["fleet-tui <br/>OBSERVE - refresh loop is read-only <br/>owner-triggered controls, nothing autonomous"]
     L["driver lock <br/>SERIALIZE - one writer per tree <br/>(specs/driver-lock-protocol)"] -->|gates writes| W
     W --> G["guard/ <br/>VERIFY - drift guards"]
-    TP["teeth_prover <br/>can every guard actually fail?"] -->|proves| G
+    TP["teeth_prover <br/>can each judging check fail?"] -->|proves| G
     G -->|"0 clean / 1 violation / 2 UNMEASURED <br/>(2 dominates 1)"| V{verdict}
     W --> C["curation loop <br/>EVOLVE - propose rule changes"]
     C --> H["review panel <br/>verifier first, then independent-model vote"]
@@ -66,7 +67,7 @@ another machine). The commit history tells that story.
 | `skills/` | **Generalized agent-discipline procedures** — evaluation integrity, model routing (the living-table method), the local-lane build loop, multi-agent code workflow, research dispatch/verification, memory ops, brain bookkeeping, protected-function guards, blocked-page retrieval, the [should-we](skills/should-we/SKILL.md) directive check (interrogate the premise before executing an imperative), and more. Each encodes failure stories from real operation. The portable start-list is in [`adopt/20_skills.md`](adopt/20_skills.md); you are not expected to install them all. |
 | `templates/` | Copyable dispatch, honesty, pinned-environment, and research-artifact patterns. Templates are adoption patterns, not automatic enforcement. |
 | `_tools/` | The export pipeline's own gates — provenance wall-checker, secrets/personal-data scanner, and a **ref gate**, all mutation-proven (`--self-test`). The first two ask "is this tree safe to publish?"; the third asks the question they structurally cannot: **"what would a push actually publish?"** A history rewrite is only true of the branch you rewrote — this repo's own rewrite left a clean `main` beside two leftover refs that still carried the trailers and build artifacts the rewrite removed, the backup branch one `push --all` and both one `push --mirror` away from being republished. That is history, not current state; what the gate reports today is what it finds on the clone it is pointed at: refs outside the publishable allow-list, never-publish paths still reachable, and AI co-author trailers. Content gates scan a worktree; pushes carry refs. |
-| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (every guard proven able to fail), contract-agreement across four vocabulary surfaces, 6128 tests in `guard/tests/`, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
+| `guard/` + pipeline surfaces | **The drift-guard core** — teeth-prover (each of the 10 judging checks in `research_properties` proven able to fail), contract-agreement across four vocabulary surfaces, 6128 tests collected in `guard/tests/`, and a sandboxing mutation harness that fail-closes without its measurement corpus, and the [honesty stop hook](specs/honesty-stop-gate.md) in `guard/` that blocks a turn asserting unmeasured live state. `2 = UNMEASURED` dominates `1 = violation` throughout. |
 | `specs/` | The multi-agent **driver-lock protocol**, the **curation-loop architecture**, the verified-system-map pattern, and the [research-team](specs/research-team-protocol.md), [rigor-spectrum](specs/rigor-spectrum.md), and [honesty-stop-gate](specs/honesty-stop-gate.md) guides. |
 | `bench/` | **The two-box throughput operating log** — 67 measurements over 22 model tags, with sample sizes and device labels attached. See below. |
 
@@ -172,7 +173,7 @@ independence rule, receipt fields, failure handling, and security boundaries are
 | Orchestrator | Frames the question and keeps the second brief blind. | Judgment remains the user's, and accountable. |
 | Independent research legs | Retrieve evidence and retain separately named RESULT artifacts. | Agreement is not source verification. |
 | Reconciler + verifier | Preserves dissent, then checks claims against the evidence pack. | The verifier is not the producing leg. |
-| Actionability pass | Maps findings to the project’s closed vocabulary. | It does not turn a finding into truth. |
+| Actionability pass | Maps findings to the project's closed vocabulary. | It does not turn a finding into truth. |
 
 ### Video research
 
@@ -774,7 +775,7 @@ it than leave it implicit.
 
 MIT — see LICENSE.
 
-The TUI count above was collected on Python 3.12. CI’s python-floor job
+The TUI count above was collected on Python 3.12. CI's python-floor job
 collects (does not run) the TUI suite on Python 3.11.
 Python 3.12 execution at this revision: 1181 passed, 1 skipped. Python 3.11, 3.13 and 3.14 execution at this revision is unmeasured.
 Python 3.11/3.12 skip the unavailable Unicode array typecode w case.

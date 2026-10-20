@@ -67,7 +67,7 @@ roll() { local rc=$1 step=$2
 # which is the same zero-information failure as always reporting clean.
 skip() { n_skipped=$((n_skipped + 1)); printf '   NOT CONFIGURED (skipped, not UNMEASURED): %s\n' "$1"; }
 
-note "1. TEETH-PROVER — can every guard actually fail?"
+note "1. TEETH-PROVER — can each of the 10 judging checks in research_properties actually fail?"
 echo "   (nothing below this line means anything until this passes)"
 python3 guard/teeth_prover.py; roll $? guard/teeth_prover.py
 # --verify-anchors proves every mutation needle still binds exactly once in its target file —

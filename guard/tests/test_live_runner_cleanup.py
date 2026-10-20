@@ -181,6 +181,7 @@ def test_a_setsid_child_holding_the_pipes_does_not_block_the_deadline(tmp_path):
     assert len(pids) == 2, "the planted runner did not start: %r" % pids
     assert not blocked, "a setsid child holding the pipes kept the helper blocked past 20 s"
     assert "exc" in result, "a runner that hit its deadline must fail the test, got %r" % (result,)
+    assert type(result["exc"]) is pytest.fail.Exception
     msg = str(result["exc"])
     assert "run_guards.sh" in msg and "TIMEOUT" in msg.upper(), msg
 

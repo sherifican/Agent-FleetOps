@@ -1,4 +1,4 @@
-"""teeth_prover.py — prove every guard can actually fail.
+"""teeth_prover.py — prove each judging check in research_properties can actually fail.
 
 Every guard in research_properties was written after its incident, and nothing tests that any of
 them still works. A good check whose input shape moved is indistinguishable from a check at all —
@@ -276,7 +276,7 @@ def coverage(text, mutations=None, *, id_registry=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Prove every guard can actually fail: mutate a clean fixture, watch it go red.")
+        description="Prove each judging check in research_properties can actually fail (the two reporting counts are exempt): mutate a clean fixture, watch it go red.")
     parser.add_argument("--fixture", default=None,
                         help="replay a real cached RESULT_*.md instead of the in-file fixture")
     parser.add_argument("--registry", action="append", default=None,

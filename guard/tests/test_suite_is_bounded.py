@@ -206,6 +206,13 @@ def test_a_hung_live_runner_call_fails_at_its_deadline_and_kills_its_process_gro
     plant = tmp_path / "plant"
     plant.mkdir()
     result = {}
+    real_run = runner.subprocess.run
+
+    def probe_with_test_python(command, *args, **kwargs):
+        # This planted bash script needs no Python; probe pytest with this test's interpreter.
+        if command[:2] == ["python3", "-c"]:
+            command = [sys.executable, *command[1:]]
+        return real_run(command, *args, **kwargs)
 
     def call():
         try:
@@ -216,6 +223,7 @@ def test_a_hung_live_runner_call_fails_at_its_deadline_and_kills_its_process_gro
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(runner, "REPO", str(fake_repo))
         mp.setattr(runner, "RUNNER_TIMEOUT_S", 2, raising=False)
+        mp.setattr(runner.subprocess, "run", probe_with_test_python)
         t = threading.Thread(target=call, daemon=True)
         t.start()
         t.join(30)
@@ -236,7 +244,7 @@ def test_a_hung_live_runner_call_fails_at_its_deadline_and_kills_its_process_gro
         raise exc
     assert len(pids) == 2, "the planted runner did not start (pids %r): %r" % (pids, result)
     assert "exc" in result, "a runner that hit its deadline must fail the test, got %r" % (result,)
-    assert isinstance(result["exc"], pytest.fail.Exception), (
+    assert type(result["exc"]) is pytest.fail.Exception, (
         "a runner that hit its deadline must fail, not skip or pass: %r" % (result["exc"],))
     msg = str(result["exc"])
     assert "run_guards.sh" in msg and "TIMEOUT" in msg.upper(), (

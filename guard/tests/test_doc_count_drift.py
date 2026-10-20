@@ -55,6 +55,10 @@ def test_the_tui_acceptance_claim_in_the_adoption_guide_is_seen():
     """CONTROL: the phrasing the finder was written for is still recognised."""
     line = "**VERIFY — expected output:** pytest exits `0`; this export's acceptance run reports `386 passed`."
     assert _claims_tui_suite(line, "adopt/10_tui.md") == [386]
+    line = "**VERIFY — expected output:** TUI pytest exercises the same 1182 cases."
+    assert _claims_tui_suite(line, "adopt/10_tui.md") == [1182]
+    assert _claims_tui_suite(line.removeprefix("**VERIFY — expected output:** "),
+                             "adopt/10_tui.md") == []
 
 
 def test_the_same_claim_in_the_verify_all_guide_is_also_seen():
@@ -69,6 +73,10 @@ def test_the_same_claim_in_the_verify_all_guide_is_also_seen():
     line = ("**VERIFY — expected output:** inventory checks exit `0`; "
             "TUI pytest exits `0` and reports `386 passed` in this export")
     assert _claims_tui_suite(line, "adopt/90_verify_all.md") == [386]
+    line = "**VERIFY — expected output:** TUI pytest exercises the same 1182 cases."
+    assert _claims_tui_suite(line, "adopt/90_verify_all.md") == [1182]
+    assert _claims_tui_suite(line.removeprefix("**VERIFY — expected output:** "),
+                             "adopt/90_verify_all.md") == []
 
 
 def test_a_tui_count_in_an_unrelated_document_is_still_not_claimed():
@@ -85,6 +93,11 @@ def test_a_tui_count_in_an_unrelated_document_is_still_not_claimed():
         "CONTROL: the identical line IS claimed on an allowed path"
     assert _claims_tui_suite(line, "docs/history/old_notes.md") == [], \
         "the same text on an unrelated path must not be read as a current claim"
+    line = "**VERIFY — expected output:** TUI pytest exercises the same 1182 cases."
+    assert _claims_tui_suite(line, "adopt/90_verify_all.md") == [1182], \
+        "CONTROL: the identical new-phrase line IS claimed on an allowed path"
+    assert _claims_tui_suite(line, "docs/history/old_notes.md") == []
+    assert _claims_tui_suite(line, "adopt/30_guards.md") == []
 
 
 # =============================================================================================

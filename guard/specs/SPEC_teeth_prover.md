@@ -1,4 +1,4 @@
-# SPEC — teeth_prover.py (prove every guard can actually fail)
+# SPEC — teeth_prover.py (prove each judging check in research_properties can actually fail)
 
 Write the file COMPLETELY at `../guard/teeth_prover.py`.
 

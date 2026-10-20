@@ -84,6 +84,8 @@ def test_a_banned_name_only_in_older_history_still_fails(tmp_path):
     _commit_files(repo, git, {"a.txt": b"same\n", "z.pyc": b"same\n"})
     git("rm", "-q", "--cached", "z.pyc")
     git("commit", "-q", "-m", "drop")
+    for n in range(1, 4):
+        _commit_files(repo, git, {f"filler{n}.txt": b"filler\n"})
     assert gate.check(str(repo), quiet=True) == 1
 
 

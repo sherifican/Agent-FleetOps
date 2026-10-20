@@ -289,6 +289,8 @@ def _claims_tui_suite(line, rel):
             "**VERIFY — expected output:**" in line:
         out.extend(int(m.group(1)) for m in
                    re.finditer(r"reports `(\d+) passed`", line, re.I))
+        out.extend(int(m.group(1)) for m in
+                   re.finditer(r"the same (\d+) cases", line, re.I))
     return out
 
 
@@ -645,6 +647,10 @@ def _selftest():
                         f"acceptance run reports `{n} passed`.\n")
             adoption.write_text(acceptance(tui - 5))
             case("a stale TUI adoption acceptance count is caught (red)",
+                 rc_for(doc_for()) == 1)
+            adoption.write_text(
+                f"**VERIFY — expected output:** TUI pytest exercises the same {tui - 5} cases.\n")
+            case("a stale TUI same-cases adoption count is caught (red)",
                  rc_for(doc_for()) == 1)
             adoption.write_text(acceptance(tui))
             case("the current TUI adoption acceptance count passes (green)",
