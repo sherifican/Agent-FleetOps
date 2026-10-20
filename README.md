@@ -29,6 +29,7 @@ Start with `eval-integrity`, `generate-review-fix-loop`, and `model-routing-tabl
 ## How the pieces fit
 
 ![How the pieces fit: fleet activity flows into the read-only monitor, the guard lane and the curation loop](docs/anim/how-the-pieces-fit.gif)
+
 *In this diagram, "teeth_prover" checks the 10 judging checks in `research_properties`, not every guard; see [guard/README.md](guard/README.md).*
 
 <details><summary>diagram source (mermaid)</summary>
